@@ -98,8 +98,8 @@ router.post("/thumbnail-upload", requireAuth, async (req, res) => {
   const apiKey = process.env.CLOUDINARY_API_KEY?.trim();
   const apiSecret = process.env.CLOUDINARY_API_SECRET?.trim();
   const uploadPreset = process.env.CLOUDINARY_UPLOAD_PRESET?.trim();
-  if (!cloudName || !apiKey || !apiSecret || !uploadPreset) {
-    return res.status(503).json({ error: "Meeting image uploads are not configured. Add the Cloudinary cloud name, API key, API secret, and a signed upload preset to Render." });
+  if (!cloudName || !apiKey || !apiSecret) {
+    return res.status(503).json({ error: "Meeting image uploads are not configured. Add the Cloudinary cloud name, API key, and API secret to Render." });
   }
 
   const dataUrl = typeof req.body?.dataUrl === "string" ? req.body.dataUrl : "";
@@ -111,30 +111,41 @@ router.post("/thumbnail-upload", requireAuth, async (req, res) => {
   }
 
   try {
-    const timestamp = Math.floor(Date.now() / 1000);
-    const signedParameters = { timestamp: String(timestamp), upload_preset: uploadPreset };
-    const stringToSign = Object.entries(signedParameters)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, value]) => `${key}=${value}`)
-      .join("&") + apiSecret;
-    const signature = crypto.createHash("sha1").update(stringToSign).digest("hex");
-    const formData = new FormData();
-    formData.append("file", dataUrl);
-    formData.append("api_key", apiKey);
-    formData.append("timestamp", String(timestamp));
-    formData.append("upload_preset", uploadPreset);
-    formData.append("signature", signature);
+    // Signed uploads only need cloud name + API key/secret. The upload preset is optional:
+    // if one is configured but does not exist in Cloudinary ("Upload preset not found"),
+    // we transparently retry as a plain signed upload so uploads always work.
+    const sendToCloudinary = async (preset?: string) => {
+      const timestamp = Math.floor(Date.now() / 1000);
+      const signedParameters: Record<string, string> = { folder: "meet-enihakole/meeting-covers", timestamp: String(timestamp) };
+      if (preset) signedParameters.upload_preset = preset;
+      const stringToSign = Object.entries(signedParameters)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, value]) => `${key}=${value}`)
+        .join("&") + apiSecret;
+      const signature = crypto.createHash("sha1").update(stringToSign).digest("hex");
+      const formData = new FormData();
+      formData.append("file", dataUrl);
+      formData.append("api_key", apiKey);
+      formData.append("signature", signature);
+      for (const [key, value] of Object.entries(signedParameters)) formData.append(key, value);
+      const response = await fetch(`https://api.cloudinary.com/v1_1/${encodeURIComponent(cloudName)}/image/upload`, {
+        method: "POST",
+        body: formData,
+        signal: AbortSignal.timeout(30_000),
+      });
+      const result = await response.json().catch(() => ({})) as { secure_url?: string; public_id?: string; error?: { message?: string } };
+      return { response, result };
+    };
 
-    const response = await fetch(`https://api.cloudinary.com/v1_1/${encodeURIComponent(cloudName)}/image/upload`, {
-      method: "POST",
-      body: formData,
-      signal: AbortSignal.timeout(30_000),
-    });
-    const result = await response.json() as { secure_url?: string; public_id?: string; error?: { message?: string } };
+    let { response, result } = await sendToCloudinary(uploadPreset || undefined);
+    if (uploadPreset && !result.secure_url && /preset/i.test(result.error?.message || "")) {
+      console.warn("[meetings/thumbnail-upload] Upload preset unavailable, retrying as plain signed upload:", result.error?.message);
+      ({ response, result } = await sendToCloudinary());
+    }
     if (!response.ok || !result.secure_url) {
       console.error("[meetings/thumbnail-upload] Cloudinary rejected upload", response.status, result.error?.message || "Unknown Cloudinary error");
-      return res.status(response.status === 401 || response.status === 403 ? 502 : 502).json({
-        error: result.error?.message || "Cloudinary could not accept this cover image. Check that the upload preset is signed and configured for image uploads.",
+      return res.status(502).json({
+        error: result.error?.message || "Cloudinary could not accept this cover image. Check the Cloudinary cloud name, API key, and API secret on the server.",
       });
     }
     return res.status(201).json({ secureUrl: result.secure_url, publicId: result.public_id });
@@ -211,6 +222,8 @@ router.post("/:slug/token", async (req, res) => {
     }
 
     const isHost = Boolean(req.auth && String(meeting.owner) === req.auth.userId);
+    // Like Google Meet, everyone who joins is identified by their Google account (name + profile photo).
+    if (!req.auth) return res.status(401).json({ error: "Sign in with Google to join this meeting." });
     const now = new Date();
 
     // Close stale meetings for hosts and guests alike. Do not rely on a browser timer
@@ -239,15 +252,14 @@ router.post("/:slug/token", async (req, res) => {
       await meeting.save();
     }
 
-    const displayName = isHost
-      ? req.auth!.displayName
-      : (parsed.data.displayName || req.auth?.displayName || "Choir guest").replace(/[<>\u0000-\u001f]/g, "").trim().slice(0, 80);
+    const displayName = (req.auth.displayName || "Choir guest").replace(/[<>\u0000-\u001f]/g, "").trim().slice(0, 80);
     if (displayName.length < 2) return res.status(400).json({ error: "Enter a name with at least 2 characters." });
 
     const token = await createJoinToken({
       roomName: `eni-${meeting.slug}`,
       displayName,
       userId: req.auth?.userId,
+      picture: req.auth?.picture,
       role: isHost ? "host" : "participant",
       ttlSeconds: meeting.startedAt
         ? Math.max(60, Math.min(

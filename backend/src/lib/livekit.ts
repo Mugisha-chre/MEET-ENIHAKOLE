@@ -18,6 +18,7 @@ export async function createJoinToken(input: {
   roomName: string;
   displayName: string;
   userId?: string;
+  picture?: string;
   role: "host" | "participant";
   ttlSeconds?: number;
 }): Promise<string> {
@@ -29,7 +30,7 @@ export async function createJoinToken(input: {
     identity,
     name: input.displayName,
     ttl: Math.max(60, Math.min(input.ttlSeconds ?? 4 * 60 * 60, 4 * 60 * 60)),
-    metadata: JSON.stringify({ displayName: input.displayName, role: input.role }),
+    metadata: JSON.stringify({ displayName: input.displayName, role: input.role, picture: input.picture || "" }),
   });
   token.addGrant({
     room: input.roomName,

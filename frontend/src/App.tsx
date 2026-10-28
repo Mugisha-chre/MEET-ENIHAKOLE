@@ -1,6 +1,6 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type TouchEvent as ReactTouchEvent } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
-import { LiveKitRoom, ParticipantTile, RoomAudioRenderer, useChat, useLocalParticipant, useParticipants, useRoomContext, useTracks } from "@livekit/components-react";
+import { LiveKitRoom, ParticipantTile, RoomAudioRenderer, isTrackReference, useChat, useIsMuted, useLocalParticipant, useParticipants, useRoomContext, useTracks } from "@livekit/components-react";
 import { RoomEvent, Track, VideoPreset } from "livekit-client";
 import {
   ArrowDownRight, ArrowLeft, ArrowRight, AudioLines, CalendarClock, CalendarDays, Check,
@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { api, clearAuthToken, getAuthToken, saveAuthToken } from "./api";
 import type { JoinSession, Meeting, User } from "./types";
+import { GoogleContinueButton, ProfilePhoto } from "./google";
 
 interface AppContextValue {
   user: User | null;
@@ -19,6 +20,7 @@ interface AppContextValue {
   loadingMeetings: boolean;
   refreshMeetings: () => Promise<void>;
   openAuth: () => void;
+  completeAuth: (user: User, token: string) => void;
   openSchedule: (instant?: boolean) => void;
   signOut: () => void;
   theme: "light" | "dark";
@@ -87,11 +89,11 @@ export default function App() {
   useEffect(() => {
     let resetTimer = 0;
     const onScroll = () => {
-      document.documentElement.classList.add("is-scrolling");
+      if (!document.documentElement.classList.contains("is-scrolling")) document.documentElement.classList.add("is-scrolling");
       window.clearTimeout(resetTimer);
       resetTimer = window.setTimeout(() => document.documentElement.classList.remove("is-scrolling"), 850);
     };
-    document.addEventListener("scroll", onScroll, true);
+    document.addEventListener("scroll", onScroll, { capture: true, passive: true });
     return () => { document.removeEventListener("scroll", onScroll, true); window.clearTimeout(resetTimer); document.documentElement.classList.remove("is-scrolling"); };
   }, []);
 
@@ -146,6 +148,16 @@ export default function App() {
     }
     setScheduleOpen(true);
   }, [user]);
+  const completeAuth = useCallback((nextUser: User, token: string) => {
+    saveAuthToken(token);
+    setUser(nextUser);
+    setAuthOpen(false);
+    if (scheduleAfterAuth) {
+      setScheduleOpen(true);
+      setScheduleAfterAuth(false);
+    }
+    void refreshMeetings();
+  }, [scheduleAfterAuth, refreshMeetings]);
   const signOut = useCallback(() => {
     clearAuthToken();
     setUser(null);
@@ -154,31 +166,24 @@ export default function App() {
   }, [refreshMeetings]);
 
   const contextValue = useMemo<AppContextValue>(() => ({
-    user, meetings, publicMeetings, loadingMeetings, refreshMeetings, openAuth, openSchedule, signOut, theme, toggleTheme,
-  }), [user, meetings, publicMeetings, loadingMeetings, refreshMeetings, openAuth, openSchedule, signOut, theme, toggleTheme]);
+    user, meetings, publicMeetings, loadingMeetings, refreshMeetings, openAuth, completeAuth, openSchedule, signOut, theme, toggleTheme,
+  }), [user, meetings, publicMeetings, loadingMeetings, refreshMeetings, openAuth, completeAuth, openSchedule, signOut, theme, toggleTheme]);
 
   return (
     <AppContext.Provider value={contextValue}>
       <Routes>
         <Route path="/" element={<AppShell mobileNavOpen={mobileNavOpen} setMobileNavOpen={setMobileNavOpen}><Dashboard /></AppShell>} />
         <Route path="/meetings" element={<AppShell mobileNavOpen={mobileNavOpen} setMobileNavOpen={setMobileNavOpen}><MeetingsPage /></AppShell>} />
+        <Route path="/share/:slug" element={<ShareRedirect />} />
         <Route path="/meeting/:slug" element={<MeetingPage />} />
         <Route path="/room/:slug" element={<MeetingRoomPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-      {authOpen && <AuthModal onClose={() => { setAuthOpen(false); setScheduleAfterAuth(false); }} onAuthenticated={(nextUser, token) => {
-        saveAuthToken(token);
-        setUser(nextUser);
-        setAuthOpen(false);
-        if (scheduleAfterAuth) {
-          setScheduleOpen(true);
-          setScheduleAfterAuth(false);
-        }
-        void refreshMeetings();
-      }} />}
+      {authOpen && <AuthModal onClose={() => { setAuthOpen(false); setScheduleAfterAuth(false); }} onAuthenticated={completeAuth} />}
       {scheduleOpen && <ScheduleModal instant={instantMode} onClose={() => setScheduleOpen(false)} onCreated={async () => {
         await refreshMeetings();
       }} />}
+      {!location.pathname.startsWith("/room/") && <InstallPwaButton />}
       <ToastHost />
     </AppContext.Provider>
   );
@@ -237,10 +242,20 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
   const active = location.pathname === "/meetings" ? "meetings" : "home";
   useEffect(() => {
     let start: { x: number; y: number } | null = null;
+    const blocked = (target: EventTarget | null) => {
+      let el = target instanceof Element ? target : null;
+      while (el && el !== document.body) {
+        if (el.matches("input, textarea, select, [contenteditable='true'], .modal-backdrop, .no-swipe")) return true;
+        if (el.scrollWidth > el.clientWidth + 4 && /(auto|scroll)/.test(getComputedStyle(el).overflowX)) return true;
+        el = el.parentElement;
+      }
+      return false;
+    };
     const onStart = (event: TouchEvent) => {
       const touch = event.touches[0];
-      if (!touch || window.innerWidth > 720) return;
-      if (mobileNavOpen ? touch.clientX < 290 : touch.clientX <= 22) start = { x: touch.clientX, y: touch.clientY };
+      if (!touch || window.innerWidth > 720 || event.touches.length > 1) { start = null; return; }
+      if (mobileNavOpen) { start = { x: touch.clientX, y: touch.clientY }; return; }
+      start = blocked(event.target) ? null : { x: touch.clientX, y: touch.clientY };
     };
     const onEnd = (event: TouchEvent) => {
       if (!start || window.innerWidth > 720) { start = null; return; }
@@ -248,8 +263,8 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
       if (!touch) { start = null; return; }
       const dx = touch.clientX - start.x;
       const dy = touch.clientY - start.y;
-      if (Math.abs(dx) > 72 && Math.abs(dx) > Math.abs(dy) * 1.45) {
-        if (!mobileNavOpen && dx > 0 && start.x <= 22) setMobileNavOpen(true);
+      if (Math.abs(dx) > 64 && Math.abs(dx) > Math.abs(dy) * 1.6) {
+        if (!mobileNavOpen && dx > 0) setMobileNavOpen(true);
         if (mobileNavOpen && dx < 0) setMobileNavOpen(false);
       }
       start = null;
@@ -290,7 +305,7 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
             <ThemeToggle />
             {user ? (
               <div className="profile-menu">
-                <span className="profile-avatar">{user.displayName.slice(0, 1).toUpperCase()}</span>
+                <ProfilePhoto className="profile-avatar" src={user.picture} name={user.displayName} />
                 <span className="profile-name">{user.displayName}</span>
                 <button className="icon-button profile-signout" title="Sign out" aria-label="Sign out" onClick={signOut}><LogOut size={17} /></button>
               </div>
@@ -303,12 +318,10 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
       </div>
       <nav className={`mobile-bottom-nav mbn-${active}`} aria-label="Mobile navigation">
         <span className="mbn-bar" aria-hidden="true"/>
-        <span className="mbn-bubble" aria-hidden="true"><span key={active} className="mbn-bubble-icon">{active === "home" ? <Home size={22}/> : <CalendarDays size={22}/>}</span></span>
         <Link to="/" className={active === "home" ? "mobile-nav-active" : ""} aria-current={active === "home" ? "page" : undefined}><Home size={20}/><span>Home</span></Link>
         <button type="button" className="mbn-fab" aria-label="Create meeting" onClick={() => openSchedule(false)}><Plus size={26} strokeWidth={2.4}/></button>
         <Link to="/meetings" className={active === "meetings" ? "mobile-nav-active" : ""} aria-current={active === "meetings" ? "page" : undefined}><CalendarDays size={20}/><span>My meetings</span></Link>
       </nav>
-      <InstallPwaButton />
     </div>
   );
 }
@@ -389,7 +402,8 @@ function MeetingCard({ meeting }: { meeting: Meeting }) {
   }
   return (
     <article className="meeting-card">
-      <Link to={`/meeting/${meeting.slug}`} className="meeting-cover" style={{ backgroundImage: `linear-gradient(90deg, rgba(29, 14, 20, .1), rgba(29, 14, 20, .05)), url("${meetingImage(meeting)}")` }}>
+      <Link to={`/meeting/${meeting.slug}`} className="meeting-cover">
+        <img className="meeting-cover-img" src={meetingImage(meeting)} alt="" loading="lazy" decoding="async" draggable={false}/>
         <span className={`meeting-status ${meeting.status === "live" ? "meeting-status-live" : ""}`}><span/>{getMeetingStateLabel(meeting)}</span>
         <span className="cover-open"><ArrowRight size={16}/></span>
       </Link>
@@ -424,9 +438,8 @@ function MeetingsPage() {
 
 function MeetingPage() {
   const { slug = "" } = useParams();
-  const { user, openAuth } = useAppContext();
+  const { user, openAuth, completeAuth, signOut } = useAppContext();
   const [meeting, setMeeting] = useState<Meeting | null>(null);
-  const [displayName, setDisplayName] = useState("");
   const [cameraOn, setCameraOn] = useState(true);
   const [micOn, setMicOn] = useState(true);
   const [loading, setLoading] = useState(true);
@@ -440,7 +453,6 @@ function MeetingPage() {
     api.meeting(slug).then(({ meeting: result }) => {
       if (cancelled) return;
       setMeeting(result);
-      setDisplayName(user?.displayName || "");
     }).catch((cause: unknown) => {
       if (!cancelled) setError(cause instanceof Error ? cause.message : "Could not load this meeting.");
     }).finally(() => { if (!cancelled) setLoading(false); });
@@ -450,16 +462,26 @@ function MeetingPage() {
   async function join(event: FormEvent) {
     event.preventDefault();
     if (!meeting) return;
-    if (!user && displayName.trim().length < 2) { setError("Enter your name before joining."); return; }
+    if (!user) { setError("Sign in with Google to join this meeting."); return; }
     setJoining(true); setError("");
     try {
-      const result = await api.join(slug, displayName.trim());
+      const result = await api.join(slug);
       const session: JoinSession = { ...result, audio: micOn, video: cameraOn };
       sessionStorage.setItem(`meet-session:${slug}`, JSON.stringify(session));
       navigate(`/room/${encodeURIComponent(slug)}`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not join this meeting.");
     } finally { setJoining(false); }
+  }
+
+  async function googleCredential(credential: string) {
+    setError("");
+    try {
+      const result = await api.googleSignIn(credential);
+      completeAuth(result.user, result.token);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not sign in with Google.");
+    }
   }
 
   async function share() {
@@ -490,10 +512,11 @@ function MeetingPage() {
           <div className="join-cover" style={{ backgroundImage: `linear-gradient(180deg, rgba(23,12,16,.04), rgba(23,12,16,.58)), url("${meetingImage(meeting)}")` }}><div className="join-cover-brand"><AudioLines size={17}/> <span>MEET ENIHAKOLE</span></div><div className="join-cover-bottom"><span className="cover-tag">A PLACE TO GATHER</span><h2>One room.<br/><em>Many voices.</em></h2></div></div>
           <form className="join-form" onSubmit={join}>
             <div className="join-form-heading"><h2>{ended ? "This meeting has ended" : meeting.isOwner ? "Your meeting is ready" : meeting.status === "live" ? "Join the gathering" : "You're in the right place"}</h2><p>{ended ? "This invitation is no longer active." : meeting.isOwner ? "Start the room when you're ready. Your guests can join using the same link." : meeting.status === "live" ? "Enter your details and come on in." : "You can join as a guest when the host opens the room."}</p></div>
-            {!user && !ended && <label className="field-label">Your name<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="How should we call you?" minLength={2} maxLength={80} required autoComplete="name"/></label>}
+            {user && !ended && <div className="join-identity"><ProfilePhoto src={user.picture} name={user.displayName} className="join-identity-photo"/><span><b>{user.displayName}</b><small>{user.email}</small></span><button type="button" className="error-link" onClick={signOut}>Switch account</button></div>}
+            {!user && !ended && <div className="join-google"><p>Continue with Google to join. We use your Google name and profile photo so everyone knows who you are.</p><GoogleContinueButton oneTap onCredential={(credential) => void googleCredential(credential)}/></div>}
             {!ended && <div className="join-preferences"><label className="toggle-row"><span className="toggle-icon"><VideoIcon size={16}/></span><span><b>Camera</b><small>Join with video</small></span><input type="checkbox" checked={cameraOn} onChange={(event) => setCameraOn(event.target.checked)} /></label><label className="toggle-row"><span className="toggle-icon"><Mic size={16}/></span><span><b>Microphone</b><small>Join with audio</small></span><input type="checkbox" checked={micOn} onChange={(event) => setMicOn(event.target.checked)} /></label></div>}
             {error && <div className="inline-error" role="alert">{error}{error.includes("Sign in") && <button type="button" className="error-link" onClick={openAuth}>Sign in</button>}</div>}
-            {ended ? <Link to="/" className="button button-soft button-full"><ArrowLeft size={16}/> Back to home</Link> : <button className="button button-primary button-full join-submit" type="submit" disabled={joining}>{joining ? <LoaderCircle size={17} className="spin"/> : meeting.isOwner ? <Video size={17}/> : <DoorOpen size={17}/>} {joining ? "Preparing your room…" : meeting.isOwner ? "Start meeting" : meeting.status === "live" ? "Join meeting" : "Check room availability"}<ArrowRight size={16}/></button>}
+            {ended ? <Link to="/" className="button button-soft button-full"><ArrowLeft size={16}/> Back to home</Link> : user && <button className="button button-primary button-full join-submit" type="submit" disabled={joining}>{joining ? <LoaderCircle size={17} className="spin"/> : meeting.isOwner ? <Video size={17}/> : <DoorOpen size={17}/>} {joining ? "Preparing your room…" : meeting.isOwner ? "Start meeting" : meeting.status === "live" ? "Join meeting" : "Check room availability"}<ArrowRight size={16}/></button>}
             <p className="join-footnote"><ShieldCheck size={13}/> Your camera and microphone are only requested when you enter the room.</p>
           </form>
         </section>
@@ -572,6 +595,33 @@ type RoomSignal = { kind: "hand"; raised: boolean } | { kind: "reaction"; emoji:
 type FloatingReaction = { id: string; emoji: string; name: string };
 const REACTION_SET = ["🙏", "❤️", "👏", "🙌", "😊", "🎉", "✨", "💛", "🕊️", "👍"];
 
+function getInitials(name: string): string {
+  const words = name.replace(/[<>]/g, "").trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return "?";
+  const letters = words.length === 1 ? Array.from(words[0]).slice(0, 2) : [Array.from(words[0])[0], Array.from(words[1])[0]];
+  return letters.join("").toUpperCase();
+}
+
+function participantPicture(metadata?: string): string {
+  try {
+    const picture = JSON.parse(metadata || "{}").picture;
+    return typeof picture === "string" && picture.startsWith("https://") ? picture : "";
+  } catch { return ""; }
+}
+
+function ParticipantAvatar({ trackRef, participant }: { trackRef: Parameters<typeof useIsMuted>[0]; participant: { name?: string; identity: string; metadata?: string } }) {
+  const muted = useIsMuted(trackRef);
+  const videoOn = isTrackReference(trackRef) && Boolean(trackRef.publication?.track) && !muted;
+  if (videoOn) return null;
+  return <div className="participant-avatar" aria-hidden="true"><ProfilePhoto src={participantPicture(participant.metadata)} name={participant.name || participant.identity} className="participant-avatar-photo"/></div>;
+}
+
+function ShareRedirect() {
+  // Fallback for shared links that reach the SPA directly (dev server, cached shell): go straight to the meeting page.
+  const { slug = "" } = useParams();
+  return <Navigate to={`/meeting/${encodeURIComponent(slug)}`} replace />;
+}
+
 function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending }: { meeting: Meeting; role: "host" | "participant"; onLeave: () => void; onEndForEveryone: () => void; ending: boolean }) {
   const room = useRoomContext();
   const { localParticipant, isMicrophoneEnabled, isCameraEnabled, isScreenShareEnabled } = useLocalParticipant();
@@ -587,6 +637,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
   const [page, setPage] = useState(0);
   const [fullScreen, setFullScreen] = useState(false);
   const fullScreenRef = useRef<HTMLDivElement>(null);
+  const autoFullscreenDone = useRef(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const localIdentity = localParticipant.identity;
   const [deviceMenu, setDeviceMenu] = useState<"audioinput" | "videoinput" | null>(null);
@@ -631,6 +682,44 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [chatMessages.length, messagesOpen]);
 
+  // Auto-enter fullscreen 15 seconds after arriving on the live page. Browsers only allow fullscreen from a user gesture,
+  // so if the direct attempt is blocked, the very next tap/click/key press enters fullscreen immediately.
+  useEffect(() => {
+    const target = fullScreenRef.current;
+    if (!target || typeof target.requestFullscreen !== "function") return;
+    let cleanup = () => {};
+    const timer = window.setTimeout(() => {
+      if (autoFullscreenDone.current || document.fullscreenElement) return;
+      const enter = () => target.requestFullscreen();
+      enter().then(() => { autoFullscreenDone.current = true; }).catch(() => {
+        const events = ["pointerup", "click", "keydown", "touchend"] as const;
+        const retry = (event: Event) => {
+          if (event.target instanceof Element && event.target.closest(".fullscreen-control")) return;
+          cleanup();
+          if (autoFullscreenDone.current || document.fullscreenElement) return;
+          autoFullscreenDone.current = true;
+          enter().catch(() => { /* Fullscreen unavailable; the manual button still works. */ });
+        };
+        cleanup = () => events.forEach((name) => document.removeEventListener(name, retry, true));
+        events.forEach((name) => document.addEventListener(name, retry, true));
+      });
+    }, 15000);
+    return () => { window.clearTimeout(timer); cleanup(); };
+  }, []);
+
+  // Close the microphone / camera / reaction popovers as soon as the user presses anywhere outside them.
+  useEffect(() => {
+    if (!deviceMenu && !reactionsOpen) return;
+    const onOutside = (event: Event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const inside = (name: string) => Boolean(target?.closest(`[data-popover="${name}"]`));
+      if (deviceMenu && !inside(deviceMenu)) setDeviceMenu(null);
+      if (reactionsOpen && !inside("reactions")) setReactionsOpen(false);
+    };
+    document.addEventListener("pointerdown", onOutside, true);
+    return () => document.removeEventListener("pointerdown", onOutside, true);
+  }, [deviceMenu, reactionsOpen]);
+
   async function broadcast(signal: RoomSignal) {
     try {
       await localParticipant.publishData(new TextEncoder().encode(JSON.stringify(signal)), { reliable: true, topic: "meet-enihakole-ui" });
@@ -667,6 +756,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
     catch { window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Could not send that message. Please retry." } })); }
   }
   async function toggleFullscreen() {
+    autoFullscreenDone.current = true;
     try {
       if (document.fullscreenElement) await document.exitFullscreen();
       else if (fullScreenRef.current?.requestFullscreen) await fullScreenRef.current.requestFullscreen();
@@ -693,6 +783,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
   return <div className={`conference-fullscreen-target ${fullScreen ? "is-fullscreen" : ""}`} ref={fullScreenRef}>
     <div className="conference-media-area">
       <RoomAudioRenderer />
+      <div className="active-count-pill" role="status" aria-live="polite" title="People currently in this meeting"><Users size={14}/><b>{participants.length}</b><span>{participants.length === 1 ? "person" : "people"} in the meeting</span></div>
       <div className="participant-grid-wrap">
         <div className={`participant-grid participant-grid-count-${visibleParticipants.length || 1}`}>
           {visibleParticipants.map(({ participant, trackRef }) => {
@@ -700,7 +791,9 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
             const hand = Boolean(raisedHands[participant.identity]);
             return <div className={`participant-card ${participant.isSpeaking ? "participant-speaking" : ""} ${isHost ? "participant-host" : ""}`} key={participant.identity}>
               <ParticipantTile trackRef={trackRef!} />
-              <div className="participant-name-overlay"><span className="participant-name-copy"><b>{participant.name || participant.identity}{participant.identity === localIdentity ? " (You)" : ""}</b><small>{isHost ? "HOST" : "PARTICIPANT"}</small></span><span className="participant-badges">{hand && <span className="raised-hand-badge" title="Raised hand"><Hand size={15}/></span>}{participant.isSpeaking && <span className="speaker-badge" title="Speaking"><AudioLines size={14}/></span>}</span></div>
+              <ParticipantAvatar trackRef={trackRef!} participant={participant} />
+              <span className="participant-role-label">{isHost ? "HOST" : "PARTICIPANT"}</span>
+              <div className="participant-name-overlay"><span className="participant-name-copy" title={participant.name || participant.identity}><b>{getInitials(participant.name || participant.identity)}{participant.identity === localIdentity ? " · You" : ""}</b></span><span className="participant-badges">{hand && <span className="raised-hand-badge" title="Raised hand"><Hand size={15}/></span>}{participant.isSpeaking && <span className="speaker-badge" title="Speaking"><AudioLines size={14}/></span>}</span></div>
             </div>;
           })}
         </div>
@@ -708,15 +801,16 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
         {pages > 1 && <div className="participant-pagination"><span>Screen {currentPage + 1} of {pages} · {visualParticipants.length} participants</span><div><button className="room-icon-button" onClick={() => setPage(Math.max(0, currentPage - 1))} disabled={currentPage === 0} aria-label="Previous participant screen"><ChevronLeft size={18}/></button><button className="room-icon-button" onClick={() => setPage(Math.min(pages - 1, currentPage + 1))} disabled={currentPage >= pages - 1} aria-label="Next participant screen"><ChevronRight size={18}/></button></div></div>}
       </div>
       <div className="room-control-dock">
-        <div className="room-control-group">
-          <div className="room-split-control"><button className={`room-control-button room-split-main ${!isMicrophoneEnabled ? "control-disabled" : ""}`} onClick={() => void localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled)} title={isMicrophoneEnabled ? "Turn microphone off" : "Turn microphone on"}><Mic size={18}/><span>{isMicrophoneEnabled ? "Mic" : "Unmute"}</span></button><button className="room-control-dropdown" onClick={() => setDeviceMenu(deviceMenu === "audioinput" ? null : "audioinput")} aria-label="Choose microphone" title="Choose microphone"><ChevronDown size={14}/></button>{deviceMenu === "audioinput" && <div className="room-device-menu">{inputDevices.filter((device) => device.kind === "audioinput").map((device) => <button key={device.deviceId} onClick={() => void chooseDevice("audioinput", device.deviceId)}>{device.label || `Microphone ${device.deviceId.slice(0, 5)}`}</button>)}{inputDevices.filter((device) => device.kind === "audioinput").length === 0 && <span>No microphones found</span>}</div>}</div>
-          <div className="room-split-control"><button className={`room-control-button room-split-main ${!isCameraEnabled ? "control-disabled" : ""}`} onClick={() => void localParticipant.setCameraEnabled(!isCameraEnabled)} title={isCameraEnabled ? "Turn camera off" : "Turn camera on"}><VideoIcon size={18}/><span>{isCameraEnabled ? "Camera" : "Camera off"}</span></button><button className="room-control-dropdown" onClick={() => setDeviceMenu(deviceMenu === "videoinput" ? null : "videoinput")} aria-label="Choose camera" title="Choose camera"><ChevronDown size={14}/></button>{deviceMenu === "videoinput" && <div className="room-device-menu">{inputDevices.filter((device) => device.kind === "videoinput").map((device) => <button key={device.deviceId} onClick={() => void chooseDevice("videoinput", device.deviceId)}>{device.label || `Camera ${device.deviceId.slice(0, 5)}`}</button>)}{inputDevices.filter((device) => device.kind === "videoinput").length === 0 && <span>No cameras found</span>}</div>}</div>
+        <div className="room-control-group room-control-row-a">
+          <div className="room-split-control"><button className={`room-control-button room-split-main ${!isMicrophoneEnabled ? "control-disabled" : ""}`} onClick={() => void localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled)} title={isMicrophoneEnabled ? "Turn microphone off" : "Turn microphone on"}><Mic size={18}/><span>{isMicrophoneEnabled ? "Mic" : "Unmute"}</span></button><button data-popover="audioinput" className="room-control-dropdown" onClick={() => setDeviceMenu(deviceMenu === "audioinput" ? null : "audioinput")} aria-label="Choose microphone" title="Choose microphone"><ChevronDown size={14}/></button>{deviceMenu === "audioinput" && <div data-popover="audioinput" className="room-device-menu">{inputDevices.filter((device) => device.kind === "audioinput").map((device) => <button key={device.deviceId} onClick={() => void chooseDevice("audioinput", device.deviceId)}>{device.label || `Microphone ${device.deviceId.slice(0, 5)}`}</button>)}{inputDevices.filter((device) => device.kind === "audioinput").length === 0 && <span>No microphones found</span>}</div>}</div>
+          <div className="room-split-control"><button className={`room-control-button room-split-main ${!isCameraEnabled ? "control-disabled" : ""}`} onClick={() => void localParticipant.setCameraEnabled(!isCameraEnabled)} title={isCameraEnabled ? "Turn camera off" : "Turn camera on"}><VideoIcon size={18}/><span>{isCameraEnabled ? "Camera" : "Camera off"}</span></button><button data-popover="videoinput" className="room-control-dropdown" onClick={() => setDeviceMenu(deviceMenu === "videoinput" ? null : "videoinput")} aria-label="Choose camera" title="Choose camera"><ChevronDown size={14}/></button>{deviceMenu === "videoinput" && <div data-popover="videoinput" className="room-device-menu">{inputDevices.filter((device) => device.kind === "videoinput").map((device) => <button key={device.deviceId} onClick={() => void chooseDevice("videoinput", device.deviceId)}>{device.label || `Camera ${device.deviceId.slice(0, 5)}`}</button>)}{inputDevices.filter((device) => device.kind === "videoinput").length === 0 && <span>No cameras found</span>}</div>}</div>
           <button className={`room-control-button ${isScreenShareEnabled ? "control-selected" : ""}`} onClick={() => void localParticipant.setScreenShareEnabled(!isScreenShareEnabled)} title={isScreenShareEnabled ? "Stop sharing screen" : "Share screen"}><MonitorUp size={18}/><span>Share</span></button>
           <button className={`room-control-button ${handRaised ? "control-selected" : ""}`} onClick={() => void toggleHand()} title={handRaised ? "Lower your hand" : "Raise your hand"}><Hand size={18}/><span>{handRaised ? "Lower hand" : "Raise hand"}</span></button>
-          <div className="reaction-control-wrap"><button className={`room-control-button ${reactionsOpen ? "control-selected" : ""}`} onClick={() => setReactionsOpen((open) => !open)} title="Send an emoji or sticker reaction"><Smile size={18}/><span>React</span></button>{reactionsOpen && <div className="reaction-picker" role="dialog" aria-label="Choose a reaction">{REACTION_SET.map((emoji) => <button key={emoji} onClick={() => void react(emoji)} aria-label={`Send ${emoji}`}>{emoji}</button>)}</div>}</div>
-          <button className={`room-control-button message-control ${messagesOpen ? "control-selected" : ""}`} onClick={() => setMessagesOpen(true)} title="Open messages"><MessageCircle size={18}/><span>Messages</span>{chatMessages.length > 0 && <i>{chatMessages.length}</i>}</button>
         </div>
-        <div className="room-control-side"><button className="room-icon-button fullscreen-control" onClick={() => void toggleFullscreen()} aria-label={fullScreen ? "Exit fullscreen" : "Enter fullscreen"} title={fullScreen ? "Exit fullscreen" : "Fullscreen"}>{fullScreen ? <Minimize2 size={18}/> : <Maximize2 size={18}/>}</button>{role === "host" && <button className="room-icon-button room-end-button" onClick={onEndForEveryone} disabled={ending} title="End for everyone" aria-label="End for everyone"><X size={18}/></button>}<button className="room-leave-button" onClick={onLeave}><DoorOpen size={17}/><span>Leave</span></button></div>
+        <div className="room-control-group room-control-row-b">
+          <button className={`room-control-button message-control ${messagesOpen ? "control-selected" : ""}`} onClick={() => setMessagesOpen(true)} title="Open messages"><MessageCircle size={18}/><span>Messages</span>{chatMessages.length > 0 && <i>{chatMessages.length}</i>}</button>
+          <div className="reaction-control-wrap"><button data-popover="reactions" className={`room-control-button ${reactionsOpen ? "control-selected" : ""}`} onClick={() => setReactionsOpen((open) => !open)} title="Send an emoji or sticker reaction"><Smile size={18}/><span>React</span></button>{reactionsOpen && <div data-popover="reactions" className="reaction-picker" role="dialog" aria-label="Choose a reaction">{REACTION_SET.map((emoji) => <button key={emoji} onClick={() => void react(emoji)} aria-label={`Send ${emoji}`}>{emoji}</button>)}</div>}</div>
+        <div className="room-control-side"><button className="room-icon-button fullscreen-control" onClick={() => void toggleFullscreen()} aria-label={fullScreen ? "Exit fullscreen" : "Enter fullscreen"} title={fullScreen ? "Exit fullscreen" : "Fullscreen"}>{fullScreen ? <Minimize2 size={18}/> : <Maximize2 size={18}/>}</button>{role === "host" && <button className="room-icon-button room-end-button" onClick={onEndForEveryone} disabled={ending} title="End for everyone" aria-label="End for everyone"><X size={18}/></button>}<button className="room-leave-button" onClick={onLeave}><DoorOpen size={17}/><span>Leave</span></button></div></div>
       </div>
     </div>
     {messagesOpen && <div className="messages-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setMessagesOpen(false); }}><section className="messages-modal" role="dialog" aria-modal="true" aria-label="Meeting messages"><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setMessagesOpen(false)} aria-label="Back to call"><ArrowLeft size={18}/></button><div><b>Meeting messages</b><small>Chat with everyone in this room</small></div><button className="room-icon-button" onClick={() => setMessagesOpen(false)} aria-label="Close messages"><X size={18}/></button></header><div className="messages-modal-body">{chatMessages.length === 0 ? <div className="messages-empty"><MessageCircle size={25}/><b>No messages yet</b><span>Send a note to everyone in this gathering.</span></div> : chatMessages.map((message, index) => <article className={`chat-message ${message.from?.identity === localIdentity ? "chat-message-own" : ""}`} key={`${message.timestamp}-${index}`}><span className="chat-message-author">{message.from?.name || (message.from?.identity === localIdentity ? "You" : "Choir guest")}</span><p>{message.message}</p><time>{new Date(message.timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></article>)}<div ref={chatEndRef}/></div><form className="messages-composer" onSubmit={sendMessage}><input value={messageText} onChange={(event) => setMessageText(event.target.value)} placeholder="Write a message…" maxLength={2000} aria-label="Message"/><button className="button button-primary" type="submit" disabled={!messageText.trim() || isSending} aria-label="Send message"><Send size={17}/></button></form></section></div>}
@@ -725,35 +819,26 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
 }
 
 function AuthModal({ onClose, onAuthenticated }: { onClose: () => void; onAuthenticated: (user: User, token: string) => void }) {
-  const [mode, setMode] = useState<"login" | "register">("login");
-  const [displayName, setDisplayName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  async function submit(event: FormEvent) {
-    event.preventDefault(); setBusy(true); setError("");
+  async function handleCredential(credential: string) {
+    setBusy(true); setError("");
     try {
-      const result = mode === "login"
-        ? await api.login({ email, password })
-        : await api.register({ displayName, email, password });
+      const result = await api.googleSignIn(credential);
       onAuthenticated(result.user, result.token);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not sign in.");
+      setError(cause instanceof Error ? cause.message : "Could not sign in with Google.");
     } finally { setBusy(false); }
   }
 
   return <Modal onClose={onClose} wide={false}>
-    <div className="auth-modal-content"><span className="modal-brand-icon"><AudioLines size={23}/></span><p className="section-overline">WELCOME TO YOUR GATHERING SPACE</p><h2>{mode === "login" ? "Good to have you here." : "Let's get you connected."}</h2><p className="modal-subtitle">{mode === "login" ? "Sign in to schedule meetings and manage your invitations." : "Create an account to host and schedule choir meetings."}</p>
-      <div className="auth-tabs"><button className={mode === "login" ? "auth-tab-active" : ""} onClick={() => { setMode("login"); setError(""); }}>Sign in</button><button className={mode === "register" ? "auth-tab-active" : ""} onClick={() => { setMode("register"); setError(""); }}>Create account</button></div>
-      <form onSubmit={submit} className="form-stack">
-        {mode === "register" && <label className="field-label">Full name<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Your name" minLength={2} maxLength={80} autoComplete="name" required/></label>}
-        <label className="field-label">Email address<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" autoComplete="email" required/></label>
-        <label className="field-label">Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder={mode === "register" ? "At least 8 characters" : "Your password"} minLength={mode === "register" ? 8 : 1} maxLength={128} autoComplete={mode === "register" ? "new-password" : "current-password"} required/></label>
+    <div className="auth-modal-content"><span className="modal-brand-icon"><AudioLines size={23}/></span><p className="section-overline">WELCOME TO YOUR GATHERING SPACE</p><h2>Good to have you here.</h2><p className="modal-subtitle">Continue with Google to sign in or create your account. We use your Google name and profile photo — no password needed.</p>
+      <div className="form-stack">
+        <GoogleContinueButton onCredential={(credential) => void handleCredential(credential)}/>
+        {busy && <div className="auth-busy"><LoaderCircle size={16} className="spin"/> Signing you in…</div>}
         {error && <div className="inline-error" role="alert">{error}</div>}
-        <button type="submit" className="button button-primary button-full" disabled={busy}>{busy ? <LoaderCircle size={17} className="spin"/> : mode === "login" ? <LogIn size={16}/> : <CheckCircle2 size={16}/>} {busy ? "Please wait…" : mode === "login" ? "Sign in" : "Create account"}<ArrowRight size={16}/></button>
-      </form><p className="auth-legal"><ShieldCheck size={13}/> Your account is used to manage the meetings you host.</p>
+      </div><p className="auth-legal"><ShieldCheck size={13}/> Your account is used to manage the meetings you host.</p>
     </div>
   </Modal>;
 }
@@ -763,6 +848,29 @@ function DurationPicker({ value, onChange }: { value: string; onChange: (value: 
   const [open, setOpen] = useState(false);
   const selected = DURATION_OPTIONS.find((item) => item.value === value) || DURATION_OPTIONS[3];
   return <div className="custom-picker-wrap"><button type="button" className="custom-picker-trigger" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)}><Clock3 size={16}/><span>{selected.label}</span><ChevronRight size={15} className={open ? "picker-chevron-open" : "picker-chevron"}/></button>{open && <><button className="picker-dismiss" aria-label="Close duration options" onClick={() => setOpen(false)}/><div className="custom-picker-menu duration-picker-menu" role="listbox" aria-label="Meeting duration">{DURATION_OPTIONS.map((option) => <button type="button" key={option.value} role="option" aria-selected={value === option.value} className={value === option.value ? "custom-picker-option picker-option-active" : "custom-picker-option"} onClick={() => { onChange(option.value); setOpen(false); }}>{option.label}{value === option.value && <Check size={15}/>}</button>)}</div></>}</div>;
+}
+function TimePicker({ value, datePart, onChange }: { value: string; datePart: string; onChange: (value: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const hourRef = useRef<HTMLDivElement>(null);
+  const minuteRef = useRef<HTMLDivElement>(null);
+  const [h24, minute] = (value || "12:00").split(":").map((part) => Number(part) || 0);
+  const period = h24 >= 12 ? "PM" : "AM";
+  const hour12 = h24 % 12 === 0 ? 12 : h24 % 12;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const to24 = (h: number, p: string) => (h % 12) + (p === "PM" ? 12 : 0);
+  const isPast = (hour: number, min: number) => datePart === localDateTimeValue(new Date()).slice(0, 10) && new Date(`${datePart}T${pad(hour)}:${pad(min)}:59`).getTime() < Date.now();
+  const emit = (hour: number, min: number) => onChange(`${pad(hour)}:${pad(min)}`);
+  useEffect(() => {
+    if (!open) return;
+    requestAnimationFrame(() => {
+      for (const ref of [hourRef, minuteRef]) {
+        const active = ref.current?.querySelector<HTMLElement>(".time-option-active");
+        if (active && ref.current) ref.current.scrollTop = active.offsetTop - ref.current.clientHeight / 2 + active.clientHeight / 2;
+      }
+    });
+  }, [open]);
+  const label = new Date(`2000-01-01T${pad(h24)}:${pad(minute)}:00`).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return <div className="custom-picker-wrap time-picker-wrap"><button type="button" className="custom-picker-trigger" aria-haspopup="dialog" aria-expanded={open} aria-label="Meeting time" onClick={() => setOpen((current) => !current)}><Clock3 size={16}/><span>{label}</span><ChevronRight size={15} className={open ? "picker-chevron-open" : "picker-chevron"}/></button>{open && <><button type="button" className="picker-dismiss" aria-label="Close time picker" onClick={() => setOpen(false)}/><div className="custom-calendar-popover time-popover" role="dialog" aria-label="Choose time"><div className="time-columns"><div className="time-column" ref={hourRef} role="listbox" aria-label="Hour">{Array.from({ length: 12 }, (_, index) => index + 1).map((h) => <button type="button" key={h} role="option" aria-selected={h === hour12} disabled={isPast(to24(h, period), 59)} className={h === hour12 ? "time-option time-option-active" : "time-option"} onClick={() => emit(to24(h, period), minute)}>{pad(h)}</button>)}</div><div className="time-column" ref={minuteRef} role="listbox" aria-label="Minute">{Array.from({ length: 60 }, (_, index) => index).map((m) => <button type="button" key={m} role="option" aria-selected={m === minute} disabled={isPast(h24, m)} className={m === minute ? "time-option time-option-active" : "time-option"} onClick={() => emit(h24, m)}>{pad(m)}</button>)}</div><div className="time-column time-column-period" role="listbox" aria-label="AM or PM">{["AM", "PM"].map((p) => <button type="button" key={p} role="option" aria-selected={p === period} disabled={isPast(to24(hour12, p), 59)} className={p === period ? "time-option time-option-active" : "time-option"} onClick={() => emit(to24(hour12, p), minute)}>{p}</button>)}</div></div><button type="button" className="button button-primary time-done" onClick={() => setOpen(false)}>Done</button></div></>}</div>;
 }
 function CustomDateTimePicker({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   const datePart = value.slice(0, 10);
@@ -774,9 +882,8 @@ function CustomDateTimePicker({ value, onChange }: { value: string; onChange: (v
   const firstDay = new Date(shownMonth.getFullYear(), shownMonth.getMonth(), 1).getDay();
   const dayCount = new Date(shownMonth.getFullYear(), shownMonth.getMonth() + 1, 0).getDate();
   const today = localDateTimeValue(new Date()).slice(0, 10);
-  const slots = Array.from({ length: 96 }, (_, index) => `${String(Math.floor(index * 15 / 60)).padStart(2, "0")}:${String(index * 15 % 60).padStart(2, "0")}`);
   const updateDate = (date: string) => onChange(`${date}T${timePart}`);
-  return <div className="custom-datetime"><div className="custom-datetime-row"><div className="custom-picker-wrap date-picker-wrap"><button type="button" className="custom-picker-trigger" onClick={() => setCalendarOpen((current) => !current)} aria-expanded={calendarOpen}><CalendarDays size={16}/><span>{selectedDate.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</span><ChevronRight size={15} className={calendarOpen ? "picker-chevron-open" : "picker-chevron"}/></button>{calendarOpen && <><button className="picker-dismiss" aria-label="Close calendar" onClick={() => setCalendarOpen(false)}/><div className="custom-calendar-popover"><div className="calendar-month-row"><button type="button" className="room-icon-button" onClick={() => setShownMonth(new Date(shownMonth.getFullYear(), shownMonth.getMonth() - 1, 1))} aria-label="Previous month"><ChevronLeft size={16}/></button><b>{shownMonth.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</b><button type="button" className="room-icon-button" onClick={() => setShownMonth(new Date(shownMonth.getFullYear(), shownMonth.getMonth() + 1, 1))} aria-label="Next month"><ChevronRight size={16}/></button></div><div className="calendar-weekdays">{["S", "M", "T", "W", "T", "F", "S"].map((day, index) => <span key={`${day}-${index}`}>{day}</span>)}</div><div className="calendar-days">{Array.from({ length: firstDay }, (_, index) => <span key={`blank-${index}`}/>)}{Array.from({ length: dayCount }, (_, index) => { const day = index + 1; const date = `${shownMonth.getFullYear()}-${String(shownMonth.getMonth() + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`; const isPast = date < today; return <button type="button" key={date} disabled={isPast} className={`${date === datePart ? "calendar-day-active" : ""} ${date === today ? "calendar-day-today" : ""}`} onClick={() => { updateDate(date); setCalendarOpen(false); }}>{day}</button>; })}</div></div></>}</div><label className="custom-time-wrap"><Clock3 size={16}/><select aria-label="Meeting time" value={timePart} onChange={(event) => onChange(`${datePart}T${event.target.value}`)}>{slots.map((time) => <option value={time} key={time}>{new Date(`2000-01-01T${time}:00`).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</option>)}</select></label></div><input className="visually-hidden-date-value" type="datetime-local" value={value} onChange={(event) => onChange(event.target.value)} min={localDateTimeValue(new Date(Date.now() - 60_000))} tabIndex={-1} aria-hidden="true"/></div>;
+  return <div className="custom-datetime"><div className="custom-datetime-row"><div className="custom-picker-wrap date-picker-wrap"><button type="button" className="custom-picker-trigger" onClick={() => setCalendarOpen((current) => !current)} aria-expanded={calendarOpen}><CalendarDays size={16}/><span>{selectedDate.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</span><ChevronRight size={15} className={calendarOpen ? "picker-chevron-open" : "picker-chevron"}/></button>{calendarOpen && <><button className="picker-dismiss" aria-label="Close calendar" onClick={() => setCalendarOpen(false)}/><div className="custom-calendar-popover"><div className="calendar-month-row"><button type="button" className="room-icon-button" onClick={() => setShownMonth(new Date(shownMonth.getFullYear(), shownMonth.getMonth() - 1, 1))} aria-label="Previous month"><ChevronLeft size={16}/></button><b>{shownMonth.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</b><button type="button" className="room-icon-button" onClick={() => setShownMonth(new Date(shownMonth.getFullYear(), shownMonth.getMonth() + 1, 1))} aria-label="Next month"><ChevronRight size={16}/></button></div><div className="calendar-weekdays">{["S", "M", "T", "W", "T", "F", "S"].map((day, index) => <span key={`${day}-${index}`}>{day}</span>)}</div><div className="calendar-days">{Array.from({ length: firstDay }, (_, index) => <span key={`blank-${index}`}/>)}{Array.from({ length: dayCount }, (_, index) => { const day = index + 1; const date = `${shownMonth.getFullYear()}-${String(shownMonth.getMonth() + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`; const isPast = date < today; return <button type="button" key={date} disabled={isPast} className={`${date === datePart ? "calendar-day-active" : ""} ${date === today ? "calendar-day-today" : ""}`} onClick={() => { updateDate(date); setCalendarOpen(false); }}>{day}</button>; })}</div></div></>}</div><TimePicker value={timePart} datePart={datePart} onChange={(time) => onChange(`${datePart}T${time}`)} /></div><input className="visually-hidden-date-value" type="datetime-local" value={value} onChange={(event) => onChange(event.target.value)} min={localDateTimeValue(new Date(Date.now() - 60_000))} tabIndex={-1} aria-hidden="true"/></div>;
 }
 
 function ScheduleModal({ instant, onClose, onCreated }: { instant: boolean; onClose: () => void; onCreated: (meeting: Meeting, shareUrl: string) => void }) {
@@ -879,7 +986,7 @@ function ScheduleModal({ instant, onClose, onCreated }: { instant: boolean; onCl
     } catch { /* Native share sheet can be dismissed without action. */ }
   }
 
-  return <Modal onClose={onClose}>
+  return <Modal onClose={onClose} solidTop>
     {!created ? <div className="schedule-modal-content"><div className="modal-heading-row"><span className="modal-brand-icon"><CalendarClock size={22}/></span><button className="icon-button" onClick={onClose} aria-label="Close dialog"><X size={19}/></button></div><p className="section-overline">MAKE IT A MOMENT TO REMEMBER</p><h2>{instant ? "Start a gathering now." : "Plan your next gathering."}</h2><p className="modal-subtitle">{instant ? "Create a room, then share the invitation with your choir." : "Set a time and send everyone one simple link to join."}</p>
       <form onSubmit={submit} className="form-stack schedule-form">
         <label className="field-label">Meeting title<input value={title} onChange={(event) => setTitle(event.target.value)} minLength={3} maxLength={120} placeholder="e.g. Wednesday prayer meeting" required/></label>
@@ -899,17 +1006,82 @@ function ScheduleModal({ instant, onClose, onCreated }: { instant: boolean; onCl
   </Modal>;
 }
 
-function Modal({ children, onClose, wide = true }: { children: ReactNode; onClose: () => void; wide?: boolean }) {
+function Modal({ children, onClose, wide = true, solidTop = false }: { children: ReactNode; onClose: () => void; wide?: boolean; solidTop?: boolean }) {
+  const panelRef = useRef<HTMLElement>(null);
+  const backdropRef = useRef<HTMLDivElement>(null);
+  const closingRef = useRef(false);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const drag = useRef<{ y: number; x: number; lastY: number; lastT: number; velocity: number; active: boolean; locked: boolean } | null>(null);
+  const frame = useRef(0);
+  const offset = useRef(0);
+
+  const paint = (animated: boolean) => {
+    const panel = panelRef.current; const backdrop = backdropRef.current;
+    if (!panel) return;
+    panel.style.transition = animated ? "transform .28s cubic-bezier(.22,1,.36,1)" : "none";
+    panel.style.transform = `translate3d(0, ${offset.current}px, 0)`;
+    if (backdrop) {
+      backdrop.style.transition = animated ? "opacity .28s ease" : "none";
+      backdrop.style.opacity = String(Math.max(0, 1 - offset.current / Math.max(1, panel.offsetHeight) * 0.9));
+    }
+  };
+  const requestClose = useCallback(() => {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    const panel = panelRef.current;
+    if (!panel || window.innerWidth > 720) { onCloseRef.current(); return; }
+    offset.current = panel.offsetHeight + 40;
+    paint(true);
+    window.setTimeout(() => onCloseRef.current(), 250);
+  }, []);
+
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") onCloseRef.current(); };
     document.addEventListener("keydown", onKeyDown);
     document.body.classList.add("modal-open");
-    return () => { document.removeEventListener("keydown", onKeyDown); document.body.classList.remove("modal-open"); };
-  }, [onClose]);
-  const dragStart = useRef<{ y: number; x: number } | null>(null);
-  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className={`modal-panel ${wide ? "modal-panel-wide" : "modal-panel-narrow"}`} role="dialog" aria-modal="true" onTouchStart={(event) => { if (window.innerWidth > 720) return; const target = event.target as HTMLElement; if (target.closest(".modal-drag-handle, .modal-heading-row")) dragStart.current = { y: event.touches[0].clientY, x: event.touches[0].clientX }; else dragStart.current = null; }} onTouchEnd={(event) => { if (!dragStart.current) return; const deltaY = event.changedTouches[0].clientY - dragStart.current.y; const deltaX = event.changedTouches[0].clientX - dragStart.current.x; if (deltaY > 92 && deltaY > Math.abs(deltaX) * 1.3) onClose(); dragStart.current = null; }}><div className="modal-drag-handle" aria-hidden="true"><span/></div>{children}</section></div>;
-}
+    return () => { document.removeEventListener("keydown", onKeyDown); document.body.classList.remove("modal-open"); cancelAnimationFrame(frame.current); };
+  }, []);
 
+  const onTouchStart = (event: ReactTouchEvent) => {
+    if (window.innerWidth > 720 || closingRef.current) return;
+    const target = event.target as HTMLElement;
+    if (!target.closest(".modal-drag-handle, .modal-heading-row")) { drag.current = null; return; }
+    if (target.closest("button")) { drag.current = null; return; }
+    const touch = event.touches[0];
+    const panel = panelRef.current;
+    if (panel) { panel.style.animation = "none"; }
+    drag.current = { y: touch.clientY, x: touch.clientX, lastY: touch.clientY, lastT: performance.now(), velocity: 0, active: false, locked: false };
+  };
+  const onTouchMove = (event: ReactTouchEvent) => {
+    const d = drag.current; if (!d) return;
+    const touch = event.touches[0];
+    const dy = touch.clientY - d.y; const dx = touch.clientX - d.x;
+    if (!d.locked) {
+      if (Math.abs(dy) < 4 && Math.abs(dx) < 4) return;
+      d.locked = true; d.active = Math.abs(dy) > Math.abs(dx);
+      if (!d.active) { drag.current = null; return; }
+    }
+    const now = performance.now();
+    const dt = Math.max(1, now - d.lastT);
+    d.velocity = d.velocity * 0.6 + ((touch.clientY - d.lastY) / dt) * 0.4;
+    d.lastY = touch.clientY; d.lastT = now;
+    // Follow the finger 1:1 downward; add rubber-band resistance when pulling upward.
+    offset.current = dy >= 0 ? dy : dy / 6;
+    cancelAnimationFrame(frame.current);
+    frame.current = requestAnimationFrame(() => paint(false));
+  };
+  const onTouchEnd = () => {
+    const d = drag.current; drag.current = null;
+    if (!d || !d.active) return;
+    const panel = panelRef.current; const height = panel?.offsetHeight || 600;
+    cancelAnimationFrame(frame.current);
+    if (offset.current > height * 0.28 || d.velocity > 0.55) requestClose();
+    else { offset.current = 0; paint(true); }
+  };
+
+  return <div ref={backdropRef} className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) requestClose(); }}><section ref={panelRef} className={`modal-panel ${wide ? "modal-panel-wide" : "modal-panel-narrow"} ${solidTop ? "modal-panel-solid-top" : ""}`} role="dialog" aria-modal="true" onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd} onTouchCancel={onTouchEnd}><div className="modal-drag-handle" aria-hidden="true"><span/></div>{children}</section></div>;
+}
 function StandaloneLoading({ label }: { label: string }) {
   return <div className="standalone-state"><span className="modal-brand-icon"><AudioLines size={23}/></span><LoaderCircle size={22} className="spin"/><p>{label}</p></div>;
 }

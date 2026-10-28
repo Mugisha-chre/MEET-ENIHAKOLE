@@ -34,10 +34,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
-  register: (input: { displayName: string; email: string; password: string }) =>
-    request<{ token: string; user: User }>("/auth/register", { method: "POST", body: JSON.stringify(input) }),
-  login: (input: { email: string; password: string }) =>
-    request<{ token: string; user: User }>("/auth/login", { method: "POST", body: JSON.stringify(input) }),
+  googleSignIn: (credential: string) =>
+    request<{ token: string; user: User }>("/auth/google", { method: "POST", body: JSON.stringify({ credential }) }),
   me: () => request<{ user: User }>("/auth/me"),
   myMeetings: () => request<{ meetings: Meeting[] }>("/meetings/mine"),
   publicMeetings: () => request<{ meetings: Meeting[] }>("/meetings/public"),
@@ -55,10 +53,10 @@ export const api = {
     visibility: "link" | "public";
     thumbnailUrl: string;
   }) => request<{ meeting: Meeting; shareUrl: string }>("/meetings", { method: "POST", body: JSON.stringify(input) }),
-  join: (slug: string, displayName: string) =>
+  join: (slug: string) =>
     request<Omit<JoinSession, "audio" | "video">>(`/meetings/${encodeURIComponent(slug)}/token`, {
       method: "POST",
-      body: JSON.stringify({ displayName }),
+      body: JSON.stringify({}),
     }),
   endMeeting: (slug: string) => request<{ meeting: Meeting }>(`/meetings/${encodeURIComponent(slug)}/end`, { method: "POST" }),
   cancelMeeting: (slug: string) => request<{ meeting: Meeting }>(`/meetings/${encodeURIComponent(slug)}/cancel`, { method: "POST" }),

@@ -6,6 +6,7 @@ export interface AuthPayload {
   userId: string;
   email: string;
   displayName: string;
+  picture?: string;
 }
 
 declare global {
@@ -33,12 +34,13 @@ export async function optionalAuth(req: Request, _res: Response, next: NextFunct
   try {
     const decoded = jwt.verify(raw.slice(7), jwtSecret(), { issuer: "meet-enihakole" });
     if (typeof decoded === "object" && decoded !== null && typeof decoded.sub === "string") {
-      const user = await User.findById(decoded.sub).select("displayName email").lean();
+      const user = await User.findById(decoded.sub).select("displayName email picture").lean();
       if (user) {
         req.auth = {
           userId: String(user._id),
           email: user.email,
           displayName: user.displayName,
+          picture: user.picture || "",
         };
       }
     }

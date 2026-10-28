@@ -2,6 +2,7 @@ export interface User {
   id: string;
   displayName: string;
   email: string;
+  picture?: string;
 }
 
 export interface Meeting {

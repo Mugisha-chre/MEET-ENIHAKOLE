@@ -5,6 +5,17 @@
       "destination": "/api/share/:slug"
     },
     {
+      "source": "/meeting/:slug",
+      "has": [
+        {
+          "type": "header",
+          "key": "user-agent",
+          "value": "(?i).*(WhatsApp|facebookexternalhit|facebookcatalog|Facebot|meta-externalagent|Twitterbot|LinkedInBot|Slackbot|TelegramBot|Discordbot|Applebot|SkypeUriPreview|Pinterest|vkShare|Iframely|Signal|Viber|Embedly).*"
+        }
+      ],
+      "destination": "/api/share/:slug"
+    },
+    {
       "source": "/((?!assets/).*)",
       "destination": "/index.html"
     }
