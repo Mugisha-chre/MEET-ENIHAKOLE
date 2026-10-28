@@ -52,7 +52,18 @@ function publicMeeting(meeting: any, currentUserId?: string) {
 }
 
 function shareUrl(slug: string): string {
-  const base = (process.env.API_PUBLIC_URL || `http://localhost:${process.env.PORT || 4000}`).replace(/\/$/, "");
+  // Invitations must be opened on the frontend domain; never emit the Render API origin as a share URL.
+  let base = process.env.NODE_ENV === "production" ? "https://meet-enihakole.vercel.app" : "http://localhost:5173";
+  for (const candidate of [process.env.FRONTEND_APP_URL, process.env.APP_URL]) {
+    if (!candidate?.trim()) continue;
+    try {
+      const url = new URL(candidate.trim());
+      if (!["http:", "https:"].includes(url.protocol) || url.hostname.endsWith(".onrender.com")) continue;
+      if (["localhost", "127.0.0.1", "0.0.0.0"].includes(url.hostname) && process.env.NODE_ENV === "production") continue;
+      base = url.origin;
+      break;
+    } catch { /* Try the next configured frontend URL. */ }
+  }
   return `${base}/share/${encodeURIComponent(slug)}`;
 }
 
@@ -82,27 +93,57 @@ router.get("/public", async (_req, res) => {
   }
 });
 
-router.post("/thumbnail-signature", requireAuth, (req, res) => {
+router.post("/thumbnail-upload", requireAuth, async (req, res) => {
   const cloudName = process.env.CLOUDINARY_CLOUD_NAME?.trim();
   const apiKey = process.env.CLOUDINARY_API_KEY?.trim();
   const apiSecret = process.env.CLOUDINARY_API_SECRET?.trim();
   const uploadPreset = process.env.CLOUDINARY_UPLOAD_PRESET?.trim();
   if (!cloudName || !apiKey || !apiSecret || !uploadPreset) {
-    return res.status(503).json({ error: "Meeting image uploads are not configured yet. The administrator must configure Cloudinary credentials and a signed image-upload preset." });
+    return res.status(503).json({ error: "Meeting image uploads are not configured. Add the Cloudinary cloud name, API key, API secret, and a signed upload preset to Render." });
   }
 
-  const timestamp = Math.floor(Date.now() / 1000);
-  // Keep destination, allowed formats, and size restrictions in a signed Cloudinary preset.
-  // The preset should allow only JPG, PNG, and WebP and have an 8 MB maximum file size.
-  const parameters = { timestamp: String(timestamp), upload_preset: uploadPreset };
-  const stringToSign = Object.entries(parameters)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([key, value]) => `${key}=${value}`)
-    .join("&") + apiSecret;
-  const signature = crypto.createHash("sha1").update(stringToSign).digest("hex");
+  const dataUrl = typeof req.body?.dataUrl === "string" ? req.body.dataUrl : "";
+  const match = dataUrl.match(/^data:(image\/(?:webp|jpeg|png));base64,([A-Za-z0-9+/=]+)$/i);
+  if (!match) return res.status(400).json({ error: "Choose a valid JPG, PNG, or WebP cover image." });
+  const bytes = Buffer.from(match[2], "base64");
+  if (!bytes.length || bytes.length > 8 * 1024 * 1024) {
+    return res.status(413).json({ error: "The optimized cover image must be 8 MB or smaller." });
+  }
 
-  return res.json({ cloudName, apiKey, timestamp, uploadPreset, signature });
+  try {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const signedParameters = { timestamp: String(timestamp), upload_preset: uploadPreset };
+    const stringToSign = Object.entries(signedParameters)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, value]) => `${key}=${value}`)
+      .join("&") + apiSecret;
+    const signature = crypto.createHash("sha1").update(stringToSign).digest("hex");
+    const formData = new FormData();
+    formData.append("file", dataUrl);
+    formData.append("api_key", apiKey);
+    formData.append("timestamp", String(timestamp));
+    formData.append("upload_preset", uploadPreset);
+    formData.append("signature", signature);
+
+    const response = await fetch(`https://api.cloudinary.com/v1_1/${encodeURIComponent(cloudName)}/image/upload`, {
+      method: "POST",
+      body: formData,
+      signal: AbortSignal.timeout(30_000),
+    });
+    const result = await response.json() as { secure_url?: string; public_id?: string; error?: { message?: string } };
+    if (!response.ok || !result.secure_url) {
+      console.error("[meetings/thumbnail-upload] Cloudinary rejected upload", response.status, result.error?.message || "Unknown Cloudinary error");
+      return res.status(response.status === 401 || response.status === 403 ? 502 : 502).json({
+        error: result.error?.message || "Cloudinary could not accept this cover image. Check that the upload preset is signed and configured for image uploads.",
+      });
+    }
+    return res.status(201).json({ secureUrl: result.secure_url, publicId: result.public_id });
+  } catch (error) {
+    console.error("[meetings/thumbnail-upload] request failed", error instanceof Error ? error.message : "unknown error");
+    return res.status(502).json({ error: "Could not reach Cloudinary from the API server. Check the Render outbound connection and Cloudinary configuration." });
+  }
 });
+
 
 router.post("/", requireAuth, async (req, res) => {
   const parsed = createMeetingSchema.safeParse(req.body);

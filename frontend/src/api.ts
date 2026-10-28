@@ -42,13 +42,10 @@ export const api = {
   myMeetings: () => request<{ meetings: Meeting[] }>("/meetings/mine"),
   publicMeetings: () => request<{ meetings: Meeting[] }>("/meetings/public"),
   meeting: (slug: string) => request<{ meeting: Meeting }>(`/meetings/${encodeURIComponent(slug)}`),
-  thumbnailUploadSignature: () => request<{
-    cloudName: string;
-    apiKey: string;
-    timestamp: number;
-    uploadPreset: string;
-    signature: string;
-  }>("/meetings/thumbnail-signature", { method: "POST", body: JSON.stringify({}) }),
+  uploadMeetingThumbnail: (dataUrl: string) => request<{ secureUrl: string; publicId?: string }>("/meetings/thumbnail-upload", {
+    method: "POST",
+    body: JSON.stringify({ dataUrl }),
+  }),
   createMeeting: (input: {
     title: string;
     description: string;

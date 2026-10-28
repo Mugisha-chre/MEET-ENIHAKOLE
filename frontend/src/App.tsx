@@ -1,12 +1,13 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
-import { LiveKitRoom, VideoConference } from "@livekit/components-react";
-import { VideoPreset } from "livekit-client";
+import { LiveKitRoom, ParticipantTile, RoomAudioRenderer, useChat, useLocalParticipant, useParticipants, useRoomContext, useTracks } from "@livekit/components-react";
+import { RoomEvent, Track, VideoPreset } from "livekit-client";
 import {
   ArrowDownRight, ArrowLeft, ArrowRight, AudioLines, CalendarClock, CalendarDays, Check,
   CheckCircle2, CircleHelp, Clock3, Copy, DoorOpen, HeartHandshake, Home,
   Link2, LoaderCircle, LogIn, LogOut, Menu, Mic, Plus, Share2, ShieldCheck,
-  Sparkles, Users, Video, VideoIcon, X, Sun, Moon, ImagePlus, Trash2,
+  Sparkles, Users, Video, VideoIcon, X, Sun, Moon, ImagePlus, Trash2, MessageCircle,
+  Hand, Send, MonitorUp, Maximize2, Minimize2, ChevronLeft, ChevronRight, Smile, ChevronDown, Download,
 } from "lucide-react";
 import { api, clearAuthToken, getAuthToken, saveAuthToken } from "./api";
 import type { JoinSession, Meeting, User } from "./types";
@@ -81,6 +82,17 @@ export default function App() {
 
   const toggleTheme = useCallback(() => {
     setTheme((current) => current === "light" ? "dark" : "light");
+  }, []);
+
+  useEffect(() => {
+    let resetTimer = 0;
+    const onScroll = () => {
+      document.documentElement.classList.add("is-scrolling");
+      window.clearTimeout(resetTimer);
+      resetTimer = window.setTimeout(() => document.documentElement.classList.remove("is-scrolling"), 850);
+    };
+    document.addEventListener("scroll", onScroll, true);
+    return () => { document.removeEventListener("scroll", onScroll, true); window.clearTimeout(resetTimer); document.documentElement.classList.remove("is-scrolling"); };
   }, []);
 
   useEffect(() => {
@@ -178,10 +190,74 @@ function ThemeToggle() {
   return <button type="button" className="icon-button theme-toggle" onClick={toggleTheme} title={`Switch to ${nextTheme} mode`} aria-label={`Switch to ${nextTheme} mode`} aria-pressed={theme === "dark"}>{theme === "light" ? <Moon size={17}/> : <Sun size={17}/>}</button>;
 }
 
+type PwaPromptEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: "accepted" | "dismissed" }> };
+
+function InstallPwaButton() {
+  const isStandalone = () => window.matchMedia("(display-mode: standalone)").matches || (navigator as unknown as { standalone?: boolean }).standalone === true;
+  const [deferred, setDeferred] = useState<PwaPromptEvent | null>(() => ((window as unknown as { __pwaPrompt?: PwaPromptEvent }).__pwaPrompt ?? null));
+  const [installed, setInstalled] = useState(isStandalone);
+  const [iosTip, setIosTip] = useState(false);
+  const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+  useEffect(() => {
+    const onReady = () => setDeferred((window as unknown as { __pwaPrompt?: PwaPromptEvent }).__pwaPrompt ?? null);
+    const onInstalled = () => { setInstalled(true); setDeferred(null); setIosTip(false); (window as unknown as { __pwaPrompt?: Event }).__pwaPrompt = undefined; };
+    const media = window.matchMedia("(display-mode: standalone)");
+    const onDisplay = () => setInstalled(isStandalone());
+    window.addEventListener("pwa-prompt-ready", onReady);
+    window.addEventListener("appinstalled", onInstalled);
+    media.addEventListener("change", onDisplay);
+    return () => { window.removeEventListener("pwa-prompt-ready", onReady); window.removeEventListener("appinstalled", onInstalled); media.removeEventListener("change", onDisplay); };
+  }, []);
+
+  if (installed || (!deferred && !isIos)) return null;
+
+  const install = async () => {
+    if (!deferred) { setIosTip((v) => !v); return; }
+    try {
+      await deferred.prompt();
+      const choice = await deferred.userChoice;
+      if (choice.outcome === "accepted") setInstalled(true);
+    } catch { /* Prompt can only be used once; wait for the browser to offer it again. */ }
+    (window as unknown as { __pwaPrompt?: Event }).__pwaPrompt = undefined;
+    setDeferred(null);
+  };
+
+  return (
+    <div className="pwa-install">
+      {iosTip && <div className="pwa-install-tip" role="status">To install, tap <b>Share</b> in Safari, then choose <b>Add to Home Screen</b>.<button type="button" onClick={() => setIosTip(false)} aria-label="Close"><X size={14}/></button></div>}
+      <button type="button" className="pwa-install-button" onClick={() => void install()} title="Install app" aria-label="Install MEET ENIHAKOLE app"><Download size={20}/><span>Install app</span></button>
+    </div>
+  );
+}
+
 function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: ReactNode; mobileNavOpen: boolean; setMobileNavOpen: (v: boolean) => void }) {
   const { user, openAuth, openSchedule, signOut } = useAppContext();
   const location = useLocation();
   const active = location.pathname === "/meetings" ? "meetings" : "home";
+  useEffect(() => {
+    let start: { x: number; y: number } | null = null;
+    const onStart = (event: TouchEvent) => {
+      const touch = event.touches[0];
+      if (!touch || window.innerWidth > 720) return;
+      if (mobileNavOpen ? touch.clientX < 290 : touch.clientX <= 22) start = { x: touch.clientX, y: touch.clientY };
+    };
+    const onEnd = (event: TouchEvent) => {
+      if (!start || window.innerWidth > 720) { start = null; return; }
+      const touch = event.changedTouches[0];
+      if (!touch) { start = null; return; }
+      const dx = touch.clientX - start.x;
+      const dy = touch.clientY - start.y;
+      if (Math.abs(dx) > 72 && Math.abs(dx) > Math.abs(dy) * 1.45) {
+        if (!mobileNavOpen && dx > 0 && start.x <= 22) setMobileNavOpen(true);
+        if (mobileNavOpen && dx < 0) setMobileNavOpen(false);
+      }
+      start = null;
+    };
+    document.addEventListener("touchstart", onStart, { passive: true });
+    document.addEventListener("touchend", onEnd, { passive: true });
+    return () => { document.removeEventListener("touchstart", onStart); document.removeEventListener("touchend", onEnd); };
+  }, [mobileNavOpen, setMobileNavOpen]);
   return (
     <div className="app-shell">
       <aside className={`sidebar ${mobileNavOpen ? "sidebar-open" : ""}`}>
@@ -200,7 +276,6 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
           <p>Pray together, rehearse, and stay close — wherever life takes you.</p>
         </div>
         <div className="sidebar-bottom">
-          <div className="secure-note"><ShieldCheck size={15} /><span>Private by design</span></div>
           <button className="side-link quiet-link" onClick={() => window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Help centre will be added in a future release." } }))}><CircleHelp size={18} /><span>Help & support</span></button>
           <div className="sidebar-version">MEET ENIHAKOLE <span>EARLY ACCESS</span></div>
         </div>
@@ -226,6 +301,14 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
         <main className="main-content">{children}</main>
         <footer className="page-footer"><span>© {new Date().getFullYear()} MEET ENIHAKOLE</span><span>Made for connection, prayer, and community</span></footer>
       </div>
+      <nav className={`mobile-bottom-nav mbn-${active}`} aria-label="Mobile navigation">
+        <span className="mbn-bar" aria-hidden="true"/>
+        <span className="mbn-bubble" aria-hidden="true"><span key={active} className="mbn-bubble-icon">{active === "home" ? <Home size={22}/> : <CalendarDays size={22}/>}</span></span>
+        <Link to="/" className={active === "home" ? "mobile-nav-active" : ""} aria-current={active === "home" ? "page" : undefined}><Home size={20}/><span>Home</span></Link>
+        <button type="button" className="mbn-fab" aria-label="Create meeting" onClick={() => openSchedule(false)}><Plus size={26} strokeWidth={2.4}/></button>
+        <Link to="/meetings" className={active === "meetings" ? "mobile-nav-active" : ""} aria-current={active === "meetings" ? "page" : undefined}><CalendarDays size={20}/><span>My meetings</span></Link>
+      </nav>
+      <InstallPwaButton />
     </div>
   );
 }
@@ -294,7 +377,7 @@ function Dashboard() {
 
 function MeetingCard({ meeting }: { meeting: Meeting }) {
   const [copied, setCopied] = useState(false);
-  const shareUrl = `${(import.meta.env.VITE_API_URL || "http://localhost:4000/api").replace(/\/api\/?$/, "")}/share/${encodeURIComponent(meeting.slug)}`;
+  const shareUrl = `${window.location.origin}/share/${encodeURIComponent(meeting.slug)}`;
   async function copyLink() {
     try {
       await navigator.clipboard.writeText(shareUrl);
@@ -380,7 +463,7 @@ function MeetingPage() {
   }
 
   async function share() {
-    const url = `${(import.meta.env.VITE_API_URL || "http://localhost:4000/api").replace(/\/api\/?$/, "")}/share/${encodeURIComponent(slug)}`;
+    const url = `${window.location.origin}/share/${encodeURIComponent(slug)}`;
     try {
       if (navigator.share) await navigator.share({ title: meeting?.title || "MEET ENIHAKOLE", text: "Join our online gathering.", url });
       else { await navigator.clipboard.writeText(url); window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Invitation link copied." } })); }
@@ -453,37 +536,192 @@ function MeetingRoomPage() {
 
   return (
     <div className="conference-page">
-      <header className="conference-topbar"><Link to={`/meeting/${slug}`} className="conference-brand"><span className="brand-mark"><AudioLines size={19}/></span><span><b>MEET ENIHAKOLE</b><small>{session.meeting.title}</small></span></Link><div className="conference-room-status"><span className="live-indicator"/> IN THE ROOM <span className="conference-divider"/> {session.role === "host" ? "HOST" : "PARTICIPANT"}</div><div className="conference-header-actions"><ThemeToggle/><button className="button button-soft button-small" onClick={() => navigate(`/meeting/${slug}`)}><ArrowLeft size={15}/> Leave room</button></div></header>
+      <header className="conference-topbar"><Link to={`/meeting/${slug}`} className="conference-brand"><span className="brand-mark"><AudioLines size={19}/></span><span><b>MEET ENIHAKOLE</b><small>{session.meeting.title}</small></span></Link><div className="conference-room-status">IN THE ROOM <span className="conference-divider"/> {session.role === "host" ? "HOST" : "PARTICIPANT"}</div><div className="conference-header-actions"><ThemeToggle/><button className="button button-soft button-small" onClick={() => navigate(`/meeting/${slug}`)}><ArrowLeft size={15}/> Leave room</button></div></header>
       {endError && <div className="room-alert" role="alert">{endError}</div>}
       {disconnected && <div className="room-alert" role="status">You have disconnected from the call. <button onClick={() => navigate(`/meeting/${slug}`)}>Return to meeting</button></div>}
       <main className="conference-main">
         <div className="conference-title-row"><div><p className="section-overline">ENIHAKOLE CHOIR · LIVE CONFERENCE</p><h1>{session.meeting.title}</h1></div><div className="conference-tools"><span className="encrypted-pill"><ShieldCheck size={14}/> Secure connection</span>{session.role === "host" && <button className="button button-danger button-small" onClick={() => void endForEveryone()} disabled={ending}>{ending ? <LoaderCircle size={15} className="spin"/> : <X size={15}/>} End for everyone</button>}</div></div>
-        <div className="conference-stage"><LiveKitRoom
-          token={session.token}
-          serverUrl={session.serverUrl}
-          connect={true}
-          audio={session.audio}
-          video={session.video}
-          options={{
-            adaptiveStream: true,
-            dynacast: true,
-            videoCaptureDefaults: {
-              resolution: { width: 1280, height: 720, frameRate: 30 },
-            },
-            publishDefaults: {
-              videoEncoding: { maxBitrate: 1_500_000, maxFramerate: 30 },
-              videoSimulcastLayers: [
-                new VideoPreset(640, 360, 500_000, 20),
-                new VideoPreset(320, 180, 150_000, 15),
-              ],
-            },
-          }}
-          onDisconnected={() => setDisconnected(true)}
-        ><div data-lk-theme="default" className="livekit-theme-root"><VideoConference /></div></LiveKitRoom></div>
+        <div className="conference-stage">
+          <LiveKitRoom
+            token={session.token}
+            serverUrl={session.serverUrl}
+            connect={true}
+            audio={session.audio}
+            video={session.video}
+            options={{
+              adaptiveStream: true,
+              dynacast: true,
+              videoCaptureDefaults: { resolution: { width: 1280, height: 720, frameRate: 30 } },
+              publishDefaults: {
+                videoEncoding: { maxBitrate: 1_500_000, maxFramerate: 30 },
+                videoSimulcastLayers: [new VideoPreset(640, 360, 500_000, 20), new VideoPreset(320, 180, 150_000, 15)],
+              },
+            }}
+            onDisconnected={() => setDisconnected(true)}
+          >
+            <ConferenceWorkspace meeting={session.meeting} role={session.role} onLeave={() => navigate(`/meeting/${slug}`)} onEndForEveryone={() => void endForEveryone()} ending={ending}/>
+          </LiveKitRoom>
+        </div>
         <div className="conference-bottom-note"><span><ShieldCheck size={15}/> {session.meeting.visibility === "public" ? "This gathering is publicly listed." : "This meeting uses an unlisted invitation link."}</span><span>For the clearest call, use headphones and a stable connection.</span></div>
       </main>
     </div>
   );
+}
+
+type RoomSignal = { kind: "hand"; raised: boolean } | { kind: "reaction"; emoji: string; id: string };
+type FloatingReaction = { id: string; emoji: string; name: string };
+const REACTION_SET = ["🙏", "❤️", "👏", "🙌", "😊", "🎉", "✨", "💛", "🕊️", "👍"];
+
+function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending }: { meeting: Meeting; role: "host" | "participant"; onLeave: () => void; onEndForEveryone: () => void; ending: boolean }) {
+  const room = useRoomContext();
+  const { localParticipant, isMicrophoneEnabled, isCameraEnabled, isScreenShareEnabled } = useLocalParticipant();
+  const participants = useParticipants();
+  const trackRefs = useTracks([{ source: Track.Source.Camera, withPlaceholder: true }], { onlySubscribed: false });
+  const { chatMessages, send, isSending } = useChat();
+  const [messagesOpen, setMessagesOpen] = useState(false);
+  const [messageText, setMessageText] = useState("");
+  const [reactionsOpen, setReactionsOpen] = useState(false);
+  const [raisedHands, setRaisedHands] = useState<Record<string, boolean>>({});
+  const [handRaised, setHandRaised] = useState(false);
+  const [reactions, setReactions] = useState<FloatingReaction[]>([]);
+  const [page, setPage] = useState(0);
+  const [fullScreen, setFullScreen] = useState(false);
+  const fullScreenRef = useRef<HTMLDivElement>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  const localIdentity = localParticipant.identity;
+  const [deviceMenu, setDeviceMenu] = useState<"audioinput" | "videoinput" | null>(null);
+  const [inputDevices, setInputDevices] = useState<MediaDeviceInfo[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadDevices = async () => {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        if (!cancelled) setInputDevices(devices.filter((device) => device.kind === "audioinput" || device.kind === "videoinput"));
+      } catch { /* Device selection remains optional if browser enumeration is blocked. */ }
+    };
+    void loadDevices();
+    navigator.mediaDevices?.addEventListener?.("devicechange", loadDevices);
+    return () => { cancelled = true; navigator.mediaDevices?.removeEventListener?.("devicechange", loadDevices); };
+  }, []);
+
+  useEffect(() => {
+    const onData = (payload: Uint8Array, participant?: { identity: string; name?: string }, _kind?: unknown, topic?: string) => {
+      if (topic !== "meet-enihakole-ui") return;
+      try {
+        const data = JSON.parse(new TextDecoder().decode(payload)) as RoomSignal;
+        const identity = participant?.identity || "unknown";
+        if (data.kind === "hand") setRaisedHands((current) => ({ ...current, [identity]: data.raised }));
+        if (data.kind === "reaction" && REACTION_SET.includes(data.emoji)) {
+          const item = { id: data.id, emoji: data.emoji, name: participant?.name || "A participant" };
+          setReactions((current) => [...current.slice(-5), item]);
+          window.setTimeout(() => setReactions((current) => current.filter((reaction) => reaction.id !== item.id)), 3200);
+        }
+      } catch { /* Ignore unrelated or malformed room data. */ }
+    };
+    room.on(RoomEvent.DataReceived, onData);
+    return () => { room.off(RoomEvent.DataReceived, onData); };
+  }, [room]);
+
+  useEffect(() => {
+    const onFullscreen = () => setFullScreen(document.fullscreenElement === fullScreenRef.current);
+    document.addEventListener("fullscreenchange", onFullscreen);
+    return () => document.removeEventListener("fullscreenchange", onFullscreen);
+  }, []);
+
+  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [chatMessages.length, messagesOpen]);
+
+  async function broadcast(signal: RoomSignal) {
+    try {
+      await localParticipant.publishData(new TextEncoder().encode(JSON.stringify(signal)), { reliable: true, topic: "meet-enihakole-ui" });
+    } catch {
+      window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Your action could not be sent. Check your connection." } }));
+    }
+  }
+  async function chooseDevice(kind: "audioinput" | "videoinput", deviceId: string) {
+    try {
+      await room.switchActiveDevice(kind, deviceId);
+      setDeviceMenu(null);
+    } catch {
+      window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Could not switch that device. Check browser permissions and try again." } }));
+    }
+  }
+  async function toggleHand() {
+    const next = !handRaised;
+    setHandRaised(next);
+    setRaisedHands((current) => ({ ...current, [localIdentity]: next }));
+    await broadcast({ kind: "hand", raised: next });
+  }
+  async function react(emoji: string) {
+    setReactionsOpen(false);
+    const id = `${localIdentity}-${Date.now()}`;
+    setReactions((current) => [...current.slice(-5), { id, emoji, name: localParticipant.name || "You" }]);
+    window.setTimeout(() => setReactions((current) => current.filter((reaction) => reaction.id !== id)), 3200);
+    await broadcast({ kind: "reaction", emoji, id });
+  }
+  async function sendMessage(event: FormEvent) {
+    event.preventDefault();
+    const message = messageText.trim();
+    if (!message || isSending) return;
+    try { await send(message); setMessageText(""); }
+    catch { window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Could not send that message. Please retry." } })); }
+  }
+  async function toggleFullscreen() {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else if (fullScreenRef.current?.requestFullscreen) await fullScreenRef.current.requestFullscreen();
+    } catch { window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Fullscreen is not available in this browser." } })); }
+  }
+
+  const getParticipantRole = (participant: typeof participants[number]) => {
+    try { return JSON.parse(participant.metadata || "{}").role === "host" ? "host" : "participant"; } catch { return "participant"; }
+  };
+  const orderedParticipants = [...participants].sort((a, b) => {
+    const aHost = getParticipantRole(a) === "host"; const bHost = getParticipantRole(b) === "host";
+    if (aHost !== bHost) return aHost ? -1 : 1;
+    if (a.isSpeaking !== b.isSpeaking) return a.isSpeaking ? -1 : 1;
+    if (a.identity === localIdentity) return -1;
+    if (b.identity === localIdentity) return 1;
+    return (a.name || a.identity).localeCompare(b.name || b.identity);
+  });
+  const tracksByIdentity = new Map(trackRefs.map((trackRef) => [trackRef.participant.identity, trackRef]));
+  const visualParticipants = orderedParticipants.map((participant) => ({ participant, trackRef: tracksByIdentity.get(participant.identity) })).filter((item) => item.trackRef);
+  const pages = Math.max(1, Math.ceil(visualParticipants.length / 8));
+  const currentPage = Math.min(page, pages - 1);
+  const visibleParticipants = visualParticipants.slice(currentPage * 8, currentPage * 8 + 8);
+
+  return <div className={`conference-fullscreen-target ${fullScreen ? "is-fullscreen" : ""}`} ref={fullScreenRef}>
+    <div className="conference-media-area">
+      <RoomAudioRenderer />
+      <div className="participant-grid-wrap">
+        <div className={`participant-grid participant-grid-count-${visibleParticipants.length || 1}`}>
+          {visibleParticipants.map(({ participant, trackRef }) => {
+            const isHost = getParticipantRole(participant) === "host";
+            const hand = Boolean(raisedHands[participant.identity]);
+            return <div className={`participant-card ${participant.isSpeaking ? "participant-speaking" : ""} ${isHost ? "participant-host" : ""}`} key={participant.identity}>
+              <ParticipantTile trackRef={trackRef!} />
+              <div className="participant-name-overlay"><span className="participant-name-copy"><b>{participant.name || participant.identity}{participant.identity === localIdentity ? " (You)" : ""}</b><small>{isHost ? "HOST" : "PARTICIPANT"}</small></span><span className="participant-badges">{hand && <span className="raised-hand-badge" title="Raised hand"><Hand size={15}/></span>}{participant.isSpeaking && <span className="speaker-badge" title="Speaking"><AudioLines size={14}/></span>}</span></div>
+            </div>;
+          })}
+        </div>
+        {reactions.length > 0 && <div className="reaction-float-stack" aria-live="polite">{reactions.map((reaction) => <div className="reaction-float" key={reaction.id}><span>{reaction.emoji}</span><b>{reaction.name}</b></div>)}</div>}
+        {pages > 1 && <div className="participant-pagination"><span>Screen {currentPage + 1} of {pages} · {visualParticipants.length} participants</span><div><button className="room-icon-button" onClick={() => setPage(Math.max(0, currentPage - 1))} disabled={currentPage === 0} aria-label="Previous participant screen"><ChevronLeft size={18}/></button><button className="room-icon-button" onClick={() => setPage(Math.min(pages - 1, currentPage + 1))} disabled={currentPage >= pages - 1} aria-label="Next participant screen"><ChevronRight size={18}/></button></div></div>}
+      </div>
+      <div className="room-control-dock">
+        <div className="room-control-group">
+          <div className="room-split-control"><button className={`room-control-button room-split-main ${!isMicrophoneEnabled ? "control-disabled" : ""}`} onClick={() => void localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled)} title={isMicrophoneEnabled ? "Turn microphone off" : "Turn microphone on"}><Mic size={18}/><span>{isMicrophoneEnabled ? "Mic" : "Unmute"}</span></button><button className="room-control-dropdown" onClick={() => setDeviceMenu(deviceMenu === "audioinput" ? null : "audioinput")} aria-label="Choose microphone" title="Choose microphone"><ChevronDown size={14}/></button>{deviceMenu === "audioinput" && <div className="room-device-menu">{inputDevices.filter((device) => device.kind === "audioinput").map((device) => <button key={device.deviceId} onClick={() => void chooseDevice("audioinput", device.deviceId)}>{device.label || `Microphone ${device.deviceId.slice(0, 5)}`}</button>)}{inputDevices.filter((device) => device.kind === "audioinput").length === 0 && <span>No microphones found</span>}</div>}</div>
+          <div className="room-split-control"><button className={`room-control-button room-split-main ${!isCameraEnabled ? "control-disabled" : ""}`} onClick={() => void localParticipant.setCameraEnabled(!isCameraEnabled)} title={isCameraEnabled ? "Turn camera off" : "Turn camera on"}><VideoIcon size={18}/><span>{isCameraEnabled ? "Camera" : "Camera off"}</span></button><button className="room-control-dropdown" onClick={() => setDeviceMenu(deviceMenu === "videoinput" ? null : "videoinput")} aria-label="Choose camera" title="Choose camera"><ChevronDown size={14}/></button>{deviceMenu === "videoinput" && <div className="room-device-menu">{inputDevices.filter((device) => device.kind === "videoinput").map((device) => <button key={device.deviceId} onClick={() => void chooseDevice("videoinput", device.deviceId)}>{device.label || `Camera ${device.deviceId.slice(0, 5)}`}</button>)}{inputDevices.filter((device) => device.kind === "videoinput").length === 0 && <span>No cameras found</span>}</div>}</div>
+          <button className={`room-control-button ${isScreenShareEnabled ? "control-selected" : ""}`} onClick={() => void localParticipant.setScreenShareEnabled(!isScreenShareEnabled)} title={isScreenShareEnabled ? "Stop sharing screen" : "Share screen"}><MonitorUp size={18}/><span>Share</span></button>
+          <button className={`room-control-button ${handRaised ? "control-selected" : ""}`} onClick={() => void toggleHand()} title={handRaised ? "Lower your hand" : "Raise your hand"}><Hand size={18}/><span>{handRaised ? "Lower hand" : "Raise hand"}</span></button>
+          <div className="reaction-control-wrap"><button className={`room-control-button ${reactionsOpen ? "control-selected" : ""}`} onClick={() => setReactionsOpen((open) => !open)} title="Send an emoji or sticker reaction"><Smile size={18}/><span>React</span></button>{reactionsOpen && <div className="reaction-picker" role="dialog" aria-label="Choose a reaction">{REACTION_SET.map((emoji) => <button key={emoji} onClick={() => void react(emoji)} aria-label={`Send ${emoji}`}>{emoji}</button>)}</div>}</div>
+          <button className={`room-control-button message-control ${messagesOpen ? "control-selected" : ""}`} onClick={() => setMessagesOpen(true)} title="Open messages"><MessageCircle size={18}/><span>Messages</span>{chatMessages.length > 0 && <i>{chatMessages.length}</i>}</button>
+        </div>
+        <div className="room-control-side"><button className="room-icon-button fullscreen-control" onClick={() => void toggleFullscreen()} aria-label={fullScreen ? "Exit fullscreen" : "Enter fullscreen"} title={fullScreen ? "Exit fullscreen" : "Fullscreen"}>{fullScreen ? <Minimize2 size={18}/> : <Maximize2 size={18}/>}</button>{role === "host" && <button className="room-icon-button room-end-button" onClick={onEndForEveryone} disabled={ending} title="End for everyone" aria-label="End for everyone"><X size={18}/></button>}<button className="room-leave-button" onClick={onLeave}><DoorOpen size={17}/><span>Leave</span></button></div>
+      </div>
+    </div>
+    {messagesOpen && <div className="messages-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setMessagesOpen(false); }}><section className="messages-modal" role="dialog" aria-modal="true" aria-label="Meeting messages"><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setMessagesOpen(false)} aria-label="Back to call"><ArrowLeft size={18}/></button><div><b>Meeting messages</b><small>Chat with everyone in this room</small></div><button className="room-icon-button" onClick={() => setMessagesOpen(false)} aria-label="Close messages"><X size={18}/></button></header><div className="messages-modal-body">{chatMessages.length === 0 ? <div className="messages-empty"><MessageCircle size={25}/><b>No messages yet</b><span>Send a note to everyone in this gathering.</span></div> : chatMessages.map((message, index) => <article className={`chat-message ${message.from?.identity === localIdentity ? "chat-message-own" : ""}`} key={`${message.timestamp}-${index}`}><span className="chat-message-author">{message.from?.name || (message.from?.identity === localIdentity ? "You" : "Choir guest")}</span><p>{message.message}</p><time>{new Date(message.timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></article>)}<div ref={chatEndRef}/></div><form className="messages-composer" onSubmit={sendMessage}><input value={messageText} onChange={(event) => setMessageText(event.target.value)} placeholder="Write a message…" maxLength={2000} aria-label="Message"/><button className="button button-primary" type="submit" disabled={!messageText.trim() || isSending} aria-label="Send message"><Send size={17}/></button></form></section></div>}
+    {role === "host" && <span className="room-host-sr" aria-hidden="true">{meeting.ownerName} is hosting</span>}
+  </div>;
 }
 
 function AuthModal({ onClose, onAuthenticated }: { onClose: () => void; onAuthenticated: (user: User, token: string) => void }) {
@@ -520,6 +758,27 @@ function AuthModal({ onClose, onAuthenticated }: { onClose: () => void; onAuthen
   </Modal>;
 }
 
+const DURATION_OPTIONS = [{ value: "15", label: "15 minutes" }, { value: "30", label: "30 minutes" }, { value: "45", label: "45 minutes" }, { value: "60", label: "1 hour" }, { value: "90", label: "1.5 hours" }, { value: "120", label: "2 hours" }, { value: "180", label: "3 hours" }, { value: "240", label: "4 hours" }];
+function DurationPicker({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const selected = DURATION_OPTIONS.find((item) => item.value === value) || DURATION_OPTIONS[3];
+  return <div className="custom-picker-wrap"><button type="button" className="custom-picker-trigger" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)}><Clock3 size={16}/><span>{selected.label}</span><ChevronRight size={15} className={open ? "picker-chevron-open" : "picker-chevron"}/></button>{open && <><button className="picker-dismiss" aria-label="Close duration options" onClick={() => setOpen(false)}/><div className="custom-picker-menu duration-picker-menu" role="listbox" aria-label="Meeting duration">{DURATION_OPTIONS.map((option) => <button type="button" key={option.value} role="option" aria-selected={value === option.value} className={value === option.value ? "custom-picker-option picker-option-active" : "custom-picker-option"} onClick={() => { onChange(option.value); setOpen(false); }}>{option.label}{value === option.value && <Check size={15}/>}</button>)}</div></>}</div>;
+}
+function CustomDateTimePicker({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const datePart = value.slice(0, 10);
+  const timePart = value.slice(11, 16) || "12:00";
+  const selectedDate = new Date(`${datePart || localDateTimeValue(new Date()).slice(0, 10)}T12:00:00`);
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [shownMonth, setShownMonth] = useState(new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1));
+  useEffect(() => { setShownMonth(new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1)); }, [datePart]);
+  const firstDay = new Date(shownMonth.getFullYear(), shownMonth.getMonth(), 1).getDay();
+  const dayCount = new Date(shownMonth.getFullYear(), shownMonth.getMonth() + 1, 0).getDate();
+  const today = localDateTimeValue(new Date()).slice(0, 10);
+  const slots = Array.from({ length: 96 }, (_, index) => `${String(Math.floor(index * 15 / 60)).padStart(2, "0")}:${String(index * 15 % 60).padStart(2, "0")}`);
+  const updateDate = (date: string) => onChange(`${date}T${timePart}`);
+  return <div className="custom-datetime"><div className="custom-datetime-row"><div className="custom-picker-wrap date-picker-wrap"><button type="button" className="custom-picker-trigger" onClick={() => setCalendarOpen((current) => !current)} aria-expanded={calendarOpen}><CalendarDays size={16}/><span>{selectedDate.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</span><ChevronRight size={15} className={calendarOpen ? "picker-chevron-open" : "picker-chevron"}/></button>{calendarOpen && <><button className="picker-dismiss" aria-label="Close calendar" onClick={() => setCalendarOpen(false)}/><div className="custom-calendar-popover"><div className="calendar-month-row"><button type="button" className="room-icon-button" onClick={() => setShownMonth(new Date(shownMonth.getFullYear(), shownMonth.getMonth() - 1, 1))} aria-label="Previous month"><ChevronLeft size={16}/></button><b>{shownMonth.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</b><button type="button" className="room-icon-button" onClick={() => setShownMonth(new Date(shownMonth.getFullYear(), shownMonth.getMonth() + 1, 1))} aria-label="Next month"><ChevronRight size={16}/></button></div><div className="calendar-weekdays">{["S", "M", "T", "W", "T", "F", "S"].map((day, index) => <span key={`${day}-${index}`}>{day}</span>)}</div><div className="calendar-days">{Array.from({ length: firstDay }, (_, index) => <span key={`blank-${index}`}/>)}{Array.from({ length: dayCount }, (_, index) => { const day = index + 1; const date = `${shownMonth.getFullYear()}-${String(shownMonth.getMonth() + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`; const isPast = date < today; return <button type="button" key={date} disabled={isPast} className={`${date === datePart ? "calendar-day-active" : ""} ${date === today ? "calendar-day-today" : ""}`} onClick={() => { updateDate(date); setCalendarOpen(false); }}>{day}</button>; })}</div></div></>}</div><label className="custom-time-wrap"><Clock3 size={16}/><select aria-label="Meeting time" value={timePart} onChange={(event) => onChange(`${datePart}T${event.target.value}`)}>{slots.map((time) => <option value={time} key={time}>{new Date(`2000-01-01T${time}:00`).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</option>)}</select></label></div><input className="visually-hidden-date-value" type="datetime-local" value={value} onChange={(event) => onChange(event.target.value)} min={localDateTimeValue(new Date(Date.now() - 60_000))} tabIndex={-1} aria-hidden="true"/></div>;
+}
+
 function ScheduleModal({ instant, onClose, onCreated }: { instant: boolean; onClose: () => void; onCreated: (meeting: Meeting, shareUrl: string) => void }) {
   const [title, setTitle] = useState(instant ? "Choir prayer gathering" : "ENIHAKOLE choir meeting");
   const [description, setDescription] = useState("");
@@ -529,6 +788,7 @@ function ScheduleModal({ instant, onClose, onCreated }: { instant: boolean; onCl
   const [thumbnailFile, setThumbnailFile] = useState<File | null>(null);
   const [thumbnailPreview, setThumbnailPreview] = useState("");
   const [thumbnailUploading, setThumbnailUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [created, setCreated] = useState<{ meeting: Meeting; shareUrl: string } | null>(null);
@@ -559,32 +819,45 @@ function ScheduleModal({ instant, onClose, onCreated }: { instant: boolean; onCl
     if (!thumbnailFile) return "";
     setThumbnailUploading(true);
     try {
-      const signing = await api.thumbnailUploadSignature();
-      const formData = new FormData();
-      formData.append("file", thumbnailFile);
-      formData.append("api_key", signing.apiKey);
-      formData.append("timestamp", String(signing.timestamp));
-      formData.append("upload_preset", signing.uploadPreset);
-      formData.append("signature", signing.signature);
-      const response = await fetch(`https://api.cloudinary.com/v1_1/${encodeURIComponent(signing.cloudName)}/image/upload`, { method: "POST", body: formData });
-      const result = await response.json() as { secure_url?: string; error?: { message?: string } };
-      if (!response.ok || !result.secure_url) throw new Error(result.error?.message || "The thumbnail upload failed. Check Cloudinary settings and try again.");
-      return result.secure_url;
+      // Resize/compress before sending to the API. This also avoids browser-to-Cloudinary
+      // CORS/network failures and keeps the Cloudinary secret exclusively on the server.
+      const bitmap = await createImageBitmap(thumbnailFile);
+      const scale = Math.min(1, 1600 / bitmap.width, 900 / bitmap.height);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("Your browser could not prepare this image. Please try another photo.");
+      context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      bitmap.close();
+      const dataUrl = canvas.toDataURL("image/webp", 0.84);
+      const result = await api.uploadMeetingThumbnail(dataUrl);
+      return result.secureUrl;
+    } catch (cause) {
+      if (cause instanceof Error && cause.message) throw cause;
+      throw new Error("The cover image could not be uploaded. Check your connection and Cloudinary configuration, then try again.");
     } finally {
       setThumbnailUploading(false);
     }
   }
 
   async function submit(event: FormEvent) {
-    event.preventDefault(); setBusy(true); setError("");
+    event.preventDefault(); setError("");
+    if (!startsAt || !Number.isFinite(new Date(startsAt).getTime()) || new Date(startsAt).getTime() < Date.now() - 60_000) {
+      setError("Choose a valid date and time that is not in the past.");
+      return;
+    }
+    setBusy(true);
     try {
       const thumbnailUrl = await uploadThumbnail();
       const result = await api.createMeeting({
         title: title.trim(), description: description.trim(), startsAt: new Date(startsAt).toISOString(),
         durationMinutes: Number(durationMinutes), timezone, visibility, thumbnailUrl,
       });
-      setCreated(result);
-      onCreated(result.meeting, result.shareUrl);
+      const shareUrl = `${window.location.origin}/share/${encodeURIComponent(result.meeting.slug)}`;
+      const resultWithFrontendShare = { ...result, shareUrl };
+      setCreated(resultWithFrontendShare);
+      onCreated(result.meeting, shareUrl);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not create this meeting.");
     } finally { setBusy(false); }
@@ -611,13 +884,14 @@ function ScheduleModal({ instant, onClose, onCreated }: { instant: boolean; onCl
       <form onSubmit={submit} className="form-stack schedule-form">
         <label className="field-label">Meeting title<input value={title} onChange={(event) => setTitle(event.target.value)} minLength={3} maxLength={120} placeholder="e.g. Wednesday prayer meeting" required/></label>
         <label className="field-label">Description <span className="optional-label">OPTIONAL</span><textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} maxLength={1000} placeholder="Add a short note to help people know what this gathering is for."/></label>
-        <div className="form-row"><label className="field-label">Date and time<input type="datetime-local" value={startsAt} onChange={(event) => setStartsAt(event.target.value)} min={localDateTimeValue(new Date(Date.now() - 60_000))} required/></label><label className="field-label">Duration<select value={durationMinutes} onChange={(event) => setDurationMinutes(event.target.value)}><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="45">45 minutes</option><option value="60">1 hour</option><option value="90">1.5 hours</option><option value="120">2 hours</option><option value="180">3 hours</option><option value="240">4 hours</option></select></label></div>
+        <div className="form-row"><label className="field-label">Date and time<CustomDateTimePicker value={startsAt} onChange={setStartsAt} /></label><label className="field-label">Duration<DurationPicker value={durationMinutes} onChange={setDurationMinutes} /></label></div>
         <div className="field-label">Invitation access<div className="visibility-options"><button type="button" className={`visibility-option ${visibility === "link" ? "visibility-selected" : ""}`} onClick={() => setVisibility("link")}><span className="visibility-option-icon"><Link2 size={17}/></span><span><b>Anyone with the link</b><small>Best for choir WhatsApp groups</small></span>{visibility === "link" && <CheckCircle2 size={17}/>}</button><button type="button" className={`visibility-option ${visibility === "public" ? "visibility-selected" : ""}`} onClick={() => setVisibility("public")}><span className="visibility-option-icon"><Users size={17}/></span><span><b>Public listing</b><small>Show it on the home page</small></span>{visibility === "public" && <CheckCircle2 size={17}/>}</button></div></div>
-        <div className="field-label thumbnail-field"><span>Meeting thumbnail <span className="optional-label">OPTIONAL</span></span><div className={`thumbnail-upload ${thumbnailPreview ? "thumbnail-upload-has-image" : ""}`}>
-          {thumbnailPreview ? <img className="thumbnail-upload-preview" src={thumbnailPreview} alt="Selected meeting thumbnail preview"/> : <span className="thumbnail-upload-placeholder"><ImagePlus size={22}/><b>Add a cover image</b><small>Shown in WhatsApp and other shared-link previews</small></span>}
-          <label className="button button-soft button-small thumbnail-select-button"><ImagePlus size={15}/>{thumbnailPreview ? "Change image" : "Choose image"}<input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { selectThumbnail(event.currentTarget.files?.[0]); event.currentTarget.value = ""; }} /></label>
-          {thumbnailFile && <button type="button" className="icon-button thumbnail-remove-button" onClick={() => { setThumbnailFile(null); setError(""); }} aria-label="Remove selected thumbnail" title="Remove image"><Trash2 size={15}/></button>}
-        </div><small className="field-help">JPG, PNG, or WebP up to 8 MB. The image uploads securely to Cloudinary when you create the meeting. If no image is selected, the default MEET ENIHAKOLE cover is used.</small></div>
+        <div className="field-label thumbnail-field"><span>Meeting thumbnail <span className="optional-label">OPTIONAL</span></span>
+          <div className={`thumbnail-upload ${thumbnailPreview ? "thumbnail-upload-has-image" : ""}`} role="button" tabIndex={0} onClick={() => fileInputRef.current?.click()} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); fileInputRef.current?.click(); } }} onDragOver={(event) => { event.preventDefault(); event.currentTarget.classList.add("thumbnail-drag-over"); }} onDragLeave={(event) => event.currentTarget.classList.remove("thumbnail-drag-over")} onDrop={(event) => { event.preventDefault(); event.currentTarget.classList.remove("thumbnail-drag-over"); selectThumbnail(event.dataTransfer.files?.[0]); }}>
+            <input ref={fileInputRef} className="thumbnail-hidden-input" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { selectThumbnail(event.currentTarget.files?.[0]); event.currentTarget.value = ""; }} />
+            {thumbnailPreview ? <img className="thumbnail-upload-preview" src={thumbnailPreview} alt="Selected meeting thumbnail preview"/> : <span className="thumbnail-upload-placeholder"><ImagePlus size={25}/><b>Add a cover image</b><small>Click to browse or drag a photo here. Shown in WhatsApp and other shared-link previews.</small></span>}
+            {thumbnailFile && <button type="button" className="icon-button thumbnail-remove-button" onClick={(event) => { event.stopPropagation(); setThumbnailFile(null); setError(""); }} aria-label="Remove selected thumbnail" title="Remove image"><Trash2 size={15}/></button>}
+          </div><small className="field-help">JPG, PNG, or WebP up to 8 MB. The image is optimized and uploaded securely to Cloudinary when you create the meeting. If no image is selected, the default MEET ENIHAKOLE cover is used.</small></div>
         {error && <div className="inline-error" role="alert">{error}</div>}
         <div className="schedule-modal-footer"><span className="modal-timezone"><Clock3 size={14}/>{timezone}</span><button className="button button-primary" type="submit" disabled={busy}>{busy ? <LoaderCircle size={16} className="spin"/> : instant ? <Video size={16}/> : <CalendarDays size={16}/>} {thumbnailUploading ? "Uploading image…" : busy ? "Creating…" : instant ? "Create meeting room" : "Schedule meeting"}<ArrowRight size={15}/></button></div>
       </form>
@@ -632,7 +906,8 @@ function Modal({ children, onClose, wide = true }: { children: ReactNode; onClos
     document.body.classList.add("modal-open");
     return () => { document.removeEventListener("keydown", onKeyDown); document.body.classList.remove("modal-open"); };
   }, [onClose]);
-  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className={`modal-panel ${wide ? "modal-panel-wide" : "modal-panel-narrow"}`} role="dialog" aria-modal="true">{children}</section></div>;
+  const dragStart = useRef<{ y: number; x: number } | null>(null);
+  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className={`modal-panel ${wide ? "modal-panel-wide" : "modal-panel-narrow"}`} role="dialog" aria-modal="true" onTouchStart={(event) => { if (window.innerWidth > 720) return; const target = event.target as HTMLElement; if (target.closest(".modal-drag-handle, .modal-heading-row")) dragStart.current = { y: event.touches[0].clientY, x: event.touches[0].clientX }; else dragStart.current = null; }} onTouchEnd={(event) => { if (!dragStart.current) return; const deltaY = event.changedTouches[0].clientY - dragStart.current.y; const deltaX = event.changedTouches[0].clientX - dragStart.current.x; if (deltaY > 92 && deltaY > Math.abs(deltaX) * 1.3) onClose(); dragStart.current = null; }}><div className="modal-drag-handle" aria-hidden="true"><span/></div>{children}</section></div>;
 }
 
 function StandaloneLoading({ label }: { label: string }) {
