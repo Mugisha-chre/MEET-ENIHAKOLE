@@ -82,6 +82,28 @@ router.get("/public", async (_req, res) => {
   }
 });
 
+router.post("/thumbnail-signature", requireAuth, (req, res) => {
+  const cloudName = process.env.CLOUDINARY_CLOUD_NAME?.trim();
+  const apiKey = process.env.CLOUDINARY_API_KEY?.trim();
+  const apiSecret = process.env.CLOUDINARY_API_SECRET?.trim();
+  const uploadPreset = process.env.CLOUDINARY_UPLOAD_PRESET?.trim();
+  if (!cloudName || !apiKey || !apiSecret || !uploadPreset) {
+    return res.status(503).json({ error: "Meeting image uploads are not configured yet. The administrator must configure Cloudinary credentials and a signed image-upload preset." });
+  }
+
+  const timestamp = Math.floor(Date.now() / 1000);
+  // Keep destination, allowed formats, and size restrictions in a signed Cloudinary preset.
+  // The preset should allow only JPG, PNG, and WebP and have an 8 MB maximum file size.
+  const parameters = { timestamp: String(timestamp), upload_preset: uploadPreset };
+  const stringToSign = Object.entries(parameters)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}=${value}`)
+    .join("&") + apiSecret;
+  const signature = crypto.createHash("sha1").update(stringToSign).digest("hex");
+
+  return res.json({ cloudName, apiKey, timestamp, uploadPreset, signature });
+});
+
 router.post("/", requireAuth, async (req, res) => {
   const parsed = createMeetingSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Check the meeting details." });

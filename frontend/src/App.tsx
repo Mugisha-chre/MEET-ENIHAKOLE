@@ -1,11 +1,12 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { LiveKitRoom, VideoConference } from "@livekit/components-react";
+import { VideoPreset } from "livekit-client";
 import {
   ArrowDownRight, ArrowLeft, ArrowRight, AudioLines, CalendarClock, CalendarDays, Check,
   CheckCircle2, CircleHelp, Clock3, Copy, DoorOpen, HeartHandshake, Home,
   Link2, LoaderCircle, LogIn, LogOut, Menu, Mic, Plus, Share2, ShieldCheck,
-  Sparkles, Users, Video, VideoIcon, X,
+  Sparkles, Users, Video, VideoIcon, X, Sun, Moon, ImagePlus, Trash2,
 } from "lucide-react";
 import { api, clearAuthToken, getAuthToken, saveAuthToken } from "./api";
 import type { JoinSession, Meeting, User } from "./types";
@@ -19,9 +20,17 @@ interface AppContextValue {
   openAuth: () => void;
   openSchedule: (instant?: boolean) => void;
   signOut: () => void;
+  theme: "light" | "dark";
+  toggleTheme: () => void;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
+const THEME_STORAGE_KEY = "meet-enihakole-theme";
+
+function getInitialTheme(): "light" | "dark" {
+  try { return localStorage.getItem(THEME_STORAGE_KEY) === "dark" ? "dark" : "light"; }
+  catch { return "light"; }
+}
 function useAppContext(): AppContextValue {
   const value = useContext(AppContext);
   if (!value) throw new Error("App context is missing.");
@@ -59,6 +68,7 @@ function getMeetingStateLabel(meeting: Meeting) {
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
+  const [theme, setTheme] = useState<"light" | "dark">(getInitialTheme);
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [publicMeetings, setPublicMeetings] = useState<Meeting[]>([]);
   const [loadingMeetings, setLoadingMeetings] = useState(true);
@@ -68,6 +78,17 @@ export default function App() {
   const [scheduleAfterAuth, setScheduleAfterAuth] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const location = useLocation();
+
+  const toggleTheme = useCallback(() => {
+    setTheme((current) => current === "light" ? "dark" : "light");
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try { localStorage.setItem(THEME_STORAGE_KEY, theme); } catch { /* Theme still applies for this session. */ }
+    const themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+    if (themeColor) themeColor.content = theme === "light" ? "#fbf7f2" : "#130d10";
+  }, [theme]);
 
   const refreshMeetings = useCallback(async () => {
     setLoadingMeetings(true);
@@ -121,8 +142,8 @@ export default function App() {
   }, [refreshMeetings]);
 
   const contextValue = useMemo<AppContextValue>(() => ({
-    user, meetings, publicMeetings, loadingMeetings, refreshMeetings, openAuth, openSchedule, signOut,
-  }), [user, meetings, publicMeetings, loadingMeetings, refreshMeetings, openAuth, openSchedule, signOut]);
+    user, meetings, publicMeetings, loadingMeetings, refreshMeetings, openAuth, openSchedule, signOut, theme, toggleTheme,
+  }), [user, meetings, publicMeetings, loadingMeetings, refreshMeetings, openAuth, openSchedule, signOut, theme, toggleTheme]);
 
   return (
     <AppContext.Provider value={contextValue}>
@@ -149,6 +170,12 @@ export default function App() {
       <ToastHost />
     </AppContext.Provider>
   );
+}
+
+function ThemeToggle() {
+  const { theme, toggleTheme } = useAppContext();
+  const nextTheme = theme === "light" ? "dark" : "light";
+  return <button type="button" className="icon-button theme-toggle" onClick={toggleTheme} title={`Switch to ${nextTheme} mode`} aria-label={`Switch to ${nextTheme} mode`} aria-pressed={theme === "dark"}>{theme === "light" ? <Moon size={17}/> : <Sun size={17}/>}</button>;
 }
 
 function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: ReactNode; mobileNavOpen: boolean; setMobileNavOpen: (v: boolean) => void }) {
@@ -185,6 +212,7 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
           <div className="breadcrumb"><span>ENIHAKOLE CHOIR</span><span className="breadcrumb-slash">/</span><strong>{active === "meetings" ? "My meetings" : "Workspace"}</strong></div>
           <div className="topbar-actions">
             <button className="topbar-help" onClick={() => window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Use Start instant meeting for an immediate call, or Schedule a meeting to share a future invitation." } }))}><CircleHelp size={16} /><span>Need help?</span></button>
+            <ThemeToggle />
             {user ? (
               <div className="profile-menu">
                 <span className="profile-avatar">{user.displayName.slice(0, 1).toUpperCase()}</span>
@@ -365,7 +393,7 @@ function MeetingPage() {
 
   return (
     <div className="meeting-landing">
-      <header className="landing-topbar"><Link className="brand-lockup" to="/"><span className="brand-mark"><AudioLines size={22}/></span><span className="brand-words"><strong>MEET</strong><b>ENIHAKOLE</b><small>GATHER IN FAITH</small></span></Link><button className="button button-soft button-small" onClick={share}><Share2 size={15}/> Share invitation</button></header>
+      <header className="landing-topbar"><Link className="brand-lockup" to="/"><span className="brand-mark"><AudioLines size={22}/></span><span className="brand-words"><strong>MEET</strong><b>ENIHAKOLE</b><small>GATHER IN FAITH</small></span></Link><div className="landing-topbar-actions"><ThemeToggle/><button className="button button-soft button-small" onClick={share}><Share2 size={15}/> Share invitation</button></div></header>
       <main className="landing-layout">
         <section className="landing-details">
           <p className="eyebrow"><span className={`eyebrow-dot ${meeting.status === "live" ? "eyebrow-dot-live" : ""}`}/>{meeting.status === "live" ? "THE GATHERING IS LIVE" : ended ? "GATHERING CLOSED" : "YOU'RE INVITED"}</p>
@@ -395,7 +423,6 @@ function MeetingPage() {
 function MeetingRoomPage() {
   const { slug = "" } = useParams();
   const navigate = useNavigate();
-  const { user } = useAppContext();
   const [session, setSession] = useState<JoinSession | null>(null);
   const [ending, setEnding] = useState(false);
   const [endError, setEndError] = useState("");
@@ -426,7 +453,7 @@ function MeetingRoomPage() {
 
   return (
     <div className="conference-page">
-      <header className="conference-topbar"><Link to={`/meeting/${slug}`} className="conference-brand"><span className="brand-mark"><AudioLines size={19}/></span><span><b>MEET ENIHAKOLE</b><small>{session.meeting.title}</small></span></Link><div className="conference-room-status"><span className="live-indicator"/> IN THE ROOM <span className="conference-divider"/> {session.role === "host" ? "HOST" : "PARTICIPANT"}</div><button className="button button-soft button-small" onClick={() => navigate(`/meeting/${slug}`)}><ArrowLeft size={15}/> Leave room</button></header>
+      <header className="conference-topbar"><Link to={`/meeting/${slug}`} className="conference-brand"><span className="brand-mark"><AudioLines size={19}/></span><span><b>MEET ENIHAKOLE</b><small>{session.meeting.title}</small></span></Link><div className="conference-room-status"><span className="live-indicator"/> IN THE ROOM <span className="conference-divider"/> {session.role === "host" ? "HOST" : "PARTICIPANT"}</div><div className="conference-header-actions"><ThemeToggle/><button className="button button-soft button-small" onClick={() => navigate(`/meeting/${slug}`)}><ArrowLeft size={15}/> Leave room</button></div></header>
       {endError && <div className="room-alert" role="alert">{endError}</div>}
       {disconnected && <div className="room-alert" role="status">You have disconnected from the call. <button onClick={() => navigate(`/meeting/${slug}`)}>Return to meeting</button></div>}
       <main className="conference-main">
@@ -446,8 +473,8 @@ function MeetingRoomPage() {
             publishDefaults: {
               videoEncoding: { maxBitrate: 1_500_000, maxFramerate: 30 },
               videoSimulcastLayers: [
-                { width: 640, height: 360, encoding: { maxBitrate: 500_000, maxFramerate: 20 } },
-                { width: 320, height: 180, encoding: { maxBitrate: 150_000, maxFramerate: 15 } },
+                new VideoPreset(640, 360, 500_000, 20),
+                new VideoPreset(320, 180, 150_000, 15),
               ],
             },
           }}
@@ -499,18 +526,62 @@ function ScheduleModal({ instant, onClose, onCreated }: { instant: boolean; onCl
   const [startsAt, setStartsAt] = useState(localDateTimeValue(new Date(Date.now() + (instant ? 0 : 15 * 60_000))));
   const [durationMinutes, setDurationMinutes] = useState("60");
   const [visibility, setVisibility] = useState<"link" | "public">("link");
-  const [thumbnailUrl, setThumbnailUrl] = useState("");
+  const [thumbnailFile, setThumbnailFile] = useState<File | null>(null);
+  const [thumbnailPreview, setThumbnailPreview] = useState("");
+  const [thumbnailUploading, setThumbnailUploading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [created, setCreated] = useState<{ meeting: Meeting; shareUrl: string } | null>(null);
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "Africa/Kigali";
 
+  useEffect(() => {
+    if (!thumbnailFile) { setThumbnailPreview(""); return; }
+    const objectUrl = URL.createObjectURL(thumbnailFile);
+    setThumbnailPreview(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [thumbnailFile]);
+
+  function selectThumbnail(file?: File) {
+    if (!file) { setThumbnailFile(null); return; }
+    if (!/^image\/(jpeg|png|webp)$/i.test(file.type)) {
+      setError("Choose a JPG, PNG, or WebP image.");
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      setError("The thumbnail must be 8 MB or smaller.");
+      return;
+    }
+    setError("");
+    setThumbnailFile(file);
+  }
+
+  async function uploadThumbnail(): Promise<string> {
+    if (!thumbnailFile) return "";
+    setThumbnailUploading(true);
+    try {
+      const signing = await api.thumbnailUploadSignature();
+      const formData = new FormData();
+      formData.append("file", thumbnailFile);
+      formData.append("api_key", signing.apiKey);
+      formData.append("timestamp", String(signing.timestamp));
+      formData.append("upload_preset", signing.uploadPreset);
+      formData.append("signature", signing.signature);
+      const response = await fetch(`https://api.cloudinary.com/v1_1/${encodeURIComponent(signing.cloudName)}/image/upload`, { method: "POST", body: formData });
+      const result = await response.json() as { secure_url?: string; error?: { message?: string } };
+      if (!response.ok || !result.secure_url) throw new Error(result.error?.message || "The thumbnail upload failed. Check Cloudinary settings and try again.");
+      return result.secure_url;
+    } finally {
+      setThumbnailUploading(false);
+    }
+  }
+
   async function submit(event: FormEvent) {
     event.preventDefault(); setBusy(true); setError("");
     try {
+      const thumbnailUrl = await uploadThumbnail();
       const result = await api.createMeeting({
         title: title.trim(), description: description.trim(), startsAt: new Date(startsAt).toISOString(),
-        durationMinutes: Number(durationMinutes), timezone, visibility, thumbnailUrl: thumbnailUrl.trim(),
+        durationMinutes: Number(durationMinutes), timezone, visibility, thumbnailUrl,
       });
       setCreated(result);
       onCreated(result.meeting, result.shareUrl);
@@ -542,9 +613,13 @@ function ScheduleModal({ instant, onClose, onCreated }: { instant: boolean; onCl
         <label className="field-label">Description <span className="optional-label">OPTIONAL</span><textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} maxLength={1000} placeholder="Add a short note to help people know what this gathering is for."/></label>
         <div className="form-row"><label className="field-label">Date and time<input type="datetime-local" value={startsAt} onChange={(event) => setStartsAt(event.target.value)} min={localDateTimeValue(new Date(Date.now() - 60_000))} required/></label><label className="field-label">Duration<select value={durationMinutes} onChange={(event) => setDurationMinutes(event.target.value)}><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="45">45 minutes</option><option value="60">1 hour</option><option value="90">1.5 hours</option><option value="120">2 hours</option><option value="180">3 hours</option><option value="240">4 hours</option></select></label></div>
         <div className="field-label">Invitation access<div className="visibility-options"><button type="button" className={`visibility-option ${visibility === "link" ? "visibility-selected" : ""}`} onClick={() => setVisibility("link")}><span className="visibility-option-icon"><Link2 size={17}/></span><span><b>Anyone with the link</b><small>Best for choir WhatsApp groups</small></span>{visibility === "link" && <CheckCircle2 size={17}/>}</button><button type="button" className={`visibility-option ${visibility === "public" ? "visibility-selected" : ""}`} onClick={() => setVisibility("public")}><span className="visibility-option-icon"><Users size={17}/></span><span><b>Public listing</b><small>Show it on the home page</small></span>{visibility === "public" && <CheckCircle2 size={17}/>}</button></div></div>
-        <label className="field-label">Thumbnail image URL <span className="optional-label">OPTIONAL</span><input type="url" value={thumbnailUrl} onChange={(event) => setThumbnailUrl(event.target.value)} placeholder="https://example.com/meeting-cover.jpg"/><small className="field-help">Use a public HTTPS image URL. Otherwise, we use the MEET ENIHAKOLE cover automatically.</small></label>
+        <div className="field-label thumbnail-field"><span>Meeting thumbnail <span className="optional-label">OPTIONAL</span></span><div className={`thumbnail-upload ${thumbnailPreview ? "thumbnail-upload-has-image" : ""}`}>
+          {thumbnailPreview ? <img className="thumbnail-upload-preview" src={thumbnailPreview} alt="Selected meeting thumbnail preview"/> : <span className="thumbnail-upload-placeholder"><ImagePlus size={22}/><b>Add a cover image</b><small>Shown in WhatsApp and other shared-link previews</small></span>}
+          <label className="button button-soft button-small thumbnail-select-button"><ImagePlus size={15}/>{thumbnailPreview ? "Change image" : "Choose image"}<input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { selectThumbnail(event.currentTarget.files?.[0]); event.currentTarget.value = ""; }} /></label>
+          {thumbnailFile && <button type="button" className="icon-button thumbnail-remove-button" onClick={() => { setThumbnailFile(null); setError(""); }} aria-label="Remove selected thumbnail" title="Remove image"><Trash2 size={15}/></button>}
+        </div><small className="field-help">JPG, PNG, or WebP up to 8 MB. The image uploads securely to Cloudinary when you create the meeting. If no image is selected, the default MEET ENIHAKOLE cover is used.</small></div>
         {error && <div className="inline-error" role="alert">{error}</div>}
-        <div className="schedule-modal-footer"><span className="modal-timezone"><Clock3 size={14}/>{timezone}</span><button className="button button-primary" type="submit" disabled={busy}>{busy ? <LoaderCircle size={16} className="spin"/> : instant ? <Video size={16}/> : <CalendarDays size={16}/>} {busy ? "Creating…" : instant ? "Create meeting room" : "Schedule meeting"}<ArrowRight size={15}/></button></div>
+        <div className="schedule-modal-footer"><span className="modal-timezone"><Clock3 size={14}/>{timezone}</span><button className="button button-primary" type="submit" disabled={busy}>{busy ? <LoaderCircle size={16} className="spin"/> : instant ? <Video size={16}/> : <CalendarDays size={16}/>} {thumbnailUploading ? "Uploading image…" : busy ? "Creating…" : instant ? "Create meeting room" : "Schedule meeting"}<ArrowRight size={15}/></button></div>
       </form>
     </div> : <div className="schedule-success"><span className="success-icon"><CheckCircle2 size={27}/></span><p className="section-overline">YOUR INVITATION IS READY</p><h2>It's all set.</h2><p className="modal-subtitle">Share this meeting invitation with your choir. The link opens a page with the meeting thumbnail and details.</p><div className="success-meeting-preview"><img src={meetingImage(created.meeting)} alt="Meeting cover"/><div><b>{created.meeting.title}</b><small>{formatDate(created.meeting.startsAt, {}, created.meeting.timezone)} · {created.meeting.durationMinutes} min</small></div></div><div className="share-url-box"><Link2 size={15}/><span>{created.shareUrl}</span><button className="icon-button" onClick={copyShare} aria-label="Copy link"><Copy size={15}/></button></div><div className="success-actions"><button className="button button-primary button-full" onClick={() => void shareMeeting()}><Share2 size={16}/> Share invitation</button><Link className="button button-soft button-full" to={`/meeting/${created.meeting.slug}`} onClick={onClose}>Open meeting page <ArrowRight size={16}/></Link><button className="text-action centered-action" onClick={onClose}>Back to workspace</button></div></div>}
   </Modal>;

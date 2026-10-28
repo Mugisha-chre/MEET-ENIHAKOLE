@@ -3,7 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#180e12" />
+    <meta name="theme-color" content="#fbf7f2" />
+    <script>
+      try {
+        document.documentElement.dataset.theme = localStorage.getItem("meet-enihakole-theme") === "dark" ? "dark" : "light";
+      } catch {
+        document.documentElement.dataset.theme = "light";
+      }
+    </script>
     <meta name="description" content="A peaceful place for ENIHAKOLE CHOIR to meet, pray, and rehearse online." />
     <meta property="og:site_name" content="MEET ENIHAKOLE" />
     <meta property="og:type" content="website" />

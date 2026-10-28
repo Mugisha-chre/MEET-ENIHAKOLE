@@ -23,4 +23,4 @@ meetingSchema.index({ owner: 1, startsAt: -1 });
 meetingSchema.index({ visibility: 1, status: 1, startsAt: 1 });
 
 export type MeetingDocument = InferSchemaType<typeof meetingSchema> & mongoose.Document;
-export const Meeting = mongoose.models.Meeting || mongoose.model("Meeting", meetingSchema);
+export const Meeting = (mongoose.models.Meeting ?? mongoose.model("Meeting", meetingSchema)) as mongoose.Model<InferSchemaType<typeof meetingSchema>>;
