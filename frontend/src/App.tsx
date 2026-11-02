@@ -1,24 +1,25 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type TouchEvent as ReactTouchEvent } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { LiveKitRoom, ParticipantTile, RoomAudioRenderer, isTrackReference, useChat, useIsMuted, useLocalParticipant, useParticipants, useRoomContext, useTracks } from "@livekit/components-react";
-import { RoomEvent, Track, VideoPreset } from "livekit-client";
+import { ParticipantEvent, RoomEvent, Track, VideoPreset, type Participant } from "livekit-client";
 import {
   ArrowDownRight, ArrowLeft, ArrowRight, AudioLines, CalendarClock, CalendarDays, Check,
   CheckCircle2, CircleHelp, Clock3, Copy, DoorOpen, HeartHandshake, Home,
   Link2, LoaderCircle, LogIn, LogOut, Menu, Mic, Plus, Share2, ShieldCheck,
-  Sparkles, Users, Video, VideoIcon, X, Sun, Moon, ImagePlus, Trash2, MessageCircle,
-  Hand, Send, MonitorUp, Maximize2, Minimize2, ChevronLeft, ChevronRight, Smile, ChevronDown, Download,
+  Sparkles, Users, Video, VideoIcon, X, Sun, Moon, MessageCircle,
+  Hand, Send, MonitorUp, MicOff, Maximize2, Minimize2, ChevronLeft, ChevronRight, Smile, ChevronDown, Download,
 } from "lucide-react";
-import { api, clearAuthToken, getAuthToken, saveAuthToken } from "./api";
+import { api, ApiError, clearAuthToken, getAuthToken, saveAuthToken } from "./api";
+import { clearCachePrefix, patchCache, readCache, removeCache, writeCache } from "./cache";
 import type { JoinSession, Meeting, User } from "./types";
-import { GoogleContinueButton, ProfilePhoto } from "./google";
+import { GoogleContinueButton, ProfilePhoto, googleSignOut } from "./google";
 
 interface AppContextValue {
   user: User | null;
   meetings: Meeting[];
   publicMeetings: Meeting[];
   loadingMeetings: boolean;
-  refreshMeetings: () => Promise<void>;
+  refreshMeetings: (force?: boolean) => Promise<void>;
   openAuth: () => void;
   completeAuth: (user: User, token: string) => void;
   openSchedule: (instant?: boolean) => void;
@@ -70,11 +71,12 @@ function getMeetingStateLabel(meeting: Meeting) {
 }
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<User | null>(() => getAuthToken() ? (readCache<User>("user")?.value ?? null) : null);
   const [theme, setTheme] = useState<"light" | "dark">(getInitialTheme);
-  const [meetings, setMeetings] = useState<Meeting[]>([]);
-  const [publicMeetings, setPublicMeetings] = useState<Meeting[]>([]);
-  const [loadingMeetings, setLoadingMeetings] = useState(true);
+  const [meetings, setMeetings] = useState<Meeting[]>(() => getAuthToken() ? (readCache<Meeting[]>("mine")?.value ?? []) : []);
+  const [publicMeetings, setPublicMeetings] = useState<Meeting[]>(() => readCache<Meeting[]>("public")?.value ?? []);
+  const [loadingMeetings, setLoadingMeetings] = useState(() => !readCache("public") && !(getAuthToken() && readCache("mine")));
+  const lastMeetingsFetch = useRef(0);
   const [authOpen, setAuthOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [instantMode, setInstantMode] = useState(false);
@@ -104,29 +106,55 @@ export default function App() {
     if (themeColor) themeColor.content = theme === "light" ? "#fbf7f2" : "#130d10";
   }, [theme]);
 
-  const refreshMeetings = useCallback(async () => {
-    setLoadingMeetings(true);
+  // Cache-first: cached lists render instantly, then refresh quietly in the background (skipped if fetched moments ago).
+  const refreshMeetings = useCallback(async (force = false) => {
+    if (!force && Date.now() - lastMeetingsFetch.current < 30_000) return;
+    lastMeetingsFetch.current = Date.now();
+    if (getAuthToken() && !readCache("mine")) setLoadingMeetings(true);
     const [mineResult, publicResult] = await Promise.allSettled([
       getAuthToken() ? api.myMeetings() : Promise.resolve({ meetings: [] as Meeting[] }),
       api.publicMeetings(),
     ]);
-    setMeetings(mineResult.status === "fulfilled" ? mineResult.value.meetings : []);
-    setPublicMeetings(publicResult.status === "fulfilled" ? publicResult.value.meetings : []);
+    if (mineResult.status === "fulfilled") { setMeetings(mineResult.value.meetings); if (getAuthToken()) writeCache("mine", mineResult.value.meetings); }
+    else lastMeetingsFetch.current = 0;
+    if (publicResult.status === "fulfilled") { setPublicMeetings(publicResult.value.meetings); writeCache("public", publicResult.value.meetings); }
+    else lastMeetingsFetch.current = 0;
     setLoadingMeetings(false);
   }, []);
+
+  // Instant, optimistic status changes (e.g. a host ends a meeting) applied to every list and cache, then reconciled with the server.
+  useEffect(() => {
+    const onChanged = (event: Event) => {
+      const { slug, patch } = (event as CustomEvent<{ slug: string; patch: Partial<Meeting> }>).detail;
+      const apply = (list: Meeting[]) => list.map((item) => item.slug === slug ? { ...item, ...patch } : item);
+      setMeetings(apply);
+      setPublicMeetings(apply);
+      patchCache<Meeting[]>((key) => key === "mine" || key === "public", apply);
+      patchCache<Meeting>((key) => key.startsWith("meeting:") && key.endsWith(`:${slug}`), (item) => ({ ...item, ...patch }));
+      void refreshMeetings(true);
+    };
+    window.addEventListener("meet-meeting-changed", onChanged);
+    return () => window.removeEventListener("meet-meeting-changed", onChanged);
+  }, [refreshMeetings]);
 
   useEffect(() => {
     let cancelled = false;
     const initialize = async () => {
+      // Lists and the profile load in parallel; cached copies are already on screen.
+      const listsLoad = refreshMeetings(true);
       if (getAuthToken()) {
         try {
           const result = await api.me();
-          if (!cancelled) setUser(result.user);
-        } catch {
-          clearAuthToken();
+          if (!cancelled) { setUser(result.user); writeCache("user", result.user); }
+        } catch (cause) {
+          // Only drop the session when the server says it is invalid, never because the network was slow or unreachable.
+          if (cause instanceof ApiError && (cause.status === 401 || cause.status === 403)) {
+            clearAuthToken(); removeCache("user"); removeCache("mine");
+            if (!cancelled) { setUser(null); setMeetings([]); }
+          }
         }
       }
-      if (!cancelled) await refreshMeetings();
+      await listsLoad;
     };
     void initialize();
     return () => { cancelled = true; };
@@ -151,18 +179,21 @@ export default function App() {
   const completeAuth = useCallback((nextUser: User, token: string) => {
     saveAuthToken(token);
     setUser(nextUser);
+    writeCache("user", nextUser);
     setAuthOpen(false);
     if (scheduleAfterAuth) {
       setScheduleOpen(true);
       setScheduleAfterAuth(false);
     }
-    void refreshMeetings();
+    void refreshMeetings(true);
   }, [scheduleAfterAuth, refreshMeetings]);
   const signOut = useCallback(() => {
+    googleSignOut();
     clearAuthToken();
+    removeCache("user"); removeCache("mine"); clearCachePrefix("meeting:");
     setUser(null);
     setMeetings([]);
-    void refreshMeetings();
+    void refreshMeetings(true);
   }, [refreshMeetings]);
 
   const contextValue = useMemo<AppContextValue>(() => ({
@@ -180,8 +211,12 @@ export default function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
       {authOpen && <AuthModal onClose={() => { setAuthOpen(false); setScheduleAfterAuth(false); }} onAuthenticated={completeAuth} />}
-      {scheduleOpen && <ScheduleModal instant={instantMode} onClose={() => setScheduleOpen(false)} onCreated={async () => {
-        await refreshMeetings();
+      {scheduleOpen && <ScheduleModal instant={instantMode} onClose={() => setScheduleOpen(false)} onCreated={(meeting) => {
+        const merge = (list: Meeting[]) => [meeting, ...list.filter((item) => item.slug !== meeting.slug)];
+        setMeetings((current) => { const next = merge(current); writeCache("mine", next); return next; });
+        if (meeting.visibility === "public") setPublicMeetings((current) => { const next = merge(current); writeCache("public", next); return next; });
+        writeCache(`meeting:${user?.id ?? "guest"}:${meeting.slug}`, meeting);
+        void refreshMeetings(true);
       }} />}
       {!location.pathname.startsWith("/room/") && <InstallPwaButton />}
       <ToastHost />
@@ -202,6 +237,8 @@ function InstallPwaButton() {
   const [deferred, setDeferred] = useState<PwaPromptEvent | null>(() => ((window as unknown as { __pwaPrompt?: PwaPromptEvent }).__pwaPrompt ?? null));
   const [installed, setInstalled] = useState(isStandalone);
   const [iosTip, setIosTip] = useState(false);
+  const { pathname } = useLocation();
+  const hasBottomNav = pathname === "/" || pathname === "/meetings";
   const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 
   useEffect(() => {
@@ -229,7 +266,7 @@ function InstallPwaButton() {
   };
 
   return (
-    <div className="pwa-install">
+    <div className={`pwa-install ${hasBottomNav ? "" : "pwa-install-no-nav"}`}>
       {iosTip && <div className="pwa-install-tip" role="status">To install, tap <b>Share</b> in Safari, then choose <b>Add to Home Screen</b>.<button type="button" onClick={() => setIosTip(false)} aria-label="Close"><X size={14}/></button></div>}
       <button type="button" className="pwa-install-button" onClick={() => void install()} title="Install app" aria-label="Install MEET ENIHAKOLE app"><Download size={20}/><span>Install app</span></button>
     </div>
@@ -273,6 +310,12 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
     document.addEventListener("touchend", onEnd, { passive: true });
     return () => { document.removeEventListener("touchstart", onStart); document.removeEventListener("touchend", onEnd); };
   }, [mobileNavOpen, setMobileNavOpen]);
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setMobileNavOpen(false); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [mobileNavOpen, setMobileNavOpen]);
   return (
     <div className="app-shell">
       <aside className={`sidebar ${mobileNavOpen ? "sidebar-open" : ""}`}>
@@ -291,11 +334,12 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
           <p>Pray together, rehearse, and stay close — wherever life takes you.</p>
         </div>
         <div className="sidebar-bottom">
+          {user && <div className="sidebar-account"><ProfilePhoto className="sidebar-account-photo" src={user.picture} name={user.displayName} size={160}/><span><b title={user.displayName}>{user.displayName}</b><small title={user.email}>{user.email}</small></span><button type="button" className="sidebar-signout" onClick={() => { setMobileNavOpen(false); signOut(); }} title="Sign out" aria-label="Sign out"><LogOut size={16}/><span>Sign out</span></button></div>}
           <button className="side-link quiet-link" onClick={() => window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Help centre will be added in a future release." } }))}><CircleHelp size={18} /><span>Help & support</span></button>
           <div className="sidebar-version">MEET ENIHAKOLE <span>EARLY ACCESS</span></div>
         </div>
       </aside>
-      {mobileNavOpen && <button className="mobile-scrim" aria-label="Close navigation" onClick={() => setMobileNavOpen(false)} />}
+      <button type="button" className={`mobile-scrim ${mobileNavOpen ? "mobile-scrim-open" : ""}`} aria-label="Close navigation" aria-hidden={!mobileNavOpen} tabIndex={mobileNavOpen ? 0 : -1} onClick={() => setMobileNavOpen(false)} />
       <div className="main-shell">
         <header className="topbar">
           <button className="icon-button mobile-menu-button" aria-label="Open navigation" onClick={() => setMobileNavOpen(!mobileNavOpen)}><Menu size={20} /></button>
@@ -438,26 +482,32 @@ function MeetingsPage() {
 
 function MeetingPage() {
   const { slug = "" } = useParams();
-  const { user, openAuth, completeAuth, signOut } = useAppContext();
-  const [meeting, setMeeting] = useState<Meeting | null>(null);
+  const { user, meetings: knownMeetings, publicMeetings: knownPublic, openAuth, completeAuth, signOut } = useAppContext();
+  const cacheKey = `meeting:${user?.id ?? "guest"}:${slug}`;
+  const [meeting, setMeeting] = useState<Meeting | null>(() => readCache<Meeting>(cacheKey)?.value ?? [...knownMeetings, ...knownPublic].find((item) => item.slug === slug) ?? null);
   const [cameraOn, setCameraOn] = useState(true);
   const [micOn, setMicOn] = useState(true);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !readCache(cacheKey) && ![...knownMeetings, ...knownPublic].some((item) => item.slug === slug));
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState("");
   const navigate = useNavigate();
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    // Show what we already know instantly; the fresh copy swaps in quietly when it arrives.
+    const known = readCache<Meeting>(cacheKey)?.value ?? [...knownMeetings, ...knownPublic].find((item) => item.slug === slug) ?? null;
+    if (known) { setMeeting(known); setLoading(false); } else setLoading(true);
     api.meeting(slug).then(({ meeting: result }) => {
       if (cancelled) return;
       setMeeting(result);
+      setError("");
+      writeCache(cacheKey, result);
     }).catch((cause: unknown) => {
-      if (!cancelled) setError(cause instanceof Error ? cause.message : "Could not load this meeting.");
+      if (!cancelled && !known) setError(cause instanceof Error ? cause.message : "Could not load this meeting.");
     }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [slug, user]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slug, cacheKey]);
 
   async function join(event: FormEvent) {
     event.preventDefault();
@@ -500,6 +550,18 @@ function MeetingPage() {
     <div className="meeting-landing">
       <header className="landing-topbar"><Link className="brand-lockup" to="/"><span className="brand-mark"><AudioLines size={22}/></span><span className="brand-words"><strong>MEET</strong><b>ENIHAKOLE</b><small>GATHER IN FAITH</small></span></Link><div className="landing-topbar-actions"><ThemeToggle/><button className="button button-soft button-small" onClick={share}><Share2 size={15}/> Share invitation</button></div></header>
       <main className="landing-layout">
+        <section className="join-panel">
+          <div className={`join-cover ${meeting.thumbnailUrl ? "" : "join-cover-plain"}`} role="img" aria-label={meeting.title} style={meeting.thumbnailUrl ? { backgroundImage: `url("${meeting.thumbnailUrl}")` } : undefined}>{!meeting.thumbnailUrl && <span className="join-cover-mark"><AudioLines size={44} strokeWidth={2}/></span>}</div>
+          <form className="join-form" onSubmit={join}>
+            <div className="join-form-heading"><h2>{ended ? "This meeting has ended" : meeting.isOwner ? "Your meeting is ready" : meeting.status === "live" ? "Join the gathering" : "You're in the right place"}</h2><p>{ended ? "This invitation is no longer active." : meeting.isOwner ? "Start the room when you're ready. Your guests can join using the same link." : meeting.status === "live" ? "Enter your details and come on in." : "You can join as a guest when the host opens the room."}</p></div>
+            {user && !ended && <div className="join-identity"><ProfilePhoto src={user.picture} name={user.displayName} className="join-identity-photo"/><span><b>{user.displayName}</b><small>{user.email}</small></span><button type="button" className="error-link" onClick={signOut}><LogOut size={12}/> Sign out</button></div>}
+            {!user && !ended && <div className="join-google"><p>Continue with Google to join. We use your Google name and profile photo so everyone knows who you are.</p><GoogleContinueButton oneTap onCredential={(credential) => void googleCredential(credential)}/></div>}
+            {!ended && <div className="join-preferences"><label className="toggle-row"><span className="toggle-icon"><VideoIcon size={16}/></span><span><b>Camera</b><small>Join with video</small></span><input type="checkbox" checked={cameraOn} onChange={(event) => setCameraOn(event.target.checked)} /></label><label className="toggle-row"><span className="toggle-icon"><Mic size={16}/></span><span><b>Microphone</b><small>Join with audio</small></span><input type="checkbox" checked={micOn} onChange={(event) => setMicOn(event.target.checked)} /></label></div>}
+            {error && <div className="inline-error" role="alert">{error}{error.includes("Sign in") && <button type="button" className="error-link" onClick={openAuth}>Sign in</button>}</div>}
+            {ended ? <Link to="/" className="button button-soft button-full"><ArrowLeft size={16}/> Back to home</Link> : user && <button className="button button-primary button-full join-submit" type="submit" disabled={joining}>{joining ? <LoaderCircle size={17} className="spin"/> : meeting.isOwner ? <Video size={17}/> : <DoorOpen size={17}/>} {joining ? "Preparing your room…" : meeting.isOwner ? "Start meeting" : meeting.status === "live" ? "Join meeting" : "Check room availability"}<ArrowRight size={16}/></button>}
+            <p className="join-footnote"><ShieldCheck size={13}/> Your camera and microphone are only requested when you enter the room.</p>
+          </form>
+        </section>
         <section className="landing-details">
           <p className="eyebrow"><span className={`eyebrow-dot ${meeting.status === "live" ? "eyebrow-dot-live" : ""}`}/>{meeting.status === "live" ? "THE GATHERING IS LIVE" : ended ? "GATHERING CLOSED" : "YOU'RE INVITED"}</p>
           <h1>{meeting.title}</h1>
@@ -507,18 +569,6 @@ function MeetingPage() {
           <div className="host-row"><span className="host-avatar"><AudioLines size={19}/></span><div><small>HOSTED BY</small><strong>{meeting.ownerName}</strong></div><span className="verified-host"><ShieldCheck size={14}/> Host</span></div>
           <div className="meeting-detail-list"><div><span className="detail-icon"><CalendarDays size={18}/></span><span><b>{formatDate(meeting.startsAt, { weekday: "long", year: "numeric" }, meeting.timezone)}</b><small>{formatTime(meeting.startsAt, meeting.timezone)} · {meeting.timezone || "Meeting time"}</small></span></div><div><span className="detail-icon"><Clock3 size={18}/></span><span><b>{meeting.durationMinutes} minutes</b><small>Planned gathering time</small></span></div><div><span className="detail-icon"><Users size={18}/></span><span><b>Join from anywhere</b><small>Phone, tablet, or computer</small></span></div></div>
           <button className="landing-share-link" onClick={share}><Link2 size={16}/> Share this invitation <ArrowRight size={15}/></button>
-        </section>
-        <section className="join-panel">
-          <div className="join-cover" style={{ backgroundImage: `linear-gradient(180deg, rgba(23,12,16,.04), rgba(23,12,16,.58)), url("${meetingImage(meeting)}")` }}><div className="join-cover-brand"><AudioLines size={17}/> <span>MEET ENIHAKOLE</span></div><div className="join-cover-bottom"><span className="cover-tag">A PLACE TO GATHER</span><h2>One room.<br/><em>Many voices.</em></h2></div></div>
-          <form className="join-form" onSubmit={join}>
-            <div className="join-form-heading"><h2>{ended ? "This meeting has ended" : meeting.isOwner ? "Your meeting is ready" : meeting.status === "live" ? "Join the gathering" : "You're in the right place"}</h2><p>{ended ? "This invitation is no longer active." : meeting.isOwner ? "Start the room when you're ready. Your guests can join using the same link." : meeting.status === "live" ? "Enter your details and come on in." : "You can join as a guest when the host opens the room."}</p></div>
-            {user && !ended && <div className="join-identity"><ProfilePhoto src={user.picture} name={user.displayName} className="join-identity-photo"/><span><b>{user.displayName}</b><small>{user.email}</small></span><button type="button" className="error-link" onClick={signOut}>Switch account</button></div>}
-            {!user && !ended && <div className="join-google"><p>Continue with Google to join. We use your Google name and profile photo so everyone knows who you are.</p><GoogleContinueButton oneTap onCredential={(credential) => void googleCredential(credential)}/></div>}
-            {!ended && <div className="join-preferences"><label className="toggle-row"><span className="toggle-icon"><VideoIcon size={16}/></span><span><b>Camera</b><small>Join with video</small></span><input type="checkbox" checked={cameraOn} onChange={(event) => setCameraOn(event.target.checked)} /></label><label className="toggle-row"><span className="toggle-icon"><Mic size={16}/></span><span><b>Microphone</b><small>Join with audio</small></span><input type="checkbox" checked={micOn} onChange={(event) => setMicOn(event.target.checked)} /></label></div>}
-            {error && <div className="inline-error" role="alert">{error}{error.includes("Sign in") && <button type="button" className="error-link" onClick={openAuth}>Sign in</button>}</div>}
-            {ended ? <Link to="/" className="button button-soft button-full"><ArrowLeft size={16}/> Back to home</Link> : user && <button className="button button-primary button-full join-submit" type="submit" disabled={joining}>{joining ? <LoaderCircle size={17} className="spin"/> : meeting.isOwner ? <Video size={17}/> : <DoorOpen size={17}/>} {joining ? "Preparing your room…" : meeting.isOwner ? "Start meeting" : meeting.status === "live" ? "Join meeting" : "Check room availability"}<ArrowRight size={16}/></button>}
-            <p className="join-footnote"><ShieldCheck size={13}/> Your camera and microphone are only requested when you enter the room.</p>
-          </form>
         </section>
       </main>
       <footer className="landing-footer"><span>© {new Date().getFullYear()} MEET ENIHAKOLE</span><span>Built for togetherness.</span></footer>
@@ -548,6 +598,7 @@ function MeetingRoomPage() {
     setEnding(true); setEndError("");
     try {
       await api.endMeeting(slug);
+      window.dispatchEvent(new CustomEvent("meet-meeting-changed", { detail: { slug, patch: { status: "ended", endedAt: new Date().toISOString() } } }));
       sessionStorage.removeItem(`meet-session:${slug}`);
       navigate(`/meeting/${encodeURIComponent(slug)}`);
     } catch (cause) {
@@ -593,14 +644,9 @@ function MeetingRoomPage() {
 
 type RoomSignal = { kind: "hand"; raised: boolean } | { kind: "reaction"; emoji: string; id: string };
 type FloatingReaction = { id: string; emoji: string; name: string };
+// Anything a person can press: a tap on these must keep doing its own job and never toggle fullscreen.
+const INTERACTIVE_SELECTOR = "button, a, input, textarea, select, label, summary, [role='button'], [role='dialog'], [data-popover], .room-device-menu, .reaction-picker, .messages-modal-backdrop, .room-alert, .room-message-toast";
 const REACTION_SET = ["🙏", "❤️", "👏", "🙌", "😊", "🎉", "✨", "💛", "🕊️", "👍"];
-
-function getInitials(name: string): string {
-  const words = name.replace(/[<>]/g, "").trim().split(/\s+/).filter(Boolean);
-  if (!words.length) return "?";
-  const letters = words.length === 1 ? Array.from(words[0]).slice(0, 2) : [Array.from(words[0])[0], Array.from(words[1])[0]];
-  return letters.join("").toUpperCase();
-}
 
 function participantPicture(metadata?: string): string {
   try {
@@ -613,7 +659,43 @@ function ParticipantAvatar({ trackRef, participant }: { trackRef: Parameters<typ
   const muted = useIsMuted(trackRef);
   const videoOn = isTrackReference(trackRef) && Boolean(trackRef.publication?.track) && !muted;
   if (videoOn) return null;
-  return <div className="participant-avatar" aria-hidden="true"><ProfilePhoto src={participantPicture(participant.metadata)} name={participant.name || participant.identity} className="participant-avatar-photo"/></div>;
+  return <div className="participant-avatar" aria-hidden="true"><ProfilePhoto src={participantPicture(participant.metadata)} name={participant.name || participant.identity} className="participant-avatar-photo" size={512}/></div>;
+}
+
+let toneContext: AudioContext | null = null;
+/** Soft two-note chime for incoming chat messages (synthesised, no audio file needed). */
+function playMessageTone() {
+  try {
+    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Ctx) return;
+    toneContext ??= new Ctx();
+    const ctx = toneContext;
+    if (ctx.state === "suspended") void ctx.resume();
+    const start = ctx.currentTime + 0.02;
+    [[880, 0], [1318.5, 0.13]].forEach(([freq, delay]) => {
+      const osc = ctx.createOscillator(); const gain = ctx.createGain();
+      osc.type = "sine"; osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, start + delay);
+      gain.gain.exponentialRampToValueAtTime(0.28, start + delay + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + delay + 0.42);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(start + delay); osc.stop(start + delay + 0.45);
+    });
+  } catch { /* Audio can be blocked until the person interacts with the page. */ }
+}
+
+/** Shown only while a participant's microphone is off; nothing at all is shown while it is on. */
+function MicOffBadge({ participant }: { participant: Participant }) {
+  const [micOn, setMicOn] = useState(participant.isMicrophoneEnabled);
+  useEffect(() => {
+    const update = () => setMicOn(participant.isMicrophoneEnabled);
+    const events = [ParticipantEvent.TrackMuted, ParticipantEvent.TrackUnmuted, ParticipantEvent.TrackPublished, ParticipantEvent.TrackUnpublished, ParticipantEvent.LocalTrackPublished, ParticipantEvent.LocalTrackUnpublished, ParticipantEvent.TrackSubscribed, ParticipantEvent.TrackUnsubscribed] as const;
+    update();
+    events.forEach((name) => participant.on(name, update));
+    return () => { events.forEach((name) => participant.off(name, update)); };
+  }, [participant]);
+  if (micOn) return null;
+  return <span className="mic-off-badge" title="Microphone is off" aria-label="Microphone is off"><MicOff size={13}/></span>;
 }
 
 function ShareRedirect() {
@@ -636,6 +718,16 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
   const [reactions, setReactions] = useState<FloatingReaction[]>([]);
   const [page, setPage] = useState(0);
   const [fullScreen, setFullScreen] = useState(false);
+  const [pseudoFull, setPseudoFull] = useState(false);
+  const [topSpeaker, setTopSpeaker] = useState("");
+  const [messageToast, setMessageToast] = useState<{ id: number; name: string; text: string } | null>(null);
+  const pseudoFullRef = useRef(false);
+  const lastFullscreenAction = useRef(0);
+  const suppressNextClick = useRef(false);
+  const overlayOpenRef = useRef(false);
+  const messagesOpenRef = useRef(false);
+  const seenMessages = useRef(chatMessages.length);
+  const messageToastTimer = useRef(0);
   const fullScreenRef = useRef<HTMLDivElement>(null);
   const autoFullscreenDone = useRef(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -675,12 +767,53 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
   }, [room]);
 
   useEffect(() => {
-    const onFullscreen = () => setFullScreen(document.fullscreenElement === fullScreenRef.current);
+    const onFullscreen = () => { if (document.fullscreenElement || !pseudoFullRef.current) setFullScreen(document.fullscreenElement === fullScreenRef.current); };
     document.addEventListener("fullscreenchange", onFullscreen);
     return () => document.removeEventListener("fullscreenchange", onFullscreen);
   }, []);
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [chatMessages.length, messagesOpen]);
+
+  // The latest person to speak moves to the top and stays there (even after they stop) until someone else starts speaking.
+  useEffect(() => {
+    const onSpeakers = (speakers: Participant[]) => {
+      if (!speakers.length) return;
+      setTopSpeaker((current) => {
+        if (current && speakers.some((speaker) => speaker.identity === current)) return current;
+        const loudest = [...speakers].sort((a, b) => b.audioLevel - a.audioLevel)[0];
+        return loudest ? loudest.identity : current;
+      });
+    };
+    room.on(RoomEvent.ActiveSpeakersChanged, onSpeakers);
+    return () => { room.off(RoomEvent.ActiveSpeakersChanged, onSpeakers); };
+  }, [room]);
+
+  // New message from someone else: play a tone and show a 4 second pop-up with the message at the bottom of the call.
+  useEffect(() => {
+    messagesOpenRef.current = messagesOpen;
+    overlayOpenRef.current = messagesOpen || reactionsOpen || deviceMenu !== null;
+  }, [messagesOpen, reactionsOpen, deviceMenu]);
+  useEffect(() => { pseudoFullRef.current = pseudoFull; }, [pseudoFull]);
+  useEffect(() => {
+    if (chatMessages.length < seenMessages.current) seenMessages.current = chatMessages.length;
+    if (chatMessages.length === seenMessages.current) return;
+    const fresh = chatMessages.slice(seenMessages.current).filter((message) => message.from?.identity !== localIdentity);
+    seenMessages.current = chatMessages.length;
+    const latest = fresh[fresh.length - 1];
+    if (!latest) return;
+    playMessageTone();
+    if (messagesOpenRef.current) return;
+    setMessageToast({ id: Date.now(), name: latest.from?.name || "Choir guest", text: latest.message });
+    window.clearTimeout(messageToastTimer.current);
+    messageToastTimer.current = window.setTimeout(() => setMessageToast(null), 4000);
+  }, [chatMessages, localIdentity]);
+  useEffect(() => () => window.clearTimeout(messageToastTimer.current), []);
+  // Browsers keep audio locked until the first tap; unlock it early so the message tone can play.
+  useEffect(() => {
+    const unlock = () => { try { const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext; if (!Ctx) return; toneContext ??= new Ctx(); if (toneContext.state === "suspended") void toneContext.resume(); } catch { /* ignore */ } };
+    document.addEventListener("pointerdown", unlock, { once: true, capture: true });
+    return () => document.removeEventListener("pointerdown", unlock, true);
+  }, []);
 
   // Auto-enter fullscreen 15 seconds after arriving on the live page. Browsers only allow fullscreen from a user gesture,
   // so if the direct attempt is blocked, the very next tap/click/key press enters fullscreen immediately.
@@ -694,10 +827,11 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
       enter().then(() => { autoFullscreenDone.current = true; }).catch(() => {
         const events = ["pointerup", "click", "keydown", "touchend"] as const;
         const retry = (event: Event) => {
-          if (event.target instanceof Element && event.target.closest(".fullscreen-control")) return;
+          if (event.target instanceof Element && event.target.closest(INTERACTIVE_SELECTOR)) return;
           cleanup();
           if (autoFullscreenDone.current || document.fullscreenElement) return;
           autoFullscreenDone.current = true;
+          lastFullscreenAction.current = Date.now();
           enter().catch(() => { /* Fullscreen unavailable; the manual button still works. */ });
         };
         cleanup = () => events.forEach((name) => document.removeEventListener(name, retry, true));
@@ -755,21 +889,46 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
     try { await send(message); setMessageText(""); }
     catch { window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Could not send that message. Please retry." } })); }
   }
-  async function toggleFullscreen() {
+  async function toggleFullscreen(silent = false) {
     autoFullscreenDone.current = true;
+    lastFullscreenAction.current = Date.now();
+    const target = fullScreenRef.current;
     try {
       if (document.fullscreenElement) await document.exitFullscreen();
-      else if (fullScreenRef.current?.requestFullscreen) await fullScreenRef.current.requestFullscreen();
-    } catch { window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Fullscreen is not available in this browser." } })); }
+      else if (pseudoFull) { setPseudoFull(false); setFullScreen(false); }
+      else if (target?.requestFullscreen) await target.requestFullscreen();
+      else { setPseudoFull(true); setFullScreen(true); } // iPhone Safari has no element fullscreen: fill the screen with CSS instead.
+    } catch {
+      if (!silent) window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Fullscreen is not available in this browser." } }));
+    }
   }
+  // Tapping or clicking anywhere on the room page toggles fullscreen; buttons, links, menus and the chat keep working normally.
+  const toggleFullscreenRef = useRef(toggleFullscreen);
+  toggleFullscreenRef.current = toggleFullscreen;
+  useEffect(() => {
+    const onDown = () => { suppressNextClick.current = overlayOpenRef.current; };
+    const onClick = (event: MouseEvent) => {
+      const wasOverlay = suppressNextClick.current; suppressNextClick.current = false;
+      if (wasOverlay || event.defaultPrevented || event.button !== 0) return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (!target || !target.isConnected || target.closest(INTERACTIVE_SELECTOR)) return;
+      if (window.getSelection()?.toString()) return;
+      if (Date.now() - lastFullscreenAction.current < 350) return;
+      void toggleFullscreenRef.current(true);
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    document.addEventListener("click", onClick);
+    return () => { document.removeEventListener("pointerdown", onDown, true); document.removeEventListener("click", onClick); };
+  }, []);
 
   const getParticipantRole = (participant: typeof participants[number]) => {
     try { return JSON.parse(participant.metadata || "{}").role === "host" ? "host" : "participant"; } catch { return "participant"; }
   };
   const orderedParticipants = [...participants].sort((a, b) => {
+    const aTop = a.identity === topSpeaker; const bTop = b.identity === topSpeaker;
+    if (aTop !== bTop) return aTop ? -1 : 1;
     const aHost = getParticipantRole(a) === "host"; const bHost = getParticipantRole(b) === "host";
     if (aHost !== bHost) return aHost ? -1 : 1;
-    if (a.isSpeaking !== b.isSpeaking) return a.isSpeaking ? -1 : 1;
     if (a.identity === localIdentity) return -1;
     if (b.identity === localIdentity) return 1;
     return (a.name || a.identity).localeCompare(b.name || b.identity);
@@ -780,24 +939,28 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
   const currentPage = Math.min(page, pages - 1);
   const visibleParticipants = visualParticipants.slice(currentPage * 8, currentPage * 8 + 8);
 
-  return <div className={`conference-fullscreen-target ${fullScreen ? "is-fullscreen" : ""}`} ref={fullScreenRef}>
+  return <div className={`conference-fullscreen-target ${fullScreen ? "is-fullscreen" : ""} ${pseudoFull ? "is-pseudo-fullscreen" : ""}`} ref={fullScreenRef}>
     <div className="conference-media-area">
       <RoomAudioRenderer />
-      <div className="active-count-pill" role="status" aria-live="polite" title="People currently in this meeting"><Users size={14}/><b>{participants.length}</b><span>{participants.length === 1 ? "person" : "people"} in the meeting</span></div>
+      <div className="room-top-stack">
+        <div className="active-count-pill" role="status" aria-live="polite" title="People currently in this meeting"><Users size={14}/><b>{participants.length}</b><span>{participants.length === 1 ? "person" : "people"} in the meeting</span></div>
+        {participants.filter((participant) => raisedHands[participant.identity]).map((participant) => <div className="raised-hand-chip" key={participant.identity} title={`${participant.name || participant.identity} raised a hand`}><Hand size={13}/><span>{participant.name || participant.identity}{participant.identity === localIdentity ? " (You)" : ""}</span></div>)}
+      </div>
       <div className="participant-grid-wrap">
         <div className={`participant-grid participant-grid-count-${visibleParticipants.length || 1}`}>
           {visibleParticipants.map(({ participant, trackRef }) => {
             const isHost = getParticipantRole(participant) === "host";
             const hand = Boolean(raisedHands[participant.identity]);
-            return <div className={`participant-card ${participant.isSpeaking ? "participant-speaking" : ""} ${isHost ? "participant-host" : ""}`} key={participant.identity}>
+            return <div className={`participant-card ${participant.isSpeaking ? "participant-speaking" : ""} ${isHost ? "participant-host" : ""} ${participant.identity === localIdentity ? "participant-local" : ""}`} key={participant.identity}>
               <ParticipantTile trackRef={trackRef!} />
               <ParticipantAvatar trackRef={trackRef!} participant={participant} />
               <span className="participant-role-label">{isHost ? "HOST" : "PARTICIPANT"}</span>
-              <div className="participant-name-overlay"><span className="participant-name-copy" title={participant.name || participant.identity}><b>{getInitials(participant.name || participant.identity)}{participant.identity === localIdentity ? " · You" : ""}</b></span><span className="participant-badges">{hand && <span className="raised-hand-badge" title="Raised hand"><Hand size={15}/></span>}{participant.isSpeaking && <span className="speaker-badge" title="Speaking"><AudioLines size={14}/></span>}</span></div>
+              <div className="participant-name-overlay"><span className="participant-name-copy" title={participant.name || participant.identity}><b>{participant.name || participant.identity}{participant.identity === localIdentity ? " · You" : ""}</b></span><span className="participant-badges"><MicOffBadge participant={participant}/>{hand && <span className="raised-hand-badge" title="Raised hand"><Hand size={15}/></span>}{participant.isSpeaking && <span className="speaker-badge" title="Speaking"><AudioLines size={14}/></span>}</span></div>
             </div>;
           })}
         </div>
         {reactions.length > 0 && <div className="reaction-float-stack" aria-live="polite">{reactions.map((reaction) => <div className="reaction-float" key={reaction.id}><span>{reaction.emoji}</span><b>{reaction.name}</b></div>)}</div>}
+        {messageToast && <div className="room-message-toast" key={messageToast.id} role="status" aria-live="polite"><span className="room-message-toast-icon"><MessageCircle size={16}/></span><span className="room-message-toast-body"><b>{messageToast.name}</b><span>{messageToast.text}</span></span></div>}
         {pages > 1 && <div className="participant-pagination"><span>Screen {currentPage + 1} of {pages} · {visualParticipants.length} participants</span><div><button className="room-icon-button" onClick={() => setPage(Math.max(0, currentPage - 1))} disabled={currentPage === 0} aria-label="Previous participant screen"><ChevronLeft size={18}/></button><button className="room-icon-button" onClick={() => setPage(Math.min(pages - 1, currentPage + 1))} disabled={currentPage >= pages - 1} aria-label="Next participant screen"><ChevronRight size={18}/></button></div></div>}
       </div>
       <div className="room-control-dock">
@@ -892,61 +1055,10 @@ function ScheduleModal({ instant, onClose, onCreated }: { instant: boolean; onCl
   const [startsAt, setStartsAt] = useState(localDateTimeValue(new Date(Date.now() + (instant ? 0 : 15 * 60_000))));
   const [durationMinutes, setDurationMinutes] = useState("60");
   const [visibility, setVisibility] = useState<"link" | "public">("link");
-  const [thumbnailFile, setThumbnailFile] = useState<File | null>(null);
-  const [thumbnailPreview, setThumbnailPreview] = useState("");
-  const [thumbnailUploading, setThumbnailUploading] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [created, setCreated] = useState<{ meeting: Meeting; shareUrl: string } | null>(null);
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "Africa/Kigali";
-
-  useEffect(() => {
-    if (!thumbnailFile) { setThumbnailPreview(""); return; }
-    const objectUrl = URL.createObjectURL(thumbnailFile);
-    setThumbnailPreview(objectUrl);
-    return () => URL.revokeObjectURL(objectUrl);
-  }, [thumbnailFile]);
-
-  function selectThumbnail(file?: File) {
-    if (!file) { setThumbnailFile(null); return; }
-    if (!/^image\/(jpeg|png|webp)$/i.test(file.type)) {
-      setError("Choose a JPG, PNG, or WebP image.");
-      return;
-    }
-    if (file.size > 8 * 1024 * 1024) {
-      setError("The thumbnail must be 8 MB or smaller.");
-      return;
-    }
-    setError("");
-    setThumbnailFile(file);
-  }
-
-  async function uploadThumbnail(): Promise<string> {
-    if (!thumbnailFile) return "";
-    setThumbnailUploading(true);
-    try {
-      // Resize/compress before sending to the API. This also avoids browser-to-Cloudinary
-      // CORS/network failures and keeps the Cloudinary secret exclusively on the server.
-      const bitmap = await createImageBitmap(thumbnailFile);
-      const scale = Math.min(1, 1600 / bitmap.width, 900 / bitmap.height);
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-      const context = canvas.getContext("2d");
-      if (!context) throw new Error("Your browser could not prepare this image. Please try another photo.");
-      context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-      bitmap.close();
-      const dataUrl = canvas.toDataURL("image/webp", 0.84);
-      const result = await api.uploadMeetingThumbnail(dataUrl);
-      return result.secureUrl;
-    } catch (cause) {
-      if (cause instanceof Error && cause.message) throw cause;
-      throw new Error("The cover image could not be uploaded. Check your connection and Cloudinary configuration, then try again.");
-    } finally {
-      setThumbnailUploading(false);
-    }
-  }
 
   async function submit(event: FormEvent) {
     event.preventDefault(); setError("");
@@ -956,7 +1068,7 @@ function ScheduleModal({ instant, onClose, onCreated }: { instant: boolean; onCl
     }
     setBusy(true);
     try {
-      const thumbnailUrl = await uploadThumbnail();
+      const thumbnailUrl = "";
       const result = await api.createMeeting({
         title: title.trim(), description: description.trim(), startsAt: new Date(startsAt).toISOString(),
         durationMinutes: Number(durationMinutes), timezone, visibility, thumbnailUrl,
@@ -987,22 +1099,17 @@ function ScheduleModal({ instant, onClose, onCreated }: { instant: boolean; onCl
   }
 
   return <Modal onClose={onClose} solidTop>
-    {!created ? <div className="schedule-modal-content"><div className="modal-heading-row"><span className="modal-brand-icon"><CalendarClock size={22}/></span><button className="icon-button" onClick={onClose} aria-label="Close dialog"><X size={19}/></button></div><p className="section-overline">MAKE IT A MOMENT TO REMEMBER</p><h2>{instant ? "Start a gathering now." : "Plan your next gathering."}</h2><p className="modal-subtitle">{instant ? "Create a room, then share the invitation with your choir." : "Set a time and send everyone one simple link to join."}</p>
-      <form onSubmit={submit} className="form-stack schedule-form">
+    {!created ? <div className="schedule-modal-content"><div className="modal-scroll-body"><div className="modal-heading-row"><span className="modal-brand-icon"><CalendarClock size={22}/></span><button className="icon-button" onClick={onClose} aria-label="Close dialog"><X size={19}/></button></div><p className="section-overline">MAKE IT A MOMENT TO REMEMBER</p><h2>{instant ? "Start a gathering now." : "Plan your next gathering."}</h2><p className="modal-subtitle">{instant ? "Create a room, then share the invitation with your choir." : "Set a time and send everyone one simple link to join."}</p>
+      <form id="schedule-form" onSubmit={submit} className="form-stack schedule-form">
         <label className="field-label">Meeting title<input value={title} onChange={(event) => setTitle(event.target.value)} minLength={3} maxLength={120} placeholder="e.g. Wednesday prayer meeting" required/></label>
         <label className="field-label">Description <span className="optional-label">OPTIONAL</span><textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} maxLength={1000} placeholder="Add a short note to help people know what this gathering is for."/></label>
         <div className="form-row"><label className="field-label">Date and time<CustomDateTimePicker value={startsAt} onChange={setStartsAt} /></label><label className="field-label">Duration<DurationPicker value={durationMinutes} onChange={setDurationMinutes} /></label></div>
         <div className="field-label">Invitation access<div className="visibility-options"><button type="button" className={`visibility-option ${visibility === "link" ? "visibility-selected" : ""}`} onClick={() => setVisibility("link")}><span className="visibility-option-icon"><Link2 size={17}/></span><span><b>Anyone with the link</b><small>Best for choir WhatsApp groups</small></span>{visibility === "link" && <CheckCircle2 size={17}/>}</button><button type="button" className={`visibility-option ${visibility === "public" ? "visibility-selected" : ""}`} onClick={() => setVisibility("public")}><span className="visibility-option-icon"><Users size={17}/></span><span><b>Public listing</b><small>Show it on the home page</small></span>{visibility === "public" && <CheckCircle2 size={17}/>}</button></div></div>
-        <div className="field-label thumbnail-field"><span>Meeting thumbnail <span className="optional-label">OPTIONAL</span></span>
-          <div className={`thumbnail-upload ${thumbnailPreview ? "thumbnail-upload-has-image" : ""}`} role="button" tabIndex={0} onClick={() => fileInputRef.current?.click()} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); fileInputRef.current?.click(); } }} onDragOver={(event) => { event.preventDefault(); event.currentTarget.classList.add("thumbnail-drag-over"); }} onDragLeave={(event) => event.currentTarget.classList.remove("thumbnail-drag-over")} onDrop={(event) => { event.preventDefault(); event.currentTarget.classList.remove("thumbnail-drag-over"); selectThumbnail(event.dataTransfer.files?.[0]); }}>
-            <input ref={fileInputRef} className="thumbnail-hidden-input" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { selectThumbnail(event.currentTarget.files?.[0]); event.currentTarget.value = ""; }} />
-            {thumbnailPreview ? <img className="thumbnail-upload-preview" src={thumbnailPreview} alt="Selected meeting thumbnail preview"/> : <span className="thumbnail-upload-placeholder"><ImagePlus size={25}/><b>Add a cover image</b><small>Click to browse or drag a photo here. Shown in WhatsApp and other shared-link previews.</small></span>}
-            {thumbnailFile && <button type="button" className="icon-button thumbnail-remove-button" onClick={(event) => { event.stopPropagation(); setThumbnailFile(null); setError(""); }} aria-label="Remove selected thumbnail" title="Remove image"><Trash2 size={15}/></button>}
-          </div><small className="field-help">JPG, PNG, or WebP up to 8 MB. The image is optimized and uploaded securely to Cloudinary when you create the meeting. If no image is selected, the default MEET ENIHAKOLE cover is used.</small></div>
         {error && <div className="inline-error" role="alert">{error}</div>}
-        <div className="schedule-modal-footer"><span className="modal-timezone"><Clock3 size={14}/>{timezone}</span><button className="button button-primary" type="submit" disabled={busy}>{busy ? <LoaderCircle size={16} className="spin"/> : instant ? <Video size={16}/> : <CalendarDays size={16}/>} {thumbnailUploading ? "Uploading image…" : busy ? "Creating…" : instant ? "Create meeting room" : "Schedule meeting"}<ArrowRight size={15}/></button></div>
-      </form>
-    </div> : <div className="schedule-success"><span className="success-icon"><CheckCircle2 size={27}/></span><p className="section-overline">YOUR INVITATION IS READY</p><h2>It's all set.</h2><p className="modal-subtitle">Share this meeting invitation with your choir. The link opens a page with the meeting thumbnail and details.</p><div className="success-meeting-preview"><img src={meetingImage(created.meeting)} alt="Meeting cover"/><div><b>{created.meeting.title}</b><small>{formatDate(created.meeting.startsAt, {}, created.meeting.timezone)} · {created.meeting.durationMinutes} min</small></div></div><div className="share-url-box"><Link2 size={15}/><span>{created.shareUrl}</span><button className="icon-button" onClick={copyShare} aria-label="Copy link"><Copy size={15}/></button></div><div className="success-actions"><button className="button button-primary button-full" onClick={() => void shareMeeting()}><Share2 size={16}/> Share invitation</button><Link className="button button-soft button-full" to={`/meeting/${created.meeting.slug}`} onClick={onClose}>Open meeting page <ArrowRight size={16}/></Link><button className="text-action centered-action" onClick={onClose}>Back to workspace</button></div></div>}
+
+      </form></div>
+        <div className="schedule-modal-footer"><span className="modal-timezone"><Clock3 size={14}/>{timezone}</span><button className="button button-primary" type="submit" form="schedule-form" disabled={busy}>{busy ? <LoaderCircle size={16} className="spin"/> : instant ? <Video size={16}/> : <CalendarDays size={16}/>} {busy ? "Creating…" : instant ? "Create meeting room" : "Schedule meeting"}<ArrowRight size={15}/></button></div>
+    </div> : <div className="schedule-success"><div className="modal-scroll-body"><span className="success-icon"><CheckCircle2 size={27}/></span><p className="section-overline">YOUR INVITATION IS READY</p><h2>It's all set.</h2><p className="modal-subtitle">Share this meeting invitation with your choir. The link opens a page with the meeting thumbnail and details.</p><div className="success-meeting-preview"><img src={meetingImage(created.meeting)} alt="Meeting cover"/><div><b>{created.meeting.title}</b><small>{formatDate(created.meeting.startsAt, {}, created.meeting.timezone)} · {created.meeting.durationMinutes} min</small></div></div><div className="share-url-box"><Link2 size={15}/><span>{created.shareUrl}</span><button className="icon-button" onClick={copyShare} aria-label="Copy link"><Copy size={15}/></button></div></div><div className="success-actions modal-footer-fixed"><button className="button button-primary button-full" onClick={() => void shareMeeting()}><Share2 size={16}/> Share invitation</button><Link className="button button-soft button-full" to={`/meeting/${created.meeting.slug}`} onClick={onClose}>Open meeting page <ArrowRight size={16}/></Link><button className="text-action centered-action" onClick={onClose}>Back to workspace</button></div></div>}
   </Modal>;
 }
 

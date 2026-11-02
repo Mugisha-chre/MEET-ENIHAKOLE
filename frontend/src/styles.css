@@ -1139,3 +1139,170 @@ html.is-scrolling .meeting-card:hover { transform: translateZ(0); box-shadow: no
 .active-count-pill b { font-size: 12px; }
 :root[data-theme="light"] .active-count-pill { background: rgba(255,255,255,.88); border-color: rgba(60,30,40,.16); color: #3b2530; }
 @media (max-width: 720px) { .active-count-pill { top: 6px; left: 8px; padding: 5px 10px; font-size: 10px; } }
+
+
+/* ===== Update round: mobile sidebar, bottom nav, modals, meeting page, room grid, install button ===== */
+
+/* 1) Mobile sidebar: the scrim stays mounted so it fades with the sidebar's slide. Tapping outside closes it. */
+@media (max-width: 720px) {
+  .mobile-scrim { opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .26s ease, visibility 0s linear .26s; cursor: default; }
+  .mobile-scrim.mobile-scrim-open { opacity: 1; visibility: visible; pointer-events: auto; transition: opacity .26s ease, visibility 0s; }
+  .sidebar { transition: transform .3s cubic-bezier(.32,.72,0,1), box-shadow .3s ease; }
+  .sidebar:not(.sidebar-open) { transition: transform .3s cubic-bezier(.32,.72,0,1), box-shadow .3s ease, visibility 0s linear .3s; }
+}
+
+/* 2) Bottom nav: no block behind it. Content scrolls under the rounded bar and nothing rectangular is painted. */
+@media (max-width: 720px) {
+  .main-content { margin-bottom: 0; padding-bottom: calc(30px + 66px + env(safe-area-inset-bottom)); }
+  .mobile-bottom-nav { background: transparent !important; box-shadow: none !important; }
+}
+@media (pointer: coarse) { .mobile-bottom-nav { box-shadow: none !important; } }
+
+/* 3) Modals: only the form scrolls; the action buttons sit in a fixed footer the scrollbar never reaches. */
+.schedule-modal-content, .schedule-success { display: flex; flex-direction: column; overflow: hidden; padding: 0; scrollbar-gutter: auto; }
+.modal-scroll-body { flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.schedule-modal-content > .modal-scroll-body { --sm-pad-x: clamp(22px, 4vw, 34px); padding: 0 var(--sm-pad-x) 18px; }
+.schedule-success > .modal-scroll-body { padding: 27px clamp(22px, 4vw, 34px) 8px; }
+.schedule-modal-content > .schedule-modal-footer { position: static; flex: 0 0 auto; margin: 0; padding: 14px clamp(22px, 4vw, 34px) calc(16px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: #1c1318; }
+:root[data-theme="light"] .schedule-modal-content > .schedule-modal-footer { background: #fffdfa; }
+.schedule-success > .modal-footer-fixed { flex: 0 0 auto; margin: 0; padding: 14px clamp(22px, 4vw, 34px) calc(22px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: #1c1318; }
+:root[data-theme="light"] .schedule-success > .modal-footer-fixed { background: #fffdfa; }
+@media (max-width: 720px) {
+  .schedule-modal-content > .modal-scroll-body { --sm-pad-x: 19px; padding: 0 19px 16px; }
+  .schedule-success > .modal-scroll-body { padding: 22px 19px 8px; }
+  .schedule-modal-content > .schedule-modal-footer, .schedule-success > .modal-footer-fixed { margin: 0; padding-left: 19px; padding-right: 19px; padding-bottom: calc(14px + env(safe-area-inset-bottom)); }
+}
+
+/* 4) Meeting page: the join card comes first (top on phones, left on large screens); the clean thumbnail carries no text. */
+.join-cover { min-height: 215px; padding: 0; background-size: cover; background-position: center; background-repeat: no-repeat; background-color: #2b1c23; }
+@media (min-width: 721px) {
+  .landing-layout { grid-template-columns: minmax(330px, 440px) minmax(0, 1fr); }
+}
+@media (min-width: 721px) and (max-width: 980px) {
+  .landing-layout { grid-template-columns: minmax(310px, 390px) minmax(0, 1fr); }
+}
+
+/* 5) Room grid: one person fills the whole stage; two people stack top and bottom, never side by side. */
+.participant-grid-count-1 { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: minmax(0, 1fr) !important; }
+.participant-grid[class*="participant-grid-count-"].participant-grid-count-1 > .participant-card { grid-column: 1 / -1 !important; grid-row: 1 / -1 !important; }
+.participant-grid[class*="participant-grid-count-"].participant-grid-count-2 { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: repeat(2, minmax(0, 1fr)) !important; }
+.participant-grid[class*="participant-grid-count-"].participant-grid-count-2 > .participant-card { grid-column: 1 / -1 !important; grid-row: auto !important; }
+@media (min-width: 721px) {
+  /* Large screens: a pair of wide stacked strips would crop video badly, so keep the pair stacked but cap the stage to a friendly ratio. */
+  .participant-grid-wrap { padding: 14px; }
+  .participant-grid-count-1 > .participant-card, .participant-grid-count-2 > .participant-card { min-height: 0; }
+  .conference-stage { height: clamp(480px, 74vh, 860px); }
+}
+@media (min-width: 1280px) {
+  .conference-main { max-width: 1480px; margin-left: auto; margin-right: auto; width: 100%; }
+}
+@media (max-width: 720px) {
+  .participant-grid[class*="participant-grid-count-"].participant-grid-count-1 { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: minmax(0, 1fr) !important; }
+  .participant-grid[class*="participant-grid-count-"].participant-grid-count-1 > .participant-card { grid-column: 1 / -1 !important; }
+  .participant-grid[class*="participant-grid-count-"].participant-grid-count-2 > .participant-card { grid-column: 1 / -1 !important; }
+}
+
+/* 6) Install button: sits at the bottom of the screen when the page has no bottom nav. */
+.pwa-install.pwa-install-no-nav { bottom: calc(24px + env(safe-area-inset-bottom)); }
+@media (max-width: 720px) {
+  .pwa-install.pwa-install-no-nav { bottom: calc(16px + env(safe-area-inset-bottom)); }
+}
+
+/* Large screens, two people: the other person fills the stage and you appear as a small floating self-view.
+   Nothing is split left/right (and no wide, badly cropped strips). Phones keep the stacked top/bottom layout. */
+@media (min-width: 721px) {
+  .participant-grid-wrap { position: relative; }
+  .participant-grid[class*="participant-grid-count-"].participant-grid-count-2 { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: minmax(0, 1fr) !important; }
+  .participant-grid[class*="participant-grid-count-"].participant-grid-count-2 > .participant-card { grid-column: 1 / -1 !important; grid-row: 1 / -1 !important; }
+  .participant-grid[class*="participant-grid-count-"].participant-grid-count-2 > .participant-card.participant-local { position: absolute; z-index: 7; right: 26px; bottom: 26px; width: clamp(190px, 21%, 320px); height: auto; aspect-ratio: 16 / 9; border: 1px solid rgba(248,233,234,.28); border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.45); }
+}
+
+/* Join card cover without a custom image: clean branded surface, no text. */
+.join-cover.join-cover-plain { display: grid; place-items: center; justify-content: center; align-content: center; background: radial-gradient(circle at 78% 18%, rgba(201,160,90,.22), transparent 46%), radial-gradient(circle at 18% 90%, rgba(169,43,78,.38), transparent 52%), linear-gradient(145deg, #3a1a26, #1c1116); }
+.join-cover-mark { display: grid; place-items: center; width: 84px; height: 84px; border-radius: 26px; color: #fff; background: linear-gradient(145deg, var(--burgundy-bright, #a92b4e), #7a1a37); box-shadow: 0 14px 36px rgba(0,0,0,.35), inset 0 0 0 1px rgba(255,255,255,.14); }
+
+/* ===== Update round 2: room layout, full names, mic state, raised hands, message pop-up, fullscreen, sign out ===== */
+
+/* A) Hide LiveKit's own tile overlays (mic dot, connection bars, focus button). We draw only what we need: a mic-off badge. */
+.participant-card .lk-participant-tile .lk-participant-metadata,
+.participant-card .lk-participant-tile .lk-participant-metadata-item,
+.participant-card .lk-participant-tile .lk-track-muted-indicator-microphone,
+.participant-card .lk-participant-tile .lk-connection-quality,
+.participant-card .lk-participant-tile .lk-focus-toggle-button { display: none !important; }
+
+/* B) Names: show the full name and only truncate (with "…") when it genuinely does not fit. */
+.participant-name-overlay { padding-left: 8px !important; gap: 6px; }
+.participant-name-copy { min-width: 0; flex: 0 1 auto; max-width: calc(100% - 4px); }
+.participant-name-copy b { display: block; min-width: 0; max-width: 100% !important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.participant-badges { flex: 0 0 auto; margin-left: auto; }
+.participant-name-overlay:has(.participant-badges > *) .participant-name-copy { max-width: calc(100% - 38px); }
+@media (max-width: 720px) { .participant-name-overlay { padding-left: 5px !important; } }
+
+/* C) Mic state badge: nothing when the mic is on, a small muted icon when it is off. */
+.mic-off-badge { width: 26px; height: 26px; display: grid; place-items: center; color: #fff; border: 1px solid rgba(255,255,255,.22); border-radius: 8px; background: rgba(176,38,62,.92); }
+@media (max-width: 720px) { .mic-off-badge { width: 22px; height: 22px; } .mic-off-badge svg { width: 12px; height: 12px; } }
+
+/* D) Top-left stack: people count, with raised hands (hand icon + name) right beside it. */
+.room-top-stack { position: absolute; z-index: 6; top: 10px; left: 12px; right: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; pointer-events: none; }
+.room-top-stack .active-count-pill { position: static; top: auto; left: auto; flex: 0 0 auto; }
+.raised-hand-chip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: min(240px, 62%); padding: 6px 11px; border-radius: 999px; color: #3a1e2b; background: #e8ca91; border: 1px solid rgba(255,255,255,.45); font-size: 11px; font-weight: 750; box-shadow: 0 4px 14px rgba(0,0,0,.25); animation: room-pop-in .22s ease both; }
+.raised-hand-chip svg { flex: 0 0 auto; }
+.raised-hand-chip span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 720px) { .room-top-stack { top: 6px; left: 8px; right: 8px; gap: 5px; } .raised-hand-chip { padding: 5px 9px; font-size: 10px; } }
+
+/* E) New-message pop-up inside the call (stays visible in fullscreen). */
+.participant-grid-wrap { position: relative; }
+.room-message-toast { position: absolute; z-index: 9; left: 50%; bottom: 14px; transform: translateX(-50%); width: max-content; max-width: min(92%, 460px); display: flex; align-items: flex-start; gap: 10px; padding: 10px 14px 10px 11px; border-radius: 14px; color: #fff7f4; background: rgba(32,20,27,.96); border: 1px solid rgba(232,202,145,.38); box-shadow: 0 14px 40px rgba(0,0,0,.45); animation: room-toast-in .24s cubic-bezier(.22,1,.36,1) both, room-toast-out .3s ease 3.7s forwards; }
+.room-message-toast-icon { flex: 0 0 auto; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 9px; color: #3a1e2b; background: #e8ca91; }
+.room-message-toast-body { min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 12px; line-height: 1.4; }
+.room-message-toast-body b { color: #e8ca91; font-size: 11px; letter-spacing: .02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.room-message-toast-body span { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+@media (max-width: 720px) { .room-message-toast { bottom: 8px; max-width: 94%; } }
+@keyframes room-toast-in { from { opacity: 0; transform: translate(-50%, 12px); } to { opacity: 1; transform: translate(-50%, 0); } }
+@keyframes room-toast-out { to { opacity: 0; transform: translate(-50%, 8px); } }
+@keyframes room-pop-in { from { opacity: 0; transform: scale(.9); } to { opacity: 1; transform: scale(1); } }
+
+/* F) Fullscreen fallback for browsers without element fullscreen (iPhone Safari). */
+.conference-fullscreen-target.is-pseudo-fullscreen { position: fixed; inset: 0; z-index: 120; width: 100vw; height: 100vh; height: 100dvh; background: #120b0f; }
+.conference-fullscreen-target.is-pseudo-fullscreen .participant-grid-wrap { padding: 12px; }
+.conference-fullscreen-target.is-pseudo-fullscreen .room-control-dock { padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+
+/* G) Room layout, final word.
+   1 person  -> fills the whole stage (desktop and phone).
+   2 people  -> never split left/right: the other person fills the stage; on desktop you float as a small self-view,
+                on phones the two are stacked top and bottom.
+   3-8       -> adaptive grid that always fills the stage. */
+.participant-grid.participant-grid-count-1 { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: minmax(0, 1fr) !important; }
+.participant-grid.participant-grid-count-1 > .participant-card { grid-column: 1 / -1 !important; grid-row: 1 / -1 !important; position: relative; width: 100%; height: 100%; }
+.participant-grid.participant-grid-count-2 { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: repeat(2, minmax(0, 1fr)) !important; }
+.participant-grid.participant-grid-count-2 > .participant-card { grid-column: 1 / -1 !important; grid-row: auto !important; }
+@media (min-width: 721px) {
+  .participant-grid.participant-grid-count-2 { grid-template-rows: minmax(0, 1fr) !important; }
+  .participant-grid.participant-grid-count-2 > .participant-card { grid-row: 1 / -1 !important; }
+  .participant-grid.participant-grid-count-2 > .participant-card.participant-local { position: absolute; z-index: 7; right: 22px; bottom: 22px; width: clamp(170px, 20%, 300px); height: auto; aspect-ratio: 16 / 9; }
+  .participant-grid.participant-grid-count-2 > .participant-card.participant-local .participant-role-label { display: none; }
+  .participant-grid.participant-grid-count-2 > .participant-card.participant-local .participant-name-copy b { font-size: 11px; }
+}
+@media (max-width: 720px) {
+  .participant-grid.participant-grid-count-1 { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: minmax(0, 1fr) !important; }
+  .participant-grid.participant-grid-count-1 > .participant-card { grid-column: 1 / -1 !important; grid-row: 1 / -1 !important; }
+  .participant-grid.participant-grid-count-2 { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: repeat(2, minmax(0, 1fr)) !important; }
+  .participant-grid.participant-grid-count-2 > .participant-card, .participant-grid.participant-grid-count-2 > .participant-card.participant-local { position: relative; grid-column: 1 / -1 !important; grid-row: auto !important; width: 100%; height: 100%; aspect-ratio: auto; right: auto; bottom: auto; }
+}
+/* Large and extra-large screens: let the stage use the screen instead of a small fixed box. */
+@media (min-width: 1100px) { .conference-stage { height: clamp(520px, calc(100vh - 230px), 900px); } }
+@media (min-width: 1700px) { .conference-main { max-width: 1760px; } }
+/* Fullscreen: the stage is exactly the screen. */
+.conference-fullscreen-target:fullscreen, .conference-fullscreen-target.is-pseudo-fullscreen { display: flex; flex-direction: column; }
+.conference-fullscreen-target:fullscreen .conference-media-area, .conference-fullscreen-target.is-pseudo-fullscreen .conference-media-area { flex: 1; min-height: 0; }
+
+/* H) Sign out inside the side menu (the top-bar icon is hidden on phones). */
+.sidebar-account { display: flex; align-items: center; gap: 9px; padding: 9px 10px; margin-bottom: 4px; border: 1px solid var(--line); border-radius: 12px; }
+.sidebar-account > span:nth-child(2) { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.sidebar-account b { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-account small { font-size: 9px; opacity: .65; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-account-photo { width: 34px; height: 34px; font-size: 12px; }
+.sidebar-signout { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; padding: 7px 9px; border: 1px solid var(--line-strong); border-radius: 9px; color: inherit; background: transparent; font-size: 11px; font-weight: 700; cursor: pointer; }
+.sidebar-signout:hover { background: rgba(255,255,255,.06); }
+:root[data-theme="light"] .sidebar-signout:hover { background: rgba(143,33,65,.07); }
+.join-identity .error-link { display: inline-flex; align-items: center; gap: 4px; }

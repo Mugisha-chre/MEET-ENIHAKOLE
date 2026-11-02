@@ -17,10 +17,14 @@ export default async function handler(req: Request, res: Response) {
         && !parsed.hostname.endsWith(".onrender.com");
     } catch { return false; }
   };
+  // The host the visitor/crawler actually used is the most reliable public origin (works for custom domains too).
+  const forwardedHost = String(Array.isArray(req.headers["x-forwarded-host"]) ? req.headers["x-forwarded-host"][0] : req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0]?.trim();
+  const requestUrl = forwardedHost ? `https://${forwardedHost}` : undefined;
   const vercelUrl = (process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL)?.trim();
   // Never use a local or Render API URL as the public invitation origin.
   const appUrl = (
     isPublicFrontendUrl(process.env.FRONTEND_APP_URL) ? process.env.FRONTEND_APP_URL
+      : isPublicFrontendUrl(requestUrl) ? requestUrl
       : vercelUrl ? `https://${vercelUrl.replace(/^https?:\/\//, "")}`
         : isPublicFrontendUrl(process.env.APP_URL) ? process.env.APP_URL
           : isPublicFrontendUrl(process.env.VITE_APP_URL) ? process.env.VITE_APP_URL
@@ -31,7 +35,10 @@ export default async function handler(req: Request, res: Response) {
     return;
   }
   const userAgent = String(req.headers["user-agent"] || "");
-  const isPreviewCrawler = /WhatsApp|facebookexternalhit|facebookcatalog|Facebot|meta-externalagent|Twitterbot|LinkedInBot|Slackbot|Slack-ImgProxy|TelegramBot|Discordbot|Googlebot|Applebot|SkypeUriPreview|Pinterest|redditbot|vkShare|Iframely|Signal|Viber|Mastodon|Embedly|Bingbot|bot\b|crawler|spider|preview/i.test(userAgent);
+  const knownCrawler = /WhatsApp|facebookexternalhit|facebookcatalog|Facebot|meta-externalagent|Twitterbot|LinkedInBot|Slackbot|Slack-ImgProxy|TelegramBot|Discordbot|Googlebot|Applebot|SkypeUriPreview|Pinterest|redditbot|vkShare|Iframely|Signal|Viber|Mastodon|Embedly|Bingbot|bot\b|crawler|spider|preview|Google-InspectionTool/i.test(userAgent);
+  // Real browsers always send "Mozilla/5.0 … (Chrome|Safari|Firefox)". Anything else (WhatsApp/2.x, unknown link unfurlers, empty UA) gets the preview page, so a thumbnail is never missed.
+  const looksLikeBrowser = /Mozilla\/5\.0/.test(userAgent) && /(Chrome|CriOS|Safari|Firefox|FxiOS|Edg|OPR)\//.test(userAgent);
+  const isPreviewCrawler = knownCrawler || !looksLikeBrowser;
   const detailsUrl = `${appUrl}/meeting/${encodeURIComponent(slug)}`;
   if (!isPreviewCrawler) {
     res.setHeader("Cache-Control", "no-store");
@@ -83,5 +90,5 @@ export default async function handler(req: Request, res: Response) {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "public, s-maxage=60, stale-while-revalidate=300");
   res.setHeader("X-Robots-Tag", robots);
-  res.status(200).send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${safeTitle}</title><meta name="description" content="${safeDescription}"><meta name="robots" content="${robots}"><meta property="og:type" content="website"><meta property="og:site_name" content="MEET ENIHAKOLE"><meta property="og:title" content="${safeTitle}"><meta property="og:description" content="${safeDescription}"><meta property="og:url" content="${escapeHtml(`${appUrl}/share/${encodeURIComponent(slug)}`)}"><meta property="og:image" content="${safeImage}"><meta property="og:image:secure_url" content="${safeImage}"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:alt" content="MEET ENIHAKOLE meeting cover"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${safeTitle}"><meta name="twitter:description" content="${safeDescription}"><meta name="twitter:image" content="${safeImage}"><meta http-equiv="refresh" content="0;url=${safeDetails}"></head><body><main><p>Hosted by ${safeOwner}</p><p>${safeStart}</p><a href="${safeDetails}">Open meeting details</a></main><script>location.replace(${JSON.stringify(detailsUrl)})</script></body></html>`);
+  res.status(200).send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${safeTitle}</title><meta name="description" content="${safeDescription}"><meta name="robots" content="${robots}"><meta property="og:type" content="website"><meta property="og:site_name" content="MEET ENIHAKOLE"><meta property="og:title" content="${safeTitle}"><meta property="og:description" content="${safeDescription}"><meta property="og:url" content="${escapeHtml(`${appUrl}/share/${encodeURIComponent(slug)}`)}"><meta property="og:image" content="${safeImage}"><meta property="og:image:secure_url" content="${safeImage}"><meta property="og:image:type" content="${/\.png(\?|$)/i.test(image) ? "image/png" : "image/jpeg"}"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:alt" content="MEET ENIHAKOLE meeting cover"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${safeTitle}"><meta name="twitter:description" content="${safeDescription}"><meta name="twitter:image" content="${safeImage}"><meta http-equiv="refresh" content="0;url=${safeDetails}"></head><body><main><p>Hosted by ${safeOwner}</p><p>${safeStart}</p><a href="${safeDetails}">Open meeting details</a></main><script>location.replace(${JSON.stringify(detailsUrl)})</script></body></html>`);
 }

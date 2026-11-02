@@ -8,6 +8,7 @@ interface GoogleId {
   renderButton: (parent: HTMLElement, options: Record<string, unknown>) => void;
   prompt: () => void;
   cancel: () => void;
+  disableAutoSelect?: () => void;
 }
 declare global {
   interface Window { google?: { accounts: { id: GoogleId } } }
@@ -18,6 +19,24 @@ let initialized = false;
 let handler: ((credential: string) => void) | null = null;
 
 export const googleConfigured = Boolean(CLIENT_ID);
+
+/** Tells Google to stop silently re-selecting this account, so signing out really signs the person out of MEET ENIHAKOLE. */
+export function googleSignOut() {
+  try { window.google?.accounts.id.disableAutoSelect?.(); window.google?.accounts.id.cancel(); } catch { /* Google script not loaded. */ }
+}
+
+/** Google serves profile photos at a requested size (…=s96-c). Ask for a large, sharp copy so avatars stay crisp on big and high-DPI screens. */
+export function hiResPhoto(src: string | undefined, size = 400): string {
+  if (!src) return "";
+  try {
+    const url = new URL(src);
+    if (!/^lh\d*\.googleusercontent\.com$/i.test(url.hostname)) return src;
+    const sized = `s${size}-c`;
+    if (/=[sw]\d+(-[a-z0-9-]+)?$/i.test(url.pathname + url.search)) return src.replace(/=[sw]\d+(-[a-z0-9-]+)?$/i, `=${sized}`);
+    if (/\/s\d+(-c)?\//.test(url.pathname)) { url.pathname = url.pathname.replace(/\/s\d+(-c)?\//, `/${sized}/`); return url.toString(); }
+    return url.search ? src : `${src}=${sized}`;
+  } catch { return src; }
+}
 
 function loadGoogle(): Promise<void> {
   if (window.google?.accounts?.id) return Promise.resolve();
@@ -81,10 +100,10 @@ export function GoogleContinueButton({ onCredential, oneTap = false, onError }: 
 }
 
 /** Profile photo in a circle; falls back to initials when there is no photo or it fails to load. */
-export function ProfilePhoto({ src, name, className = "" }: { src?: string; name: string; className?: string }) {
+export function ProfilePhoto({ src, name, className = "", size = 256 }: { src?: string; name: string; className?: string; size?: number }) {
   const [broken, setBroken] = useState(false);
   useEffect(() => { setBroken(false); }, [src]);
   const words = name.replace(/[<>]/g, "").trim().split(/\s+/).filter(Boolean);
   const initials = (words.length ? (words.length === 1 ? Array.from(words[0]).slice(0, 2) : [Array.from(words[0])[0], Array.from(words[1])[0]]) : ["?"]).join("").toUpperCase();
-  return <span className={`profile-photo ${className}`}>{src && !broken ? <img src={src} alt="" referrerPolicy="no-referrer" draggable={false} onError={() => setBroken(true)} /> : <b>{initials}</b>}</span>;
+  return <span className={`profile-photo ${className}`}>{src && !broken ? <img src={hiResPhoto(src, size)} alt="" decoding="async" referrerPolicy="no-referrer" draggable={false} onError={() => setBroken(true)} /> : <b>{initials}</b>}</span>;
 }

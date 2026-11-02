@@ -16,7 +16,13 @@ function safePicture(value: unknown): string {
   if (typeof value !== "string") return "";
   try {
     const url = new URL(value.trim());
-    return url.protocol === "https:" && value.length <= 600 ? url.toString() : "";
+    if (url.protocol !== "https:" || value.length > 600) return "";
+    // Google serves avatars at the size in the URL suffix (=s96-c by default); request a large copy so photos look sharp on big screens.
+    if (/^lh\d*\.googleusercontent\.com$/i.test(url.hostname)) {
+      const sized = url.toString().replace(/=[sw]\d+(-[a-z0-9-]+)?$/i, "=s400-c");
+      return sized.length <= 600 ? sized : url.toString();
+    }
+    return url.toString();
   } catch { return ""; }
 }
 

@@ -15,6 +15,18 @@ export function clearAuthToken(): void {
   localStorage.removeItem(AUTH_KEY);
 }
 
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) { super(message); this.status = status; }
+}
+
+// Wakes a sleeping API host in the background so the first real request is not the one that waits for it.
+export function warmServer(): void {
+  try {
+    void fetch(`${API_BASE.replace(/\/api$/, "")}/health`, { mode: "no-cors", cache: "no-store" }).catch(() => { /* Best effort only. */ });
+  } catch { /* Best effort only. */ }
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = getAuthToken();
   const headers = new Headers(init.headers);
@@ -29,7 +41,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
 
   const payload = await response.json().catch(() => ({})) as { error?: string };
-  if (!response.ok) throw new Error(payload.error || `Request failed (${response.status}).`);
+  if (!response.ok) throw new ApiError(payload.error || `Request failed (${response.status}).`, response.status);
   return payload as T;
 }
 

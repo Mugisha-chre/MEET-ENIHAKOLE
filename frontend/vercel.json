@@ -10,7 +10,7 @@
         {
           "type": "header",
           "key": "user-agent",
-          "value": "(?i).*(WhatsApp|facebookexternalhit|facebookcatalog|Facebot|meta-externalagent|Twitterbot|LinkedInBot|Slackbot|TelegramBot|Discordbot|Applebot|SkypeUriPreview|Pinterest|vkShare|Iframely|Signal|Viber|Embedly).*"
+          "value": ".*(WhatsApp|facebookexternalhit|facebookcatalog|Facebot|meta-externalagent|Twitterbot|LinkedInBot|Slackbot|TelegramBot|Discordbot|Applebot|SkypeUriPreview|Pinterest|vkShare|Iframely|Signal|Viber|Embedly|Mastodon|redditbot|Googlebot|Bingbot|Slack-ImgProxy|Google-InspectionTool|bot|crawler|spider).*"
         }
       ],
       "destination": "/api/share/:slug"

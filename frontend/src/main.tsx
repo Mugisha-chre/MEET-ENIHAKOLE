@@ -4,6 +4,7 @@ import { BrowserRouter } from "react-router-dom";
 import "@livekit/components-styles";
 import "./styles.css";
 import App from "./App";
+import { warmServer } from "./api";
 
 // Capture the install prompt early so the install button can use it even if it fires before React mounts.
 window.addEventListener("beforeinstallprompt", (event) => {
@@ -11,6 +12,8 @@ window.addEventListener("beforeinstallprompt", (event) => {
   (window as unknown as { __pwaPrompt?: Event }).__pwaPrompt = event;
   window.dispatchEvent(new Event("pwa-prompt-ready"));
 });
+
+warmServer();
 
 if ("serviceWorker" in navigator && import.meta.env.PROD) {
   window.addEventListener("load", () => {
