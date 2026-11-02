@@ -1,7 +1,7 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type TouchEvent as ReactTouchEvent } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode, type TouchEvent as ReactTouchEvent } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { LiveKitRoom, ParticipantTile, RoomAudioRenderer, isTrackReference, useChat, useIsMuted, useLocalParticipant, useParticipants, useRoomContext, useTracks } from "@livekit/components-react";
-import { ParticipantEvent, RoomEvent, Track, VideoPreset, type Participant } from "livekit-client";
+import { ConnectionState, ParticipantEvent, RoomEvent, Track, VideoPreset, type Participant, type RemoteParticipant } from "livekit-client";
 import {
   ArrowDownRight, ArrowLeft, ArrowRight, AudioLines, CalendarClock, CalendarDays, Check,
   CheckCircle2, CircleHelp, Clock3, Copy, DoorOpen, HeartHandshake, Home,
@@ -645,7 +645,7 @@ function MeetingRoomPage() {
 type RoomSignal = { kind: "hand"; raised: boolean } | { kind: "reaction"; emoji: string; id: string };
 type FloatingReaction = { id: string; emoji: string; name: string };
 // Anything a person can press: a tap on these must keep doing its own job and never toggle fullscreen.
-const INTERACTIVE_SELECTOR = "button, a, input, textarea, select, label, summary, [role='button'], [role='dialog'], [data-popover], .room-device-menu, .reaction-picker, .messages-modal-backdrop, .room-alert, .room-message-toast";
+const INTERACTIVE_SELECTOR = "button, a, input, textarea, select, label, summary, [role='button'], [role='dialog'], [data-popover], .room-device-menu, .reaction-picker, .messages-modal-backdrop, .room-alert, .room-message-toast, .room-presence-stack";
 const REACTION_SET = ["🙏", "❤️", "👏", "🙌", "😊", "🎉", "✨", "💛", "🕊️", "👍"];
 
 function participantPicture(metadata?: string): string {
@@ -655,11 +655,12 @@ function participantPicture(metadata?: string): string {
   } catch { return ""; }
 }
 
-function ParticipantAvatar({ trackRef, participant }: { trackRef: Parameters<typeof useIsMuted>[0]; participant: { name?: string; identity: string; metadata?: string } }) {
+function ParticipantAvatar({ trackRef, participant }: { trackRef: Parameters<typeof useIsMuted>[0]; participant: Participant }) {
   const muted = useIsMuted(trackRef);
   const videoOn = isTrackReference(trackRef) && Boolean(trackRef.publication?.track) && !muted;
-  if (videoOn) return null;
-  return <div className="participant-avatar" aria-hidden="true"><ProfilePhoto src={participantPicture(participant.metadata)} name={participant.name || participant.identity} className="participant-avatar-photo" size={512}/></div>;
+  // Camera on: the video is the picture, so the waveform runs around the card edges instead of a profile circle.
+  if (videoOn) return participant.isSpeaking ? <SpeakingWave participant={participant}/> : null;
+  return <div className="participant-avatar" aria-hidden="true"><div className="participant-avatar-stack"><VoiceRing participant={participant} speaking={participant.isSpeaking}/><ProfilePhoto src={participantPicture(participant.metadata)} name={participant.name || participant.identity} className="participant-avatar-photo" size={512}/></div></div>;
 }
 
 let toneContext: AudioContext | null = null;
@@ -682,6 +683,163 @@ function playMessageTone() {
       osc.start(start + delay); osc.stop(start + delay + 0.45);
     });
   } catch { /* Audio can be blocked until the person interacts with the page. */ }
+}
+
+/** Short synthesised chime when someone joins (rising) or leaves (falling). */
+function playPresenceTone(kind: "joined" | "left") {
+  try {
+    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Ctx) return;
+    toneContext ??= new Ctx();
+    const ctx = toneContext;
+    if (ctx.state === "suspended") void ctx.resume();
+    const start = ctx.currentTime + 0.02;
+    const notes: Array<[number, number]> = kind === "joined" ? [[523.25, 0], [783.99, 0.12], [1046.5, 0.24]] : [[783.99, 0], [587.33, 0.13], [392, 0.26]];
+    notes.forEach(([freq, delay]) => {
+      const osc = ctx.createOscillator(); const gain = ctx.createGain();
+      osc.type = "sine"; osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, start + delay);
+      gain.gain.exponentialRampToValueAtTime(0.24, start + delay + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + delay + 0.38);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(start + delay); osc.stop(start + delay + 0.42);
+    });
+  } catch { /* Audio can be blocked until the person interacts with the page. */ }
+}
+
+let ringContext: AudioContext | null = null;
+/** Real-time frequency analyser for a participant's microphone track (null until the track is available). */
+function createMicAnalyser(participant: Participant): { analyser: AnalyserNode; trackId: string; source: MediaStreamAudioSourceNode } | null {
+  try {
+    const track = participant.getTrackPublication(Track.Source.Microphone)?.track?.mediaStreamTrack;
+    if (!track || track.readyState !== "live") return null;
+    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Ctx) return null;
+    ringContext ??= new Ctx();
+    if (ringContext.state === "suspended") void ringContext.resume();
+    const source = ringContext.createMediaStreamSource(new MediaStream([track]));
+    const analyser = ringContext.createAnalyser();
+    analyser.fftSize = 256; analyser.smoothingTimeConstant = 0.6;
+    source.connect(analyser); // analysis only: never connected to the speakers, so nothing is heard twice
+    return { analyser, trackId: track.id, source };
+  } catch { return null; }
+}
+
+const RING_BARS = 72;
+/** Circular voice spectrum around the profile photo (like a music visualiser). Drawn only while the person is speaking and driven by their live voice volume. */
+function VoiceRing({ participant, speaking }: { participant: Participant; speaking: boolean }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const speakingRef = useRef(speaking);
+  const runningRef = useRef(false);
+  const startRef = useRef<() => void>(() => {});
+  speakingRef.current = speaking;
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const bars = new Float32Array(RING_BARS);
+    const targets = new Float32Array(RING_BARS);
+    let mic: ReturnType<typeof createMicAnalyser> = null;
+    let lastMicCheck = 0;
+    let data = new Uint8Array(128);
+    let presence = 0; let frame = 0; let alive = true;
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    const releaseMic = () => { try { mic?.source.disconnect(); mic?.analyser.disconnect(); } catch { /* already disconnected */ } mic = null; };
+    const draw = (now: number) => {
+      if (!alive) return;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const size = canvas.clientWidth;
+      if (size < 8) { frame = window.requestAnimationFrame(draw); return; }
+      if (canvas.width !== Math.round(size * dpr)) { canvas.width = Math.round(size * dpr); canvas.height = Math.round(size * dpr); }
+      const isSpeaking = speakingRef.current;
+      presence += ((isSpeaking ? 1 : 0) - presence) * (isSpeaking ? 0.22 : 0.12);
+      // (Re)connect to the live microphone track when it appears or changes.
+      const currentTrack = participant.getTrackPublication(Track.Source.Microphone)?.track?.mediaStreamTrack;
+      if (isSpeaking && now - lastMicCheck > 400) {
+        lastMicCheck = now;
+        if (mic && (!currentTrack || mic.trackId !== currentTrack.id)) releaseMic();
+        if (!mic) { mic = createMicAnalyser(participant); if (mic) data = new Uint8Array(mic.analyser.frequencyBinCount); }
+      }
+      const level = isSpeaking ? Math.min(1, participant.audioLevel * 2.2) : 0;
+      let spectrumEnergy = 0;
+      if (mic && isSpeaking) { mic.analyser.getByteFrequencyData(data); for (let i = 2; i < 30; i++) spectrumEnergy += data[i]; spectrumEnergy /= 28 * 255; }
+      const half = RING_BARS / 2;
+      for (let i = 0; i < RING_BARS; i++) {
+        const k = i <= half ? i : RING_BARS - i; // mirrored: lows at the top, highs at the bottom
+        const position = k / half;
+        let target = 0;
+        if (isSpeaking) {
+          if (mic && spectrumEnergy > 0.004) {
+            const bin = 2 + Math.floor(position * 26);
+            target = (data[bin] / 255) * (1 + position * 1.5) * 1.25;
+          } else {
+            // Fallback when the browser gives no spectrum: shape LiveKit's audio level into a lively, natural-looking ring.
+            const wobble = 0.55 + 0.45 * Math.sin(now / 130 + i * 0.9) * Math.sin(now / 310 + i * 0.35);
+            target = level * wobble * (1 - position * 0.35);
+          }
+        }
+        targets[i] = Math.max(0, Math.min(1, target));
+      }
+      for (let i = 0; i < RING_BARS; i++) {
+        const smooth = (targets[(i + RING_BARS - 1) % RING_BARS] + targets[i] * 2 + targets[(i + 1) % RING_BARS]) / 4;
+        const rate = reduceMotion ? 1 : smooth > bars[i] ? 0.55 : 0.14;
+        bars[i] += (smooth - bars[i]) * rate;
+      }
+      const w = canvas.width; const c = w / 2;
+      ctx.clearRect(0, 0, w, w);
+      if (presence > 0.01) {
+        const photoRadius = w * 0.32; // the photo fills 64% of the canvas width
+        const innerRadius = photoRadius + w * 0.045;
+        const maxLength = c - innerRadius - w * 0.012;
+        const dot = Math.max(1.5 * dpr, w * 0.011);
+        ctx.globalAlpha = Math.min(1, presence);
+        ctx.fillStyle = "#f1d79b"; ctx.strokeStyle = "#f1d79b"; ctx.lineCap = "round";
+        ctx.lineWidth = Math.max(1.6 * dpr, (2 * Math.PI * innerRadius / RING_BARS) * 0.52);
+        ctx.beginPath();
+        for (let i = 0; i < RING_BARS; i++) {
+          const angle = -Math.PI / 2 + (i / RING_BARS) * Math.PI * 2;
+          const length = dot + Math.pow(bars[i], 0.9) * (maxLength - dot);
+          const cos = Math.cos(angle); const sin = Math.sin(angle);
+          ctx.moveTo(c + cos * innerRadius, c + sin * innerRadius);
+          ctx.lineTo(c + cos * (innerRadius + length), c + sin * (innerRadius + length));
+        }
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+      // Stop drawing completely once the person has been quiet and the ring has faded out.
+      if (!isSpeaking && presence <= 0.01) { ctx.clearRect(0, 0, w, w); runningRef.current = false; releaseMic(); return; }
+      frame = window.requestAnimationFrame(draw);
+    };
+    startRef.current = () => { if (runningRef.current || !alive) return; runningRef.current = true; frame = window.requestAnimationFrame(draw); };
+    if (speakingRef.current) startRef.current();
+    return () => { alive = false; runningRef.current = false; window.cancelAnimationFrame(frame); releaseMic(); };
+  }, [participant]);
+  useEffect(() => { if (speaking) startRef.current(); }, [speaking]);
+  return <canvas ref={canvasRef} className="voice-ring" aria-hidden="true"/>;
+}
+
+/** Animated voice waveform around the sides and corners of a speaking participant's card; follows the real audio level. */
+function SpeakingWave({ participant }: { participant: Participant }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    let frame = 0; let level = 0.4;
+    const tick = () => {
+      const target = Math.min(1, 0.35 + participant.audioLevel * 1.8);
+      level += (target - level) * 0.16;
+      ref.current?.style.setProperty("--lvl", level.toFixed(3));
+      frame = window.requestAnimationFrame(tick);
+    };
+    frame = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(frame);
+  }, [participant]);
+  const bars = (count: number) => Array.from({ length: count }, (_, index) => <i key={index} style={{ "--i": index } as CSSProperties}/>);
+  return <div className="voice-wave" ref={ref} aria-hidden="true">
+    <div className="voice-wave-edge voice-wave-top">{bars(40)}</div>
+    <div className="voice-wave-edge voice-wave-bottom">{bars(40)}</div>
+    <div className="voice-wave-edge voice-wave-left">{bars(22)}</div>
+    <div className="voice-wave-edge voice-wave-right">{bars(22)}</div>
+  </div>;
 }
 
 /** Shown only while a participant's microphone is off; nothing at all is shown while it is on. */
@@ -721,6 +879,8 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
   const [pseudoFull, setPseudoFull] = useState(false);
   const [topSpeaker, setTopSpeaker] = useState("");
   const [messageToast, setMessageToast] = useState<{ id: number; name: string; text: string } | null>(null);
+  const [presenceToasts, setPresenceToasts] = useState<Array<{ id: number; kind: "joined" | "left"; name: string }>>([]);
+  const presenceTimers = useRef<number[]>([]);
   const pseudoFullRef = useRef(false);
   const lastFullscreenAction = useRef(0);
   const suppressNextClick = useRef(false);
@@ -808,6 +968,48 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
     messageToastTimer.current = window.setTimeout(() => setMessageToast(null), 4000);
   }, [chatMessages, localIdentity]);
   useEffect(() => () => window.clearTimeout(messageToastTimer.current), []);
+  // Someone joins or leaves: play a tone and show a bottom pop-up saying who. People already in the room when we arrive are not announced.
+  useEffect(() => {
+    const known = new Set<string>(Array.from(room.remoteParticipants.values()).map((participant) => participant.identity));
+    let armed = false;
+    let armTimer = 0;
+    const arm = () => { window.clearTimeout(armTimer); armTimer = window.setTimeout(() => { armed = true; }, 1500); };
+    if (room.state === ConnectionState.Connected) arm();
+    const onConnected = () => arm();
+    const onReconnecting = () => { armed = false; };
+    const announce = (kind: "joined" | "left", participant: RemoteParticipant) => {
+      const id = Date.now() + Math.random();
+      const name = participant.name || "A participant";
+      playPresenceTone(kind);
+      setPresenceToasts((current) => [...current.slice(-2), { id, kind, name }]);
+      const timer = window.setTimeout(() => setPresenceToasts((current) => current.filter((toast) => toast.id !== id)), 3600);
+      presenceTimers.current.push(timer);
+    };
+    const onJoined = (participant: RemoteParticipant) => {
+      const isNew = !known.has(participant.identity);
+      known.add(participant.identity);
+      if (armed && isNew) announce("joined", participant);
+    };
+    const onLeft = (participant: RemoteParticipant) => {
+      const wasKnown = known.delete(participant.identity);
+      if (armed && wasKnown) announce("left", participant);
+    };
+    room.on(RoomEvent.Connected, onConnected);
+    room.on(RoomEvent.Reconnecting, onReconnecting);
+    room.on(RoomEvent.Reconnected, onConnected);
+    room.on(RoomEvent.ParticipantConnected, onJoined);
+    room.on(RoomEvent.ParticipantDisconnected, onLeft);
+    return () => {
+      window.clearTimeout(armTimer);
+      presenceTimers.current.forEach((timer) => window.clearTimeout(timer));
+      presenceTimers.current = [];
+      room.off(RoomEvent.Connected, onConnected);
+      room.off(RoomEvent.Reconnecting, onReconnecting);
+      room.off(RoomEvent.Reconnected, onConnected);
+      room.off(RoomEvent.ParticipantConnected, onJoined);
+      room.off(RoomEvent.ParticipantDisconnected, onLeft);
+    };
+  }, [room]);
   // Browsers keep audio locked until the first tap; unlock it early so the message tone can play.
   useEffect(() => {
     const unlock = () => { try { const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext; if (!Ctx) return; toneContext ??= new Ctx(); if (toneContext.state === "suspended") void toneContext.resume(); } catch { /* ignore */ } };
@@ -823,7 +1025,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
     let cleanup = () => {};
     const timer = window.setTimeout(() => {
       if (autoFullscreenDone.current || document.fullscreenElement) return;
-      const enter = () => target.requestFullscreen();
+      const enter = () => target.requestFullscreen({ navigationUI: "hide" });
       enter().then(() => { autoFullscreenDone.current = true; }).catch(() => {
         const events = ["pointerup", "click", "keydown", "touchend"] as const;
         const retry = (event: Event) => {
@@ -889,20 +1091,22 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
     try { await send(message); setMessageText(""); }
     catch { window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Could not send that message. Please retry." } })); }
   }
-  async function toggleFullscreen(silent = false) {
+  async function toggleFullscreen(silent = false, enterOnly = false) {
+    // Background taps may only ENTER fullscreen; leaving is reserved for the fullscreen button (or Esc).
+    if (enterOnly && (document.fullscreenElement || pseudoFull)) return;
     autoFullscreenDone.current = true;
     lastFullscreenAction.current = Date.now();
     const target = fullScreenRef.current;
     try {
       if (document.fullscreenElement) await document.exitFullscreen();
       else if (pseudoFull) { setPseudoFull(false); setFullScreen(false); }
-      else if (target?.requestFullscreen) await target.requestFullscreen();
+      else if (target?.requestFullscreen) await target.requestFullscreen({ navigationUI: "hide" });
       else { setPseudoFull(true); setFullScreen(true); } // iPhone Safari has no element fullscreen: fill the screen with CSS instead.
     } catch {
       if (!silent) window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Fullscreen is not available in this browser." } }));
     }
   }
-  // Tapping or clicking anywhere on the room page toggles fullscreen; buttons, links, menus and the chat keep working normally.
+  // Tapping or clicking anywhere on the room page (outside fullscreen) enters fullscreen; it never exits it. Buttons, links, menus and the chat keep working normally.
   const toggleFullscreenRef = useRef(toggleFullscreen);
   toggleFullscreenRef.current = toggleFullscreen;
   useEffect(() => {
@@ -913,8 +1117,9 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
       const target = event.target instanceof Element ? event.target : null;
       if (!target || !target.isConnected || target.closest(INTERACTIVE_SELECTOR)) return;
       if (window.getSelection()?.toString()) return;
+      if (document.fullscreenElement || pseudoFullRef.current) return; // already fullscreen: clicking the page never exits it
       if (Date.now() - lastFullscreenAction.current < 350) return;
-      void toggleFullscreenRef.current(true);
+      void toggleFullscreenRef.current(true, true);
     };
     document.addEventListener("pointerdown", onDown, true);
     document.addEventListener("click", onClick);
@@ -955,11 +1160,12 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
               <ParticipantTile trackRef={trackRef!} />
               <ParticipantAvatar trackRef={trackRef!} participant={participant} />
               <span className="participant-role-label">{isHost ? "HOST" : "PARTICIPANT"}</span>
-              <div className="participant-name-overlay"><span className="participant-name-copy" title={participant.name || participant.identity}><b>{participant.name || participant.identity}{participant.identity === localIdentity ? " · You" : ""}</b></span><span className="participant-badges"><MicOffBadge participant={participant}/>{hand && <span className="raised-hand-badge" title="Raised hand"><Hand size={15}/></span>}{participant.isSpeaking && <span className="speaker-badge" title="Speaking"><AudioLines size={14}/></span>}</span></div>
+              <div className="participant-name-overlay"><span className="participant-name-copy" title={participant.name || participant.identity}><b>{participant.name || participant.identity}{participant.identity === localIdentity ? " · You" : ""}</b></span><span className="participant-badges"><MicOffBadge participant={participant}/>{hand && <span className="raised-hand-badge" title="Raised hand"><Hand size={15}/></span>}{participant.isSpeaking && <span className="speaker-mic" title="Speaking" aria-label="Speaking"><Mic size={14}/></span>}</span></div>
             </div>;
           })}
         </div>
         {reactions.length > 0 && <div className="reaction-float-stack" aria-live="polite">{reactions.map((reaction) => <div className="reaction-float" key={reaction.id}><span>{reaction.emoji}</span><b>{reaction.name}</b></div>)}</div>}
+        {presenceToasts.length > 0 && <div className={`room-presence-stack ${messageToast ? "room-presence-stack-raised" : ""}`} aria-live="polite">{presenceToasts.map((toast) => <div className={`room-presence-toast room-presence-${toast.kind}`} key={toast.id} role="status"><span className="room-presence-icon">{toast.kind === "joined" ? <LogIn size={15}/> : <LogOut size={15}/>}</span><span className="room-presence-text"><b>{toast.name}</b> {toast.kind === "joined" ? "joined the meeting" : "left the meeting"}</span></div>)}</div>}
         {messageToast && <div className="room-message-toast" key={messageToast.id} role="status" aria-live="polite"><span className="room-message-toast-icon"><MessageCircle size={16}/></span><span className="room-message-toast-body"><b>{messageToast.name}</b><span>{messageToast.text}</span></span></div>}
         {pages > 1 && <div className="participant-pagination"><span>Screen {currentPage + 1} of {pages} · {visualParticipants.length} participants</span><div><button className="room-icon-button" onClick={() => setPage(Math.max(0, currentPage - 1))} disabled={currentPage === 0} aria-label="Previous participant screen"><ChevronLeft size={18}/></button><button className="room-icon-button" onClick={() => setPage(Math.min(pages - 1, currentPage + 1))} disabled={currentPage >= pages - 1} aria-label="Next participant screen"><ChevronRight size={18}/></button></div></div>}
       </div>
