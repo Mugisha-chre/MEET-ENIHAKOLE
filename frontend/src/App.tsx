@@ -1,7 +1,7 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode, type TouchEvent as ReactTouchEvent } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject, type FormEvent, type ReactNode, type TouchEvent as ReactTouchEvent } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { LiveKitRoom, ParticipantTile, RoomAudioRenderer, isTrackReference, useChat, useIsMuted, useLocalParticipant, useParticipants, useRoomContext, useTracks } from "@livekit/components-react";
-import { ConnectionState, ParticipantEvent, RoomEvent, Track, VideoPreset, type Participant, type RemoteParticipant } from "livekit-client";
+import { ConnectionState, MediaDeviceFailure, ParticipantEvent, Room, RoomEvent, Track, VideoPreset, type Participant, type RemoteParticipant, type RoomOptions } from "livekit-client";
 import {
   ArrowDownRight, ArrowLeft, ArrowRight, AudioLines, CalendarClock, CalendarDays, Check,
   CheckCircle2, CircleHelp, Clock3, Copy, DoorOpen, HeartHandshake, Home,
@@ -528,8 +528,11 @@ function MeetingPage() {
   const [loading, setLoading] = useState(() => !readCache(cacheKey) && ![...knownMeetings, ...knownPublic].some((item) => item.slug === slug));
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState("");
-  const [micPrompt, setMicPrompt] = useState<MicPromptState | null>(null);
-  const micRetryRef = useRef(0);
+  const [mediaPrompt, setMediaPrompt] = useState<{ kind: MediaKind; state: MicPromptState } | null>(null);
+  const mediaRetryRef = useRef(0);
+  const enteringRef = useRef(false);
+  const aliveRef = useRef(true);
+  useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -552,46 +555,67 @@ function MeetingPage() {
 
   useEffect(() => { if (user?.picture) void preloadPhoto(user.picture, 512); }, [user?.picture]);
 
-  // Asks the browser for the microphone (the real permission prompt) and reports what happened.
-  async function askBrowserForMic(): Promise<MicPromptState> {
-    const attempt = ++micRetryRef.current;
-    setMicPrompt({ phase: "waiting" });
-    const result = await requestMicrophoneAccess();
-    if (attempt !== micRetryRef.current) return { phase: "waiting" };
-    setMicPrompt(result);
-    return result;
+  // The browser is only asked after the person pressed Allow in our own dialog.
+  async function askBrowser(kind: MediaKind) {
+    const attempt = ++mediaRetryRef.current;
+    setMediaPrompt({ kind, state: { phase: "waiting" } });
+    const result = await requestMediaAccess(kind);
+    if (attempt !== mediaRetryRef.current) return;
+    if (result.phase === "granted") { setMediaPrompt({ kind, state: { phase: "granted" } }); await continueJoin(micOn, cameraOn); }
+    else setMediaPrompt({ kind, state: result });
+  }
+
+  // Walks through whatever still needs permission (microphone, then camera) with our dialog first; once all is allowed it goes straight into the room.
+  async function continueJoin(audio: boolean, video: boolean) {
+    if (audio && !(await mediaAlreadyAllowed("microphone"))) { setMediaPrompt({ kind: "microphone", state: { phase: "ask" } }); return; }
+    if (video && !(await mediaAlreadyAllowed("camera"))) { setMediaPrompt({ kind: "camera", state: { phase: "ask" } }); return; }
+    setMediaPrompt((current) => current && current.state.phase === "granted" ? current : null);
+    await enterRoom(audio, video);
   }
 
   async function join(event: FormEvent) {
     event.preventDefault();
     if (!meeting) return;
     if (!user) { setError("Sign in with Google to join this meeting."); return; }
-    if (micOn) {
-      // Called straight from the tap so every browser (Chrome, Firefox, Safari, Opera, Edge...) treats it as a user gesture and shows its own prompt.
-      const result = await askBrowserForMic();
-      if (result.phase !== "granted") return;
-      setMicPrompt(null);
-    }
-    await enterRoom(micOn);
+    if (joining || mediaPrompt) return;
+    await continueJoin(micOn, cameraOn);
   }
 
-  async function enterRoom(audio: boolean) {
-    if (!meeting || !user) return;
+  async function enterRoom(audio: boolean, video: boolean) {
+    if (!meeting || !user || enteringRef.current) return;
+    enteringRef.current = true;
     setJoining(true); setError("");
     try {
       const result = await api.join(slug);
-      const session: JoinSession = { ...result, audio, video: cameraOn };
+      const session: JoinSession = { ...result, audio, video };
       sessionStorage.setItem(`meet-session:${slug}`, JSON.stringify(session));
       registerSession(session);
-      // Fetch our own photo and everyone already in the room before entering, so the room opens fully drawn (capped so a slow image never blocks joining).
-      await Promise.race([
-        Promise.all([preloadPhoto(user.picture, 512), ...(result.participants ?? []).map((person) => preloadPhoto(person.picture, 512))]),
-        new Promise<void>((resolve) => setTimeout(resolve, 2500)),
-      ]);
+      // Everything is made ready here, on the meeting page: we connect to the room, load every photo, and wait until everyone already inside is visible and audible.
+      // Only then do we move to the room page, which receives the finished, connected room.
+      preparedRooms.get(slug)?.disconnect().catch(() => { /* Old attempt already closed. */ });
+      preparedRooms.delete(slug);
+      const room = new Room(ROOM_OPTIONS);
+      try {
+        await Promise.all([
+          room.connect(result.serverUrl, result.token),
+          preloadPhoto(user.picture, 512), ...(result.participants ?? []).map((person) => preloadPhoto(person.picture, 512)),
+        ]);
+        await Promise.all([
+          room.localParticipant.setMicrophoneEnabled(audio).catch(() => { /* The room page asks again and shows the troubleshooting dialog. */ }),
+          room.localParticipant.setCameraEnabled(video).catch(() => { /* Same as above. */ }),
+        ]);
+        await waitRoomReady(room, (result.participants ?? []).map((person) => person.identity), 10_000);
+        if (!aliveRef.current) { await room.disconnect().catch(() => { /* Page was left. */ }); return; }
+        preparedRooms.set(slug, room);
+      } catch {
+        // If anything fails here the room page still connects on its own, exactly as before.
+        await room.disconnect().catch(() => { /* Nothing to close. */ });
+      }
       navigate(`/room/${encodeURIComponent(slug)}`);
     } catch (cause) {
+      setMediaPrompt(null);
       setError(cause instanceof Error ? cause.message : "Could not join this meeting.");
-    } finally { setJoining(false); }
+    } finally { enteringRef.current = false; setJoining(false); }
   }
 
   async function googleCredential(credential: string) {
@@ -630,7 +654,7 @@ function MeetingPage() {
             {!user && !ended && <div className="join-google"><p>Continue with Google to join. We use your Google name and profile photo so everyone knows who you are.</p><GoogleContinueButton oneTap onCredential={(credential) => void googleCredential(credential)}/></div>}
             {!ended && <div className="join-preferences"><MediaToggle on={cameraOn} onChange={setCameraOn} onIcon={<Video size={16}/>} offIcon={<VideoOff size={16}/>} onLabel="Camera is on" offLabel="Camera is off" onHint="Join with video" offHint="Join without video"/><MediaToggle on={micOn} onChange={setMicOn} onIcon={<Mic size={16}/>} offIcon={<MicOff size={16}/>} onLabel="Microphone is on" offLabel="Microphone is off" onHint="Join with audio" offHint="Join muted"/></div>}
             {error && <div className="inline-error" role="alert">{error}{error.includes("Sign in") && <button type="button" className="error-link" onClick={openAuth}>Sign in</button>}</div>}
-            {ended ? <Link to="/" className="button button-soft button-full"><ArrowLeft size={16}/> Back to home</Link> : user && <button className="button button-primary button-full join-submit" type="submit" disabled={joining}>{joining ? <LoaderCircle size={17} className="spin"/> : meeting.isOwner ? <Video size={17}/> : <DoorOpen size={17}/>} {joining ? "Preparing your room…" : meeting.isOwner ? "Start meeting" : meeting.status === "live" ? "Join meeting" : "Check room availability"}<ArrowRight size={16}/></button>}
+            {ended ? <Link to="/" className="button button-soft button-full"><ArrowLeft size={16}/> Back to home</Link> : user && <button className="button button-primary button-full join-submit" type="submit" disabled={joining}>{joining ? <LoaderCircle size={17} className="spin"/> : meeting.isOwner ? <Video size={17}/> : <DoorOpen size={17}/>} {joining ? "Joining…" : meeting.isOwner ? "Start meeting" : meeting.status === "live" ? "Join meeting" : "Check room availability"}<ArrowRight size={16}/></button>}
             <p className="join-footnote"><ShieldCheck size={13}/> Your camera and microphone are only requested when you enter the room.</p>
           </form>
         </section>
@@ -644,83 +668,121 @@ function MeetingPage() {
         </section>
       </main>
       <footer className="landing-footer"><span>© {new Date().getFullYear()} MEET ENIHAKOLE</span><span>Built for togetherness.</span></footer>
-      {micPrompt && <MicPermissionModal
-        state={micPrompt}
-        onRetry={() => { void askBrowserForMic().then((result) => { if (result.phase === "granted") { setMicPrompt(null); void enterRoom(true); } }); }}
-        onGranted={() => { setMicPrompt(null); void enterRoom(true); }}
-        onSkip={() => { micRetryRef.current++; setMicPrompt(null); setMicOn(false); void enterRoom(false); }}
-        onClose={() => { micRetryRef.current++; setMicPrompt(null); }}
+      {mediaPrompt && <MediaPermissionModal
+        kind={mediaPrompt.kind}
+        state={mediaPrompt.state}
+        skipLabel={mediaPrompt.kind === "camera" ? "Join without camera" : "Join without microphone"}
+        grantedLabel="Joining…"
+        onRetry={() => { void askBrowser(mediaPrompt.kind); }}
+        onGranted={() => { const kind = mediaPrompt.kind; mediaAllowed[kind] = true; mediaRetryRef.current++; setMediaPrompt({ kind, state: { phase: "granted" } }); void continueJoin(micOn, cameraOn); }}
+        onSkip={() => { mediaRetryRef.current++; if (mediaPrompt.kind === "camera") { setCameraOn(false); void continueJoin(micOn, false); } else { setMicOn(false); void continueJoin(false, cameraOn); } }}
+        onClose={() => { mediaRetryRef.current++; setMediaPrompt(null); }}
       />}
     </div>
   );
 }
 
-type MicPromptState = { phase: "waiting" } | { phase: "granted" } | { phase: "blocked" | "unavailable" | "busy" | "unsupported"; message: string };
+type MediaKind = "microphone" | "camera";
+type MicPromptState = { phase: "ask" } | { phase: "waiting" } | { phase: "granted" } | { phase: "blocked" | "unavailable" | "busy" | "unsupported"; message: string };
+// Remembers what the person already allowed in this tab, for browsers that cannot report permission state.
+const mediaAllowed: Record<MediaKind, boolean> = { microphone: false, camera: false };
 
-// Opens the microphone once so the browser shows its permission prompt, then releases it immediately (LiveKit opens it again inside the room).
-async function requestMicrophoneAccess(): Promise<MicPromptState> {
+async function queryMediaPermission(kind: MediaKind): Promise<PermissionState | null> {
+  try { return (await navigator.permissions.query({ name: kind as PermissionName })).state; } catch { return null; }
+}
+async function mediaAlreadyAllowed(kind: MediaKind): Promise<boolean> {
+  const permission = await queryMediaPermission(kind);
+  if (permission === "granted") return true;
+  if (permission === "denied") return false;
+  return mediaAllowed[kind];
+}
+function mediaFailure(phase: "blocked" | "unavailable" | "busy" | "unsupported", kind: MediaKind): MicPromptState {
+  const noun = kind === "camera" ? "camera" : "microphone";
+  if (phase === "unsupported") return { phase, message: window.isSecureContext ? `This browser can't use a ${noun} here. Try Chrome, Edge, Firefox or Safari.` : `The ${noun} needs a secure (https) link.` };
+  if (phase === "unavailable") return { phase, message: `No ${noun} found. Plug one in, then try again.` };
+  if (phase === "busy") return { phase, message: `Your ${noun} is in use by another app. Close it, then try again.` };
+  return { phase, message: `${noun[0].toUpperCase()}${noun.slice(1)} is blocked for this site.` };
+}
+
+// Opens the device once so the browser shows its own permission prompt, then releases it right away (LiveKit opens it again inside the room).
+// Only ever called after the person pressed Allow in our dialog.
+async function requestMediaAccess(kind: MediaKind): Promise<MicPromptState> {
   const media = navigator.mediaDevices;
-  if (!media?.getUserMedia) {
-    return { phase: "unsupported", message: window.isSecureContext ? "This browser cannot use a microphone here. Try Chrome, Edge, Firefox or Safari." : "The microphone needs a secure (https) connection. Open the link with https." };
-  }
+  if (!media?.getUserMedia) return mediaFailure("unsupported", kind);
   try {
-    const stream = await media.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    const stream = await media.getUserMedia(kind === "camera" ? { video: true } : { audio: { echoCancellation: true, noiseSuppression: true } });
     stream.getTracks().forEach((track) => track.stop());
+    mediaAllowed[kind] = true;
     return { phase: "granted" };
   } catch (cause) {
     const name = cause instanceof DOMException ? cause.name : "";
-    if (name === "NotFoundError" || name === "DevicesNotFoundError" || name === "OverconstrainedError") return { phase: "unavailable", message: "No microphone was found. Plug one in or check your device, then try again." };
-    if (name === "NotReadableError" || name === "TrackStartError" || name === "AbortError") return { phase: "busy", message: "Your microphone is being used by another app. Close it and try again." };
-    return { phase: "blocked", message: "Microphone access is blocked for this site. Tap the lock or settings icon next to the address bar, set Microphone to Allow, then press Try again." };
+    if (name === "NotFoundError" || name === "DevicesNotFoundError" || name === "OverconstrainedError") return mediaFailure("unavailable", kind);
+    if (name === "NotReadableError" || name === "TrackStartError" || name === "AbortError") return mediaFailure("busy", kind);
+    return mediaFailure("blocked", kind);
   }
 }
 
-function MicPermissionModal({ state, onRetry, onGranted, onSkip, onClose }: { state: MicPromptState; onRetry: () => void; onGranted: () => void; onSkip: () => void; onClose: () => void }) {
+function MediaPermissionModal({ kind, state, skipLabel, grantedLabel, onRetry, onGranted, onSkip, onClose }: { kind: MediaKind; state: MicPromptState; skipLabel: string; grantedLabel: string; onRetry: () => void; onGranted: () => void; onSkip: () => void; onClose: () => void }) {
+  const isCamera = kind === "camera";
+  const noun = isCamera ? "camera" : "microphone";
+  const Noun = isCamera ? "Camera" : "Microphone";
+  const asking = state.phase === "ask";
   const waiting = state.phase === "waiting";
-  const failed = state.phase !== "waiting" && state.phase !== "granted";
-  const retryRef = useRef(onRetry);
+  const granted = state.phase === "granted";
+  const failed = !asking && !waiting && !granted;
+  const failure = failed ? (state as { phase: string; message: string }) : null;
   const grantedRef = useRef(onGranted);
-  retryRef.current = onRetry;
+  const closeRef = useRef(onClose);
   grantedRef.current = onGranted;
+  closeRef.current = onClose;
 
-  // While access is blocked, keep watching: the moment the person allows it (in the address bar or settings) we continue on our own, and we keep asking the browser again in the background.
+  // While access is blocked, keep watching: the moment the person allows it (in the address bar or settings) we continue on our own.
+  // We only look at the permission state here, so the browser is never asked again behind the person's back.
   useEffect(() => {
     if (!failed) return;
     let stopped = false;
     let status: PermissionStatus | null = null;
     const onChange = () => { if (!stopped && status?.state === "granted") grantedRef.current(); };
-    navigator.permissions?.query({ name: "microphone" as PermissionName }).then((result) => { if (stopped) { return; } status = result; if (result.state === "granted") grantedRef.current(); else result.addEventListener("change", onChange); }).catch(() => { /* Permissions API is not available in every browser. */ });
+    navigator.permissions?.query({ name: kind as PermissionName }).then((result) => { if (stopped) return; status = result; if (result.state === "granted") grantedRef.current(); else result.addEventListener("change", onChange); }).catch(() => { /* Permissions API is not available in every browser. */ });
     const timer = window.setInterval(() => {
       if (stopped || document.hidden) return;
-      void requestMicrophoneAccess().then((result) => { if (!stopped && result.phase === "granted") grantedRef.current(); });
-    }, 3500);
+      void queryMediaPermission(kind).then((permission) => {
+        if (stopped || permission !== "granted") return;
+        void requestMediaAccess(kind).then((result) => { if (!stopped && result.phase === "granted") grantedRef.current(); });
+      });
+    }, 2500);
     return () => { stopped = true; window.clearInterval(timer); status?.removeEventListener("change", onChange); };
-  }, [failed]);
+  }, [failed, kind]);
 
   useEffect(() => {
     document.body.classList.add("modal-open");
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape" && !granted) closeRef.current(); };
     document.addEventListener("keydown", onKey);
     return () => { document.body.classList.remove("modal-open"); document.removeEventListener("keydown", onKey); };
-  }, [onClose]);
+  }, [granted]);
+
+  const help = failure?.phase === "blocked" ? "Tap the lock icon by the address bar, set " + Noun + " to Allow, then press Try again."
+    : failure?.phase === "busy" ? "Close other apps using it (like Zoom or Teams), then press Try again."
+    : failure?.phase === "unavailable" ? "Check your device settings or plug one in, then press Try again." : "";
 
   return (
-    <div className="modal-backdrop mic-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <div className="modal-backdrop mic-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !granted) onClose(); }}>
       <section className="modal-panel modal-panel-narrow mic-modal" role="dialog" aria-modal="true" aria-labelledby="mic-modal-title">
-        <button type="button" className="icon-button modal-close mic-modal-close" onClick={onClose} aria-label="Close"><X size={17}/></button>
+        {!granted && <button type="button" className="icon-button modal-close mic-modal-close" onClick={onClose} aria-label="Close"><X size={17}/></button>}
         <div className="mic-modal-body">
           <div className={`mic-orb ${failed ? "mic-orb-off" : ""}`} aria-hidden="true">
-            <span className="mic-orb-glow"/><span className="mic-orb-ring"/><span className="mic-orb-core">{failed ? <MicOff size={34} strokeWidth={1.9}/> : <Mic size={34} strokeWidth={1.9}/>}</span>
+            <span className="mic-orb-glow"/><span className="mic-orb-ring"/><span className="mic-orb-core">{failed ? (isCamera ? <VideoOff size={34} strokeWidth={1.9}/> : <MicOff size={34} strokeWidth={1.9}/>) : (isCamera ? <Video size={34} strokeWidth={1.9}/> : <Mic size={34} strokeWidth={1.9}/>)}</span>
           </div>
-          <p className="section-overline">ONE QUICK STEP</p>
-          <h2 id="mic-modal-title">{failed ? "We can't hear you yet" : "Allow your microphone"}</h2>
-          <p className="mic-modal-text">{failed ? (state as { message: string }).message : "When your browser asks, choose Allow so your choir can hear you. We only use it while you are in the room."}</p>
-          {waiting && <p className="mic-modal-status" role="status"><LoaderCircle size={14} className="spin"/> Waiting for your browser…</p>}
-          {failed && <p className="mic-modal-status mic-modal-status-soft" role="status"><LoaderCircle size={14} className="spin"/> We'll keep checking and continue as soon as it's allowed.</p>}
+          <p className="section-overline">{granted ? "ALL SET" : "ONE QUICK STEP"}</p>
+          <h2 id="mic-modal-title">{granted ? `${Noun} ready` : failed ? `We can't ${isCamera ? "see" : "hear"} you yet` : `Allow your ${noun}`}</h2>
+          <p className="mic-modal-text">{granted ? "Taking you in." : failure ? failure.message : `Tap Allow, then confirm in your browser so your choir can ${isCamera ? "see" : "hear"} you.`}</p>
+          {help && <p className="mic-modal-help">{help}</p>}
+          {waiting && <p className="mic-modal-status" role="status"><LoaderCircle size={14} className="spin"/> Waiting…</p>}
+          {failed && <p className="mic-modal-status mic-modal-status-soft" role="status"><LoaderCircle size={14} className="spin"/> Checking…</p>}
         </div>
         <div className="mic-modal-actions modal-footer-fixed">
-          <button type="button" className="button button-primary button-full" onClick={onRetry} disabled={waiting}>{waiting ? <LoaderCircle size={16} className="spin"/> : <Mic size={16}/>} {failed ? "Try again" : "Allow microphone"}</button>
-          <button type="button" className="button button-soft button-full" onClick={onSkip}>Join without microphone</button>
+          <button type="button" className="button button-primary button-full" onClick={onRetry} disabled={waiting || granted}>{waiting || granted ? <LoaderCircle size={16} className="spin"/> : isCamera ? <Video size={16}/> : <Mic size={16}/>} {failed ? "Try again" : granted ? grantedLabel : `Allow ${noun}`}</button>
+          {!granted && <button type="button" className="button button-soft button-full" onClick={onSkip}>{skipLabel}</button>}
         </div>
       </section>
     </div>
@@ -734,6 +796,8 @@ function MeetingRoomPage() {
   const [ending, setEnding] = useState(false);
   const [endError, setEndError] = useState("");
   const [disconnected, setDisconnected] = useState(false);
+  // A room that was already connected and fully loaded on the meeting page; the room opens complete, with nothing left to load.
+  const [preparedRoom] = useState<Room | null>(() => { const room = preparedRooms.get(slug); return room && room.state === ConnectionState.Connected ? room : null; });
 
   useEffect(() => {
     try {
@@ -768,24 +832,18 @@ function MeetingRoomPage() {
         <div className="conference-title-row"><div><p className="section-overline">ENIHAKOLE CHOIR · LIVE CONFERENCE</p><h1>{session.meeting.title}</h1></div><div className="conference-tools"><span className="encrypted-pill"><ShieldCheck size={14}/> Secure connection</span>{session.role === "host" && <button className="button button-danger button-small" onClick={() => void endForEveryone()} disabled={ending}>{ending ? <LoaderCircle size={15} className="spin"/> : <X size={15}/>} End for everyone</button>}</div></div>
         <div className="conference-stage">
           <LiveKitRoom
+            room={preparedRoom ?? undefined}
             token={session.token}
             serverUrl={session.serverUrl}
             connect={true}
             audio={session.audio}
             video={session.video}
-            options={{
-              adaptiveStream: true,
-              dynacast: true,
-              videoCaptureDefaults: { resolution: { width: 1280, height: 720, frameRate: 30 } },
-              publishDefaults: {
-                videoEncoding: { maxBitrate: 1_500_000, maxFramerate: 30 },
-                videoSimulcastLayers: [new VideoPreset(640, 360, 500_000, 20), new VideoPreset(320, 180, 150_000, 15)],
-              },
-            }}
+            options={ROOM_OPTIONS}
             onDisconnected={() => setDisconnected(true)}
+            onMediaDeviceFailure={(failure, kind) => window.dispatchEvent(new CustomEvent("meet-media-failure", { detail: { failure, kind } }))}
           >
             <ConferenceWorkspace meeting={session.meeting} role={session.role} onLeave={() => navigate(`/meeting/${slug}`)} onEndForEveryone={() => void endForEveryone()} ending={ending}/>
-            <RoomReadyOverlay expected={(session.participants ?? []).map((person) => person.identity)} title={session.meeting.title}/>
+            {!preparedRoom && <RoomReadyOverlay expected={(session.participants ?? []).map((person) => person.identity)}/>}
           </LiveKitRoom>
         </div>
         <div className="conference-bottom-note"><span><ShieldCheck size={15}/> {session.meeting.visibility === "public" ? "This gathering is publicly listed." : "This meeting uses an unlisted invitation link."}</span><span>For the clearest call, use headphones and a stable connection.</span></div>
@@ -794,8 +852,56 @@ function MeetingRoomPage() {
   );
 }
 
+const ROOM_OPTIONS: RoomOptions = {
+  adaptiveStream: true,
+  dynacast: true,
+  videoCaptureDefaults: { resolution: { width: 1280, height: 720, frameRate: 30 } },
+  publishDefaults: {
+    videoEncoding: { maxBitrate: 1_500_000, maxFramerate: 30 },
+    videoSimulcastLayers: [new VideoPreset(640, 360, 500_000, 20), new VideoPreset(320, 180, 150_000, 15)],
+  },
+};
+// Rooms that were connected and fully loaded on the meeting page, waiting to be shown by the room page.
+const preparedRooms = new Map<string, Room>();
+
+/** Resolves once everyone who was already here is present with their photo loaded and their audio/video subscribed (or when the time limit is reached). */
+function waitRoomReady(room: Room, expected: string[], maxMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    const startedAt = Date.now();
+    const photoTasks = new Map<string, Promise<void>>();
+    const photoDone = new Set<string>();
+    const wantPhoto = (identity: string, metadata?: string) => {
+      const picture = participantPicture(metadata, identity);
+      const key = `${identity}|${picture}`;
+      if (!picture || photoTasks.has(key)) return;
+      photoTasks.set(key, preloadPhoto(picture, 512).then(() => { photoDone.add(key); }));
+    };
+    const finish = () => { window.clearInterval(timer); resolve(); };
+    const evaluate = () => {
+      const elapsed = Date.now() - startedAt;
+      if (elapsed > maxMs || room.state !== ConnectionState.Connected) { finish(); return; }
+      const local = room.localParticipant;
+      wantPhoto(local.identity, local.metadata);
+      const remotes = Array.from(room.remoteParticipants.values());
+      remotes.forEach((participant) => wantPhoto(participant.identity, participant.metadata));
+      const everyoneHere = expected.filter((identity) => identity !== local.identity).every((identity) => room.remoteParticipants.has(identity));
+      const photosReady = photoTasks.size === photoDone.size;
+      const voicesReady = remotes.every((participant) => {
+        const mic = participant.getTrackPublication(Track.Source.Microphone);
+        const cam = participant.getTrackPublication(Track.Source.Camera);
+        const micOk = !mic || mic.isMuted || (mic.isSubscribed && Boolean(mic.track));
+        const camOk = !cam || cam.isMuted || (cam.isSubscribed && Boolean(cam.track));
+        return micOk && camOk;
+      });
+      if ((everyoneHere || elapsed > 5000) && photosReady && (voicesReady || elapsed > 6500)) finish();
+    };
+    const timer = window.setInterval(evaluate, 120);
+    evaluate();
+  });
+}
+
 /** Covers the room until everyone who was already here is shown with their photo and voice, so you arrive in a fully drawn room. */
-function RoomReadyOverlay({ expected, title }: { expected: string[]; title: string }) {
+function RoomReadyOverlay({ expected }: { expected: string[] }) {
   const room = useRoomContext();
   const [ready, setReady] = useState(false);
   const [gone, setGone] = useState(false);
@@ -856,12 +962,7 @@ function RoomReadyOverlay({ expected, title }: { expected: string[]; title: stri
 
   if (gone) return null;
   return <div className={`room-ready-overlay ${ready ? "room-ready-overlay-out" : ""}`} role="status" aria-live="polite" aria-hidden={ready}>
-    <div className="room-ready-card">
-      <span className="room-ready-mark"><AudioLines size={26}/></span>
-      <b>Getting your room ready…</b>
-      <small>{title}</small>
-      <LoaderCircle size={20} className="spin"/>
-    </div>
+    <LoaderCircle size={22} className="spin room-ready-spinner"/>
   </div>;
 }
 
@@ -1203,6 +1304,8 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
   const trackRefs = useTracks([{ source: Track.Source.Camera, withPlaceholder: true }], { onlySubscribed: false });
   const { chatMessages, send, isSending } = useChat();
   const [messagesOpen, setMessagesOpen] = useState(false);
+  const [mediaModal, setMediaModal] = useState<{ kind: MediaKind; state: MicPromptState } | null>(null);
+  const mediaAttemptRef = useRef(0);
   const [messageText, setMessageText] = useState("");
   const [reactionsOpen, setReactionsOpen] = useState(false);
   const [raisedHands, setRaisedHands] = useState<Record<string, boolean>>({});
@@ -1398,6 +1501,42 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
       window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Your action could not be sent. Check your connection." } }));
     }
   }
+  // Turns the device on once it is allowed; anything that goes wrong opens the troubleshooting dialog instead of failing silently.
+  async function enableMedia(kind: MediaKind) {
+    try {
+      if (kind === "microphone") await localParticipant.setMicrophoneEnabled(true); else await localParticipant.setCameraEnabled(true);
+      setMediaModal(null);
+    } catch (cause) {
+      const failure = MediaDeviceFailure.getFailure(cause);
+      setMediaModal({ kind, state: mediaFailure(failure === MediaDeviceFailure.NotFound ? "unavailable" : failure === MediaDeviceFailure.PermissionDenied ? "blocked" : "busy", kind) });
+    }
+  }
+  // Mic and camera buttons: turning off is instant; turning on shows our permission dialog first when the browser has not been allowed yet.
+  async function toggleMedia(kind: MediaKind) {
+    const enabled = kind === "microphone" ? isMicrophoneEnabled : isCameraEnabled;
+    if (enabled) { if (kind === "microphone") await localParticipant.setMicrophoneEnabled(false); else await localParticipant.setCameraEnabled(false); return; }
+    if (await queryMediaPermission(kind) === "denied") { setMediaModal({ kind, state: mediaFailure("blocked", kind) }); return; }
+    if (!(await mediaAlreadyAllowed(kind))) { setMediaModal({ kind, state: { phase: "ask" } }); return; }
+    await enableMedia(kind);
+  }
+  // Called only from the dialog's Allow / Try again button, which is when the browser prompt may appear.
+  async function askMedia(kind: MediaKind) {
+    const attempt = ++mediaAttemptRef.current;
+    setMediaModal({ kind, state: { phase: "waiting" } });
+    const result = await requestMediaAccess(kind);
+    if (attempt !== mediaAttemptRef.current) return;
+    if (result.phase === "granted") await enableMedia(kind); else setMediaModal({ kind, state: result });
+  }
+  useEffect(() => {
+    const onFailure = (event: Event) => {
+      const { failure, kind } = (event as CustomEvent<{ failure?: MediaDeviceFailure; kind?: MediaDeviceKind }>).detail;
+      const media: MediaKind | null = kind === "audioinput" ? "microphone" : kind === "videoinput" ? "camera" : null;
+      if (!media) return;
+      setMediaModal({ kind: media, state: mediaFailure(failure === MediaDeviceFailure.NotFound ? "unavailable" : failure === MediaDeviceFailure.DeviceInUse || failure === MediaDeviceFailure.Other ? "busy" : "blocked", media) });
+    };
+    window.addEventListener("meet-media-failure", onFailure);
+    return () => window.removeEventListener("meet-media-failure", onFailure);
+  }, []);
   async function chooseDevice(kind: "audioinput" | "videoinput", deviceId: string) {
     try {
       await room.switchActiveDevice(kind, deviceId);
@@ -1511,8 +1650,8 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
       </div>
       <div className="room-control-dock">
         <div className="room-control-group room-control-row-a">
-          <div className="room-split-control"><button className={`room-control-button room-split-main ${!isMicrophoneEnabled ? "control-disabled" : ""}`} onClick={() => void localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled)} title={isMicrophoneEnabled ? "Turn microphone off" : "Turn microphone on"}><Mic size={18}/><span>{isMicrophoneEnabled ? "Mic" : "Unmute"}</span></button><button data-popover="audioinput" className="room-control-dropdown" onClick={() => setDeviceMenu(deviceMenu === "audioinput" ? null : "audioinput")} aria-label="Choose microphone" title="Choose microphone"><ChevronDown size={14}/></button>{deviceMenu === "audioinput" && <div data-popover="audioinput" className="room-device-menu">{inputDevices.filter((device) => device.kind === "audioinput").map((device) => <button key={device.deviceId} onClick={() => void chooseDevice("audioinput", device.deviceId)}>{device.label || `Microphone ${device.deviceId.slice(0, 5)}`}</button>)}{inputDevices.filter((device) => device.kind === "audioinput").length === 0 && <span>No microphones found</span>}</div>}</div>
-          <div className="room-split-control"><button className={`room-control-button room-split-main ${!isCameraEnabled ? "control-disabled" : ""}`} onClick={() => void localParticipant.setCameraEnabled(!isCameraEnabled)} title={isCameraEnabled ? "Turn camera off" : "Turn camera on"}><VideoIcon size={18}/><span>{isCameraEnabled ? "Camera" : "Camera off"}</span></button><button data-popover="videoinput" className="room-control-dropdown" onClick={() => setDeviceMenu(deviceMenu === "videoinput" ? null : "videoinput")} aria-label="Choose camera" title="Choose camera"><ChevronDown size={14}/></button>{deviceMenu === "videoinput" && <div data-popover="videoinput" className="room-device-menu">{inputDevices.filter((device) => device.kind === "videoinput").map((device) => <button key={device.deviceId} onClick={() => void chooseDevice("videoinput", device.deviceId)}>{device.label || `Camera ${device.deviceId.slice(0, 5)}`}</button>)}{inputDevices.filter((device) => device.kind === "videoinput").length === 0 && <span>No cameras found</span>}</div>}</div>
+          <div className="room-split-control"><button className={`room-control-button room-split-main ${!isMicrophoneEnabled ? "control-disabled" : ""}`} onClick={() => void toggleMedia("microphone")} title={isMicrophoneEnabled ? "Turn microphone off" : "Turn microphone on"}><Mic size={18}/><span>{isMicrophoneEnabled ? "Mic" : "Unmute"}</span></button><button data-popover="audioinput" className="room-control-dropdown" onClick={() => setDeviceMenu(deviceMenu === "audioinput" ? null : "audioinput")} aria-label="Choose microphone" title="Choose microphone"><ChevronDown size={14}/></button>{deviceMenu === "audioinput" && <div data-popover="audioinput" className="room-device-menu">{inputDevices.filter((device) => device.kind === "audioinput").map((device) => <button key={device.deviceId} onClick={() => void chooseDevice("audioinput", device.deviceId)}>{device.label || `Microphone ${device.deviceId.slice(0, 5)}`}</button>)}{inputDevices.filter((device) => device.kind === "audioinput").length === 0 && <span>No microphones found</span>}</div>}</div>
+          <div className="room-split-control"><button className={`room-control-button room-split-main ${!isCameraEnabled ? "control-disabled" : ""}`} onClick={() => void toggleMedia("camera")} title={isCameraEnabled ? "Turn camera off" : "Turn camera on"}><VideoIcon size={18}/><span>{isCameraEnabled ? "Camera" : "Camera off"}</span></button><button data-popover="videoinput" className="room-control-dropdown" onClick={() => setDeviceMenu(deviceMenu === "videoinput" ? null : "videoinput")} aria-label="Choose camera" title="Choose camera"><ChevronDown size={14}/></button>{deviceMenu === "videoinput" && <div data-popover="videoinput" className="room-device-menu">{inputDevices.filter((device) => device.kind === "videoinput").map((device) => <button key={device.deviceId} onClick={() => void chooseDevice("videoinput", device.deviceId)}>{device.label || `Camera ${device.deviceId.slice(0, 5)}`}</button>)}{inputDevices.filter((device) => device.kind === "videoinput").length === 0 && <span>No cameras found</span>}</div>}</div>
           <button className={`room-control-button ${isScreenShareEnabled ? "control-selected" : ""}`} onClick={() => void localParticipant.setScreenShareEnabled(!isScreenShareEnabled)} title={isScreenShareEnabled ? "Stop sharing screen" : "Share screen"}><MonitorUp size={18}/><span>Share</span></button>
           <button className={`room-control-button ${handRaised ? "control-selected" : ""}`} onClick={() => void toggleHand()} title={handRaised ? "Lower your hand" : "Raise your hand"}><Hand size={18}/><span>{handRaised ? "Lower hand" : "Raise hand"}</span></button>
         </div>
@@ -1522,6 +1661,16 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
         <div className="room-control-side"><button className="room-icon-button fullscreen-control" onClick={() => void toggleFullscreen()} aria-label={fullScreen ? "Exit fullscreen" : "Enter fullscreen"} title={fullScreen ? "Exit fullscreen" : "Fullscreen"}>{fullScreen ? <Minimize2 size={18}/> : <Maximize2 size={18}/>}</button>{role === "host" && <button className="room-icon-button room-end-button" onClick={onEndForEveryone} disabled={ending} title="End for everyone" aria-label="End for everyone"><X size={18}/></button>}<button className="room-leave-button" onClick={onLeave}><DoorOpen size={17}/><span>Leave</span></button></div></div>
       </div>
     </div>
+    {mediaModal && <MediaPermissionModal
+      kind={mediaModal.kind}
+      state={mediaModal.state}
+      skipLabel="Not now"
+      grantedLabel="Turning on…"
+      onRetry={() => void askMedia(mediaModal.kind)}
+      onGranted={() => { mediaAllowed[mediaModal.kind] = true; void enableMedia(mediaModal.kind); }}
+      onSkip={() => { mediaAttemptRef.current++; setMediaModal(null); }}
+      onClose={() => { mediaAttemptRef.current++; setMediaModal(null); }}
+    />}
     {messagesOpen && <div className="messages-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setMessagesOpen(false); }}><section className="messages-modal" role="dialog" aria-modal="true" aria-label="Meeting messages"><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setMessagesOpen(false)} aria-label="Back to call"><ArrowLeft size={18}/></button><div><b>Meeting messages</b><small>Chat with everyone in this room</small></div><button className="room-icon-button" onClick={() => setMessagesOpen(false)} aria-label="Close messages"><X size={18}/></button></header><div className="messages-modal-body">{chatMessages.length === 0 ? <div className="messages-empty"><MessageCircle size={25}/><b>No messages yet</b><span>Send a note to everyone in this gathering.</span></div> : chatMessages.map((message, index) => <article className={`chat-message ${message.from?.identity === localIdentity ? "chat-message-own" : ""}`} key={`${message.timestamp}-${index}`}><span className="chat-message-author">{message.from?.name || (message.from?.identity === localIdentity ? "You" : "Choir guest")}</span><p>{message.message}</p><time>{new Date(message.timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></article>)}<div ref={chatEndRef}/></div><form className="messages-composer" onSubmit={sendMessage}><input value={messageText} onChange={(event) => setMessageText(event.target.value)} placeholder="Write a message…" maxLength={2000} aria-label="Message"/><button className="button button-primary" type="submit" disabled={!messageText.trim() || isSending} aria-label="Send message"><Send size={17}/></button></form></section></div>}
     {role === "host" && <span className="room-host-sr" aria-hidden="true">{meeting.ownerName} is hosting</span>}
   </div>;
@@ -1554,15 +1703,46 @@ function AuthModal({ onClose, onAuthenticated }: { onClose: () => void; onAuthen
 }
 
 const DURATION_OPTIONS = [{ value: "15", label: "15 minutes" }, { value: "30", label: "30 minutes" }, { value: "45", label: "45 minutes" }, { value: "60", label: "1 hour" }, { value: "90", label: "1.5 hours" }, { value: "120", label: "2 hours" }, { value: "180", label: "3 hours" }, { value: "240", label: "4 hours" }];
+// Decides whether a dropdown opens below or above its button, based on the room left inside the modal body / screen.
+function usePopoverDirection(open: boolean, wrapRef: RefObject<HTMLElement | null>, popRef: RefObject<HTMLElement | null>) {
+  const [up, setUp] = useState(false);
+  useLayoutEffect(() => {
+    if (!open) { setUp(false); return; }
+    const place = () => {
+      const wrap = wrapRef.current; const pop = popRef.current;
+      if (!wrap || !pop) return;
+      const trigger = wrap.getBoundingClientRect();
+      const box = wrap.closest<HTMLElement>(".modal-scroll-body")?.getBoundingClientRect();
+      const limitTop = Math.max(0, box?.top ?? 0);
+      const limitBottom = Math.min(window.innerHeight, box?.bottom ?? window.innerHeight);
+      const need = pop.offsetHeight + 14;
+      const below = limitBottom - trigger.bottom;
+      const above = trigger.top - limitTop;
+      const goUp = below < need && above > below;
+      setUp(goUp);
+      if (below < need && above < need) requestAnimationFrame(() => pop.scrollIntoView({ block: "nearest", behavior: "smooth" }));
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [open, wrapRef, popRef]);
+  return up;
+}
 function DurationPicker({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+  const up = usePopoverDirection(open, wrapRef, popRef);
   const selected = DURATION_OPTIONS.find((item) => item.value === value) || DURATION_OPTIONS[3];
-  return <div className="custom-picker-wrap"><button type="button" className="custom-picker-trigger" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)}><Clock3 size={16}/><span>{selected.label}</span><ChevronRight size={15} className={open ? "picker-chevron-open" : "picker-chevron"}/></button>{open && <><button className="picker-dismiss" aria-label="Close duration options" onClick={() => setOpen(false)}/><div className="custom-picker-menu duration-picker-menu" role="listbox" aria-label="Meeting duration">{DURATION_OPTIONS.map((option) => <button type="button" key={option.value} role="option" aria-selected={value === option.value} className={value === option.value ? "custom-picker-option picker-option-active" : "custom-picker-option"} onClick={() => { onChange(option.value); setOpen(false); }}>{option.label}{value === option.value && <Check size={15}/>}</button>)}</div></>}</div>;
+  return <div className="custom-picker-wrap" ref={wrapRef}><button type="button" className="custom-picker-trigger" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)}><Clock3 size={16}/><span>{selected.label}</span><ChevronRight size={15} className={open ? "picker-chevron-open" : "picker-chevron"}/></button>{open && <><button className="picker-dismiss" aria-label="Close duration options" onClick={() => setOpen(false)}/><div ref={popRef} className={`custom-picker-menu duration-picker-menu ${up ? "popover-up" : ""}`} role="listbox" aria-label="Meeting duration">{DURATION_OPTIONS.map((option) => <button type="button" key={option.value} role="option" aria-selected={value === option.value} className={value === option.value ? "custom-picker-option picker-option-active" : "custom-picker-option"} onClick={() => { onChange(option.value); setOpen(false); }}>{option.label}{value === option.value && <Check size={15}/>}</button>)}</div></>}</div>;
 }
 function TimePicker({ value, datePart, onChange }: { value: string; datePart: string; onChange: (value: string) => void }) {
   const [open, setOpen] = useState(false);
   const hourRef = useRef<HTMLDivElement>(null);
   const minuteRef = useRef<HTMLDivElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+  const up = usePopoverDirection(open, wrapRef, popRef);
   const [h24, minute] = (value || "12:00").split(":").map((part) => Number(part) || 0);
   const period = h24 >= 12 ? "PM" : "AM";
   const hour12 = h24 % 12 === 0 ? 12 : h24 % 12;
@@ -1580,20 +1760,23 @@ function TimePicker({ value, datePart, onChange }: { value: string; datePart: st
     });
   }, [open]);
   const label = new Date(`2000-01-01T${pad(h24)}:${pad(minute)}:00`).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  return <div className="custom-picker-wrap time-picker-wrap"><button type="button" className="custom-picker-trigger" aria-haspopup="dialog" aria-expanded={open} aria-label="Meeting time" onClick={() => setOpen((current) => !current)}><Clock3 size={16}/><span>{label}</span><ChevronRight size={15} className={open ? "picker-chevron-open" : "picker-chevron"}/></button>{open && <><button type="button" className="picker-dismiss" aria-label="Close time picker" onClick={() => setOpen(false)}/><div className="custom-calendar-popover time-popover" role="dialog" aria-label="Choose time"><div className="time-columns"><div className="time-column" ref={hourRef} role="listbox" aria-label="Hour">{Array.from({ length: 12 }, (_, index) => index + 1).map((h) => <button type="button" key={h} role="option" aria-selected={h === hour12} disabled={isPast(to24(h, period), 59)} className={h === hour12 ? "time-option time-option-active" : "time-option"} onClick={() => emit(to24(h, period), minute)}>{pad(h)}</button>)}</div><div className="time-column" ref={minuteRef} role="listbox" aria-label="Minute">{Array.from({ length: 60 }, (_, index) => index).map((m) => <button type="button" key={m} role="option" aria-selected={m === minute} disabled={isPast(h24, m)} className={m === minute ? "time-option time-option-active" : "time-option"} onClick={() => emit(h24, m)}>{pad(m)}</button>)}</div><div className="time-column time-column-period" role="listbox" aria-label="AM or PM">{["AM", "PM"].map((p) => <button type="button" key={p} role="option" aria-selected={p === period} disabled={isPast(to24(hour12, p), 59)} className={p === period ? "time-option time-option-active" : "time-option"} onClick={() => emit(to24(hour12, p), minute)}>{p}</button>)}</div></div><button type="button" className="button button-primary time-done" onClick={() => setOpen(false)}>Done</button></div></>}</div>;
+  return <div className="custom-picker-wrap time-picker-wrap" ref={wrapRef}><button type="button" className="custom-picker-trigger" aria-haspopup="dialog" aria-expanded={open} aria-label="Meeting time" onClick={() => setOpen((current) => !current)}><Clock3 size={16}/><span>{label}</span><ChevronRight size={15} className={open ? "picker-chevron-open" : "picker-chevron"}/></button>{open && <><button type="button" className="picker-dismiss" aria-label="Close time picker" onClick={() => setOpen(false)}/><div ref={popRef} className={`custom-calendar-popover time-popover ${up ? "popover-up" : ""}`} role="dialog" aria-label="Choose time"><div className="time-columns"><div className="time-column" ref={hourRef} role="listbox" aria-label="Hour">{Array.from({ length: 12 }, (_, index) => index + 1).map((h) => <button type="button" key={h} role="option" aria-selected={h === hour12} disabled={isPast(to24(h, period), 59)} className={h === hour12 ? "time-option time-option-active" : "time-option"} onClick={() => emit(to24(h, period), minute)}>{pad(h)}</button>)}</div><div className="time-column" ref={minuteRef} role="listbox" aria-label="Minute">{Array.from({ length: 60 }, (_, index) => index).map((m) => <button type="button" key={m} role="option" aria-selected={m === minute} disabled={isPast(h24, m)} className={m === minute ? "time-option time-option-active" : "time-option"} onClick={() => emit(h24, m)}>{pad(m)}</button>)}</div><div className="time-column time-column-period" role="listbox" aria-label="AM or PM">{["AM", "PM"].map((p) => <button type="button" key={p} role="option" aria-selected={p === period} disabled={isPast(to24(hour12, p), 59)} className={p === period ? "time-option time-option-active" : "time-option"} onClick={() => emit(to24(hour12, p), minute)}>{p}</button>)}</div></div><button type="button" className="button button-primary time-done" onClick={() => setOpen(false)}>Done</button></div></>}</div>;
 }
 function CustomDateTimePicker({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   const datePart = value.slice(0, 10);
   const timePart = value.slice(11, 16) || "12:00";
   const selectedDate = new Date(`${datePart || localDateTimeValue(new Date()).slice(0, 10)}T12:00:00`);
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const calendarWrapRef = useRef<HTMLDivElement>(null);
+  const calendarPopRef = useRef<HTMLDivElement>(null);
+  const calendarUp = usePopoverDirection(calendarOpen, calendarWrapRef, calendarPopRef);
   const [shownMonth, setShownMonth] = useState(new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1));
   useEffect(() => { setShownMonth(new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1)); }, [datePart]);
   const firstDay = new Date(shownMonth.getFullYear(), shownMonth.getMonth(), 1).getDay();
   const dayCount = new Date(shownMonth.getFullYear(), shownMonth.getMonth() + 1, 0).getDate();
   const today = localDateTimeValue(new Date()).slice(0, 10);
   const updateDate = (date: string) => onChange(`${date}T${timePart}`);
-  return <div className="custom-datetime"><div className="custom-datetime-row"><div className="custom-picker-wrap date-picker-wrap"><button type="button" className="custom-picker-trigger" onClick={() => setCalendarOpen((current) => !current)} aria-expanded={calendarOpen}><CalendarDays size={16}/><span>{selectedDate.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</span><ChevronRight size={15} className={calendarOpen ? "picker-chevron-open" : "picker-chevron"}/></button>{calendarOpen && <><button className="picker-dismiss" aria-label="Close calendar" onClick={() => setCalendarOpen(false)}/><div className="custom-calendar-popover"><div className="calendar-month-row"><button type="button" className="room-icon-button" onClick={() => setShownMonth(new Date(shownMonth.getFullYear(), shownMonth.getMonth() - 1, 1))} aria-label="Previous month"><ChevronLeft size={16}/></button><b>{shownMonth.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</b><button type="button" className="room-icon-button" onClick={() => setShownMonth(new Date(shownMonth.getFullYear(), shownMonth.getMonth() + 1, 1))} aria-label="Next month"><ChevronRight size={16}/></button></div><div className="calendar-weekdays">{["S", "M", "T", "W", "T", "F", "S"].map((day, index) => <span key={`${day}-${index}`}>{day}</span>)}</div><div className="calendar-days">{Array.from({ length: firstDay }, (_, index) => <span key={`blank-${index}`}/>)}{Array.from({ length: dayCount }, (_, index) => { const day = index + 1; const date = `${shownMonth.getFullYear()}-${String(shownMonth.getMonth() + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`; const isPast = date < today; return <button type="button" key={date} disabled={isPast} className={`${date === datePart ? "calendar-day-active" : ""} ${date === today ? "calendar-day-today" : ""}`} onClick={() => { updateDate(date); setCalendarOpen(false); }}>{day}</button>; })}</div></div></>}</div><TimePicker value={timePart} datePart={datePart} onChange={(time) => onChange(`${datePart}T${time}`)} /></div><input className="visually-hidden-date-value" type="datetime-local" value={value} onChange={(event) => onChange(event.target.value)} min={localDateTimeValue(new Date(Date.now() - 60_000))} tabIndex={-1} aria-hidden="true"/></div>;
+  return <div className="custom-datetime"><div className="custom-datetime-row"><div className="custom-picker-wrap date-picker-wrap" ref={calendarWrapRef}><button type="button" className="custom-picker-trigger" onClick={() => setCalendarOpen((current) => !current)} aria-expanded={calendarOpen}><CalendarDays size={16}/><span>{selectedDate.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</span><ChevronRight size={15} className={calendarOpen ? "picker-chevron-open" : "picker-chevron"}/></button>{calendarOpen && <><button className="picker-dismiss" aria-label="Close calendar" onClick={() => setCalendarOpen(false)}/><div ref={calendarPopRef} className={`custom-calendar-popover ${calendarUp ? "popover-up" : ""}`}><div className="calendar-month-row"><button type="button" className="room-icon-button" onClick={() => setShownMonth(new Date(shownMonth.getFullYear(), shownMonth.getMonth() - 1, 1))} aria-label="Previous month"><ChevronLeft size={16}/></button><b>{shownMonth.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</b><button type="button" className="room-icon-button" onClick={() => setShownMonth(new Date(shownMonth.getFullYear(), shownMonth.getMonth() + 1, 1))} aria-label="Next month"><ChevronRight size={16}/></button></div><div className="calendar-weekdays">{["S", "M", "T", "W", "T", "F", "S"].map((day, index) => <span key={`${day}-${index}`}>{day}</span>)}</div><div className="calendar-days">{Array.from({ length: firstDay }, (_, index) => <span key={`blank-${index}`}/>)}{Array.from({ length: dayCount }, (_, index) => { const day = index + 1; const date = `${shownMonth.getFullYear()}-${String(shownMonth.getMonth() + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`; const isPast = date < today; return <button type="button" key={date} disabled={isPast} className={`${date === datePart ? "calendar-day-active" : ""} ${date === today ? "calendar-day-today" : ""}`} onClick={() => { updateDate(date); setCalendarOpen(false); }}>{day}</button>; })}</div></div></>}</div><TimePicker value={timePart} datePart={datePart} onChange={(time) => onChange(`${datePart}T${time}`)} /></div><input className="visually-hidden-date-value" type="datetime-local" value={value} onChange={(event) => onChange(event.target.value)} min={localDateTimeValue(new Date(Date.now() - 60_000))} tabIndex={-1} aria-hidden="true"/></div>;
 }
 
 function ScheduleModal({ instant, onClose, onCreated }: { instant: boolean; onClose: () => void; onCreated: (meeting: Meeting, shareUrl: string) => void }) {
@@ -1646,7 +1829,7 @@ function ScheduleModal({ instant, onClose, onCreated }: { instant: boolean; onCl
   }
 
   return <Modal onClose={onClose} solidTop>
-    {!created ? <div className="schedule-modal-content"><div className="modal-scroll-body"><div className="modal-heading-row"><span className="modal-brand-icon"><CalendarClock size={22}/></span><button className="icon-button" onClick={onClose} aria-label="Close dialog"><X size={19}/></button></div><p className="section-overline">MAKE IT A MOMENT TO REMEMBER</p><h2>{instant ? "Start a gathering now." : "Plan your next gathering."}</h2><p className="modal-subtitle">{instant ? "Create a room, then share the invitation with your choir." : "Set a time and send everyone one simple link to join."}</p>
+    {!created ? <div className="schedule-modal-content"><div className="modal-heading-row"><span className="modal-brand-icon"><CalendarClock size={22}/></span><button className="icon-button" onClick={onClose} aria-label="Close dialog"><X size={19}/></button></div><div className="modal-scroll-body"><p className="section-overline">MAKE IT A MOMENT TO REMEMBER</p><h2>{instant ? "Start a gathering now." : "Plan your next gathering."}</h2><p className="modal-subtitle">{instant ? "Create a room, then share the invitation with your choir." : "Set a time and send everyone one simple link to join."}</p>
       <form id="schedule-form" onSubmit={submit} className="form-stack schedule-form">
         <label className="field-label">Meeting title<input value={title} onChange={(event) => setTitle(event.target.value)} minLength={3} maxLength={120} placeholder="e.g. Wednesday prayer meeting" required/></label>
         <label className="field-label">Description <span className="optional-label">OPTIONAL</span><textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} maxLength={1000} placeholder="Add a short note to help people know what this gathering is for."/></label>

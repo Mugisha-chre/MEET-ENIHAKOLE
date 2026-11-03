@@ -1029,15 +1029,20 @@ html.is-scrolling .meeting-card:hover { transform: translateZ(0); box-shadow: no
 
 /* ===== Create-meeting modal refinements ===== */
 .schedule-modal-content { --sm-pad-x: clamp(22px, 4vw, 34px); padding: 0 var(--sm-pad-x) 0; }
-.schedule-modal-content .modal-heading-row { top: 0; margin: 0 calc(-1 * var(--sm-pad-x)) 14px; padding: 8px var(--sm-pad-x) 8px; background: #fff; border-bottom: 1px solid #f0e4e7; }
-.schedule-modal-content .modal-heading-row .icon-button { color: #5a3947; border-color: #e5d5cf; background: #fff; }
-.schedule-modal-content .modal-heading-row .icon-button:hover { color: #8f2141; background: #f8e9ed; }
+.schedule-modal-content .modal-heading-row { top: 0; margin: 0 calc(-1 * var(--sm-pad-x)) 14px; padding: 8px var(--sm-pad-x) 8px; background: #1c1318; border-bottom: 1px solid var(--line); }
+.schedule-modal-content .modal-heading-row .icon-button { color: #d9c3ca; border-color: rgba(248,234,235,.14); background: transparent; }
+.schedule-modal-content .modal-heading-row .icon-button:hover { color: #fff4f3; background: rgba(255,255,255,.07); }
+:root[data-theme="light"] .schedule-modal-content .modal-heading-row { background: #fffdfa; border-bottom-color: #f0e4e7; }
+:root[data-theme="light"] .schedule-modal-content .modal-heading-row .icon-button { color: #5a3947; border-color: #e5d5cf; background: #fff; }
+:root[data-theme="light"] .schedule-modal-content .modal-heading-row .icon-button:hover { color: #8f2141; background: #f8e9ed; }
 .schedule-modal-content .modal-brand-icon { width: 38px; height: 38px; border-radius: 12px; }
 .schedule-modal-content > form { padding-bottom: 0; }
 .schedule-modal-content .schedule-modal-footer { position: sticky; bottom: 0; z-index: 4; margin: 14px calc(-1 * var(--sm-pad-x)) 0; padding: 12px var(--sm-pad-x) calc(12px + env(safe-area-inset-bottom)); background: #1c1318; }
 :root[data-theme="light"] .schedule-modal-content .schedule-modal-footer { background: #fffdfa; }
-.modal-panel-solid-top .modal-drag-handle { background: #fff; min-height: 0; padding: 8px 0 0; }
-.modal-panel-solid-top .modal-drag-handle span { background: #cdb8bf; }
+.modal-panel-solid-top .modal-drag-handle { background: #1c1318; min-height: 0; padding: 8px 0 0; }
+.modal-panel-solid-top .modal-drag-handle span { background: #6f5a63; }
+:root[data-theme="light"] .modal-panel-solid-top .modal-drag-handle { background: #fffdfa; }
+:root[data-theme="light"] .modal-panel-solid-top .modal-drag-handle span { background: #cdb8bf; }
 .modal-drag-handle, .modal-heading-row { touch-action: none; }
 .modal-panel { will-change: transform; }
 
@@ -1525,3 +1530,43 @@ html.is-scrolling .meeting-card:hover { transform: translateZ(0); box-shadow: no
 .room-ready-card > svg { color: #e8ca91; margin-top: 4px; }
 .room-ready-mark { width: 58px; height: 58px; display: grid; place-items: center; border-radius: 18px; color: #fff; background: linear-gradient(145deg, #a92b4e, #7a1a37); box-shadow: 0 14px 36px rgba(0,0,0,.35), inset 0 0 0 1px rgba(255,255,255,.14); animation: mic-orb-breathe 2s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .room-ready-overlay { transition: none; } .room-ready-mark { animation: none; } }
+
+/* ===== Update round 7: edge-to-edge scrollbar, install button spacing, themed modal header, picker placement, media permission modal ===== */
+
+/* 1) The page scroller spans the full width, so its scrollbar sits at the screen edge on very wide monitors; the 1600px content column is centred with padding instead. */
+@media (min-width: 1201px) {
+  .main-content { max-width: none; margin: 0; padding-left: max(clamp(24px, 4vw, 56px), calc((100% - 1600px) / 2 + clamp(24px, 4vw, 56px))); padding-right: max(clamp(24px, 4vw, 56px), calc((100% - 1600px) / 2 + clamp(24px, 4vw, 56px))); }
+}
+
+/* 2) Install button clears the scrollbar and the footer text; on phones it sits above the bottom nav and goes under the open sidebar. */
+.pwa-install { right: 40px; bottom: 98px; }
+.pwa-install.pwa-install-no-nav { right: 40px; bottom: calc(24px + env(safe-area-inset-bottom)); }
+@media (max-width: 720px) {
+  .pwa-install { right: 14px; bottom: calc(66px + env(safe-area-inset-bottom) + 16px); z-index: 20; }
+  .pwa-install.pwa-install-no-nav { right: 14px; bottom: calc(16px + env(safe-area-inset-bottom)); }
+  html.mobile-nav-open .pwa-install { opacity: 0; visibility: hidden; pointer-events: none; }
+}
+
+/* 3) Create-meeting modal: the header stays fixed above the scrolling body (the scrollbar starts under it) and follows the theme. */
+.schedule-modal-content > .modal-heading-row { flex: 0 0 auto; position: static; margin: 0; padding: 12px var(--sm-pad-x) 12px; background: #1c1318; border-bottom: 1px solid var(--line); }
+:root[data-theme="light"] .schedule-modal-content > .modal-heading-row { background: #fffdfa; border-bottom-color: #f0e4e7; }
+.schedule-modal-content > .modal-scroll-body { padding-top: 16px; }
+.modal-panel-solid-top .modal-drag-handle { padding-bottom: 6px; }
+
+/* 4) Pickers open upward when there is not enough room below. */
+.custom-picker-menu.popover-up, .custom-calendar-popover.popover-up { top: auto; bottom: calc(100% + 7px); }
+
+/* 5) Active time keeps a dark red on hover (never white). */
+.time-option.time-option-active:hover:not(:disabled),
+:root[data-theme="light"] .time-option.time-option-active:hover:not(:disabled) { color: #fff; background: #6b1230; border-color: #8f2141; }
+.calendar-days button.calendar-day-active:hover:not(:disabled),
+:root[data-theme="light"] .calendar-days button.calendar-day-active:hover:not(:disabled) { color: #fff !important; background: #6b1230; border-color: #8f2141; }
+
+/* 6) Media permission modal: allowed state. */
+.mic-modal-status-ok { color: #8ab49a; }
+:root[data-theme="light"] .mic-modal-status-ok { color: #2f7a52; }
+.mic-modal-help { margin: 12px auto 0; max-width: 320px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; color: #a89299; font-size: 11.5px; line-height: 1.55; text-align: left; }
+:root[data-theme="light"] .mic-modal-help { color: #7a666d; }
+
+/* 7) Room cover while the room finishes drawing: plain stage, no words. */
+.room-ready-overlay .room-ready-spinner { color: #e8ca91; opacity: .85; }
