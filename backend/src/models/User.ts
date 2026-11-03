@@ -7,6 +7,8 @@ const userSchema = new mongoose.Schema(
     passwordHash: { type: String, select: false },
     googleId: { type: String, trim: true, maxlength: 80, unique: true, sparse: true, index: true },
     picture: { type: String, trim: true, maxlength: 600, default: "" },
+    platformRole: { type: String, enum: ["member", "system_admin"], default: "member", index: true },
+    accountStatus: { type: String, enum: ["active", "suspended"], default: "active", index: true },
   },
   { timestamps: true, versionKey: false },
 );

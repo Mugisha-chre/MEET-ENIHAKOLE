@@ -159,7 +159,7 @@ export function ProfilePhoto({ src, name, className = "", size = 256 }: { src?: 
   const [state, setState] = useState<"loading" | "ready" | "error">(() => !url ? "error" : loadedPhotos.has(url) ? "ready" : "loading");
   useEffect(() => { setState(!url ? "error" : loadedPhotos.has(url) ? "ready" : "loading"); }, [url]);
   const words = name.replace(/[<>]/g, "").trim().split(/\s+/).filter(Boolean);
-  const initials = (words.length === 1 ? Array.from(words[0]).slice(0, 2) : words.length ? [Array.from(words[0])[0], Array.from(words[1])[0]] : []).join("").toUpperCase();
+  const initials = (words.length === 1 ? Array.from(words[0]).slice(0, 2) : words.length ? [Array.from(words[0])[0], Array.from(words[words.length - 1])[0]] : []).join("").toUpperCase();
   const markReady = () => { loadedPhotos.add(url); setState("ready"); };
   const spinner = <span className="profile-photo-spinner" aria-hidden="true"><LoaderCircle className="spin"/></span>;
   return <span className={`profile-photo ${state === "loading" ? "profile-photo-loading" : ""} ${className}`}>

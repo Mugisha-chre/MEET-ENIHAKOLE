@@ -9,11 +9,12 @@ import {
   Link2, LoaderCircle, LogIn, LogOut, Menu, Mic, Plus, Share2, ShieldCheck,
   Sparkles, Users, Video, VideoIcon, VideoOff, X, Sun, Moon, MessageCircle,
   Hand, Send, MonitorUp, MicOff, Maximize2, Minimize2, ChevronLeft, ChevronRight, Smile, ChevronDown, Download,
-  MousePointer2, MoveUpRight, Eraser, Eye, EyeOff, PenLine,
+  MousePointer2, MoveUpRight, Eraser, Eye, EyeOff, PenLine, Undo2,
 } from "lucide-react";
-import { api, ApiError, clearAuthToken, getAuthToken, saveAuthToken } from "./api";
+import { api, ApiError, clearAuthToken, getAuthToken, getRegisteredAuthToken, getGuestProfile, saveAuthToken, saveGuestAuthToken } from "./api";
+import { AdminCenterPage, RecordingsPage } from "./ManagementPages";
 import { clearCachePrefix, patchCache, readCache, removeCache, writeCache } from "./cache";
-import type { JoinSession, Meeting, User } from "./types";
+import type { JoinSession, Meeting, PrivateConversationSummary, PrivateMessage, User } from "./types";
 import { GoogleContinueButton, ProfilePhoto, googleSignOut, preloadPhoto, preloadPhotoBriefly } from "./google";
 
 interface AppContextValue {
@@ -44,6 +45,12 @@ function storedThemeChoice(): "light" | "dark" | null {
 }
 function getInitialTheme(): "light" | "dark" {
   return storedThemeChoice() ?? systemTheme();
+}
+let activeRoomSlugInApp: string | null = null;
+function roomSlugFromPath(pathname: string): string | null {
+  const match = pathname.match(/^\/room\/([^/]+)\/?$/);
+  if (!match) return null;
+  try { return decodeURIComponent(match[1]); } catch { return match[1]; }
 }
 function useAppContext(): AppContextValue {
   const value = useContext(AppContext);
@@ -91,12 +98,13 @@ function getMeetingStateLabel(meeting: Meeting) {
 }
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(() => getAuthToken() ? (readCache<User>("user")?.value ?? null) : null);
+  const [user, setUser] = useState<User | null>(() => getRegisteredAuthToken() ? (readCache<User>("user")?.value ?? null) : null);
   const [theme, setTheme] = useState<"light" | "dark">(getInitialTheme);
-  const [meetings, setMeetings] = useState<Meeting[]>(() => getAuthToken() ? (readCache<Meeting[]>("mine")?.value ?? []) : []);
+  const [meetings, setMeetings] = useState<Meeting[]>(() => getRegisteredAuthToken() ? (readCache<Meeting[]>("mine")?.value ?? []) : []);
   const [publicMeetings, setPublicMeetings] = useState<Meeting[]>(() => readCache<Meeting[]>("public")?.value ?? []);
-  const [loadingMeetings, setLoadingMeetings] = useState(() => !readCache("public") && !(getAuthToken() && readCache("mine")));
+  const [loadingMeetings, setLoadingMeetings] = useState(() => !readCache("public") && !(getRegisteredAuthToken() && readCache("mine")));
   const lastMeetingsFetch = useRef(0);
+  const initialPageLoad = useRef(true);
   const [clock, setClock] = useState(() => Date.now());
   const [authOpen, setAuthOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
@@ -104,6 +112,68 @@ export default function App() {
   const [scheduleAfterAuth, setScheduleAfterAuth] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const location = useLocation();
+  // Keep the LiveKit room mounted outside the route tree so browsing other
+  // parts of this SPA does not unmount the media session.
+  const [activeRoomSlug, setActiveRoomSlug] = useState<string | null>(() => {
+    activeRoomSlugInApp = roomSlugFromPath(location.pathname);
+    return activeRoomSlugInApp;
+  });
+  const activeRoomVisible = activeRoomSlug !== null && roomSlugFromPath(location.pathname) === activeRoomSlug;
+
+  useEffect(() => {
+    const pageLoad = initialPageLoad.current;
+    initialPageLoad.current = false;
+    // Keep meeting identifiers out of analytics while still counting meeting-page traffic.
+    const analyticsPath = location.pathname.replace(/^\/(room|meeting)\/[^/]+\/?$/, "/$1/:meeting");
+    void api.pageView(analyticsPath, pageLoad).catch(() => undefined);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (!user) return;
+    void api.sessionHeartbeat().catch(() => undefined);
+    const heartbeat = window.setInterval(() => {
+      if (document.visibilityState === "visible") void api.sessionHeartbeat().catch(() => undefined);
+    }, 60_000);
+    return () => window.clearInterval(heartbeat);
+  }, [user?.id]);
+
+  useEffect(() => {
+    const onRoomOpened = (event: Event) => {
+      const detail = (event as CustomEvent<{ slug?: string }>).detail;
+      if (typeof detail?.slug === "string" && detail.slug) {
+        activeRoomSlugInApp = detail.slug;
+        setActiveRoomSlug(detail.slug);
+      }
+    };
+    const onRoomClosed = (event: Event) => {
+      const slug = (event as CustomEvent<{ slug?: string }>).detail?.slug;
+      if (typeof slug !== "string" || !slug) return;
+      if (activeRoomSlugInApp === slug) activeRoomSlugInApp = null;
+      setActiveRoomSlug((current) => current === slug ? null : current);
+    };
+    window.addEventListener("meet-room-opened", onRoomOpened);
+    window.addEventListener("meet-room-closed", onRoomClosed);
+    return () => {
+      window.removeEventListener("meet-room-opened", onRoomOpened);
+      window.removeEventListener("meet-room-closed", onRoomClosed);
+    };
+  }, []);
+
+  useEffect(() => {
+    const routeSlug = roomSlugFromPath(location.pathname);
+    if (routeSlug) {
+      activeRoomSlugInApp = routeSlug;
+      setActiveRoomSlug(routeSlug);
+    }
+  }, [location.pathname]);
+
+  useEffect(() => {
+    const previousRestoration = window.history.scrollRestoration;
+    try { window.history.scrollRestoration = "manual"; } catch { /* Unsupported by older browsers. */ }
+    return () => {
+      try { window.history.scrollRestoration = previousRestoration; } catch { /* Ignore unsupported history controls. */ }
+    };
+  }, []);
 
   const toggleTheme = useCallback(() => {
     setTheme((current) => {
@@ -139,28 +209,16 @@ export default function App() {
     if (themeColor) themeColor.content = theme === "light" ? "#fbf7f2" : "#130d10";
   }, [theme]);
 
-  // Returning to the page (from another app, a closed call, or a focused field) must never leave it zoomed in.
-  useEffect(() => {
-    const settle = () => { window.requestAnimationFrame(resetViewportZoom); window.setTimeout(resetViewportZoom, 250); };
-    const onVisible = () => { if (document.visibilityState === "visible") settle(); };
-    const onFocusOut = (event: FocusEvent) => { if (event.target instanceof HTMLElement && /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName)) settle(); };
-    document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("pageshow", settle);
-    window.addEventListener("orientationchange", settle);
-    document.addEventListener("focusout", onFocusOut);
-    return () => { document.removeEventListener("visibilitychange", onVisible); window.removeEventListener("pageshow", settle); window.removeEventListener("orientationchange", settle); document.removeEventListener("focusout", onFocusOut); };
-  }, []);
-
   // Cache-first: cached lists render instantly, then refresh quietly in the background (skipped if fetched moments ago).
   const refreshMeetings = useCallback(async (force = false) => {
     if (!force && Date.now() - lastMeetingsFetch.current < 30_000) return;
     lastMeetingsFetch.current = Date.now();
-    if (getAuthToken() && !readCache("mine")) setLoadingMeetings(true);
+    if (getRegisteredAuthToken() && !readCache("mine")) setLoadingMeetings(true);
     const [mineResult, publicResult] = await Promise.allSettled([
-      getAuthToken() ? api.myMeetings() : Promise.resolve({ meetings: [] as Meeting[] }),
+      getRegisteredAuthToken() ? api.myMeetings() : Promise.resolve({ meetings: [] as Meeting[] }),
       api.publicMeetings(),
     ]);
-    if (mineResult.status === "fulfilled") { setMeetings(mineResult.value.meetings); if (getAuthToken()) writeCache("mine", mineResult.value.meetings); }
+    if (mineResult.status === "fulfilled") { setMeetings(mineResult.value.meetings); if (getRegisteredAuthToken()) writeCache("mine", mineResult.value.meetings); }
     else lastMeetingsFetch.current = 0;
     if (publicResult.status === "fulfilled") { setPublicMeetings(publicResult.value.meetings); writeCache("public", publicResult.value.meetings); }
     else lastMeetingsFetch.current = 0;
@@ -187,7 +245,7 @@ export default function App() {
     const initialize = async () => {
       // Lists and the profile load in parallel; cached copies are already on screen.
       const listsLoad = refreshMeetings(true);
-      if (getAuthToken()) {
+      if (getRegisteredAuthToken()) {
         try {
           const result = await api.me();
           if (!cancelled) { setUser(result.user); writeCache("user", result.user); }
@@ -233,6 +291,7 @@ export default function App() {
     void refreshMeetings(true);
   }, [scheduleAfterAuth, refreshMeetings]);
   const signOut = useCallback(() => {
+    void api.logout().catch(() => undefined);
     googleSignOut();
     clearAuthToken();
     removeCache("user"); removeCache("mine"); clearCachePrefix("meeting:");
@@ -256,14 +315,18 @@ export default function App() {
 
   return (
     <AppContext.Provider value={contextValue}>
+      <RouteScrollReset />
       <Routes>
         <Route path="/" element={<AppShell mobileNavOpen={mobileNavOpen} setMobileNavOpen={setMobileNavOpen}><Dashboard /></AppShell>} />
         <Route path="/meetings" element={<AppShell mobileNavOpen={mobileNavOpen} setMobileNavOpen={setMobileNavOpen}><MeetingsPage /></AppShell>} />
+        <Route path="/recordings" element={<AppShell mobileNavOpen={mobileNavOpen} setMobileNavOpen={setMobileNavOpen}>{getAuthToken() ? <RecordingsPage /> : <Navigate to="/" replace />}</AppShell>} />
+        <Route path="/admin" element={<AppShell mobileNavOpen={mobileNavOpen} setMobileNavOpen={setMobileNavOpen}>{user?.isAdmin ? <AdminCenterPage /> : <Navigate to="/" replace />}</AppShell>} />
         <Route path="/share/:slug" element={<ShareRedirect />} />
         <Route path="/meeting/:slug" element={<MeetingPage />} />
-        <Route path="/room/:slug" element={<MeetingRoomPage />} />
+        <Route path="/room/:slug" element={null} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      {activeRoomSlug && <MeetingRoomPage key={activeRoomSlug} slug={activeRoomSlug} isActive={activeRoomVisible}/>}
       {authOpen && <AuthModal onClose={() => { setAuthOpen(false); setScheduleAfterAuth(false); }} onAuthenticated={completeAuth} />}
       {scheduleOpen && <ScheduleModal instant={instantMode} onClose={() => setScheduleOpen(false)} onCreated={(meeting) => {
         const merge = (list: Meeting[]) => [meeting, ...list.filter((item) => item.slug !== meeting.slug)];
@@ -334,10 +397,31 @@ function InstallPwaButton({ inline = false }: { inline?: boolean }) {
   );
 }
 
+function RouteScrollReset() {
+  const location = useLocation();
+  useLayoutEffect(() => {
+    // Every route transition starts at the beginning of the destination page.
+    // This intentionally includes browser back/forward (POP) navigation so a
+    // previously scrolled page never reopens halfway down.
+    window.scrollTo(0, 0);
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+    document.querySelectorAll<HTMLElement>(".main-content").forEach((element) => {
+      element.scrollTop = 0;
+      element.scrollLeft = 0;
+    });
+    document.querySelectorAll<HTMLElement>(".conference-page, .standalone-state").forEach((element) => {
+      element.scrollTop = 0;
+      element.scrollLeft = 0;
+    });
+  }, [location.key, location.pathname]);
+  return null;
+}
+
 function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: ReactNode; mobileNavOpen: boolean; setMobileNavOpen: (v: boolean) => void }) {
   const { user, openAuth, openSchedule, signOut } = useAppContext();
   const location = useLocation();
-  const active = location.pathname === "/meetings" ? "meetings" : "home";
+  const active = location.pathname === "/meetings" ? "meetings" : location.pathname === "/recordings" ? "recordings" : location.pathname === "/admin" ? "admin" : "home";
   useEffect(() => {
     let start: { x: number; y: number } | null = null;
     const blocked = (target: EventTarget | null) => {
@@ -394,6 +478,8 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
         <nav className="side-navigation" aria-label="Main navigation">
           <Link to="/" className={`side-link ${active === "home" ? "side-link-active" : ""}`}><Home size={18} /><span>Home</span></Link>
           <Link to="/meetings" className={`side-link ${active === "meetings" ? "side-link-active" : ""}`}><CalendarDays size={18} /><span>My meetings</span></Link>
+          {getAuthToken() && <Link to="/recordings" className={`side-link ${active === "recordings" ? "side-link-active" : ""}`}><Video size={18} /><span>Recordings</span></Link>}
+          {user?.isAdmin && <Link to="/admin" className={`side-link ${active === "admin" ? "side-link-active" : ""}`}><ShieldCheck size={18} /><span>Admin center</span></Link>}
         </nav>
         <div className="sidebar-bottom">
           {user && <div className="sidebar-account"><ProfilePhoto className="sidebar-account-photo" src={user.picture} name={user.displayName} size={160}/><span><b title={user.displayName}>{user.displayName}</b><small title={user.email}>{user.email}</small></span><button type="button" className="sidebar-signout" onClick={() => { setMobileNavOpen(false); signOut(); }} title="Sign out" aria-label="Sign out"><LogOut size={16}/><span>Sign out</span></button></div>}
@@ -405,7 +491,7 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
       <div className="main-shell">
         <header className="topbar">
           <button className="icon-button mobile-menu-button" aria-label="Open navigation" onClick={() => setMobileNavOpen(!mobileNavOpen)}><Menu size={20} /></button>
-          <div className="breadcrumb"><span>ENIHAKOLE CHOIR</span><span className="breadcrumb-slash">/</span><strong>{active === "meetings" ? "My meetings" : "Workspace"}</strong></div>
+          <div className="breadcrumb"><span>ENIHAKOLE CHOIR</span><span className="breadcrumb-slash">/</span><strong>{active === "meetings" ? "My meetings" : active === "recordings" ? "Recordings" : active === "admin" ? "System admin" : "Workspace"}</strong></div>
           <div className="topbar-actions">
             <button className="topbar-help" onClick={() => window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Use Start instant meeting for an immediate call, or Schedule a meeting to share a future invitation." } }))}><CircleHelp size={16} /><span>Need help?</span></button>
             <ThemeToggle />
@@ -559,6 +645,7 @@ function MeetingPage() {
   const cacheKey = `meeting:${user?.id ?? "guest"}:${slug}`;
   const [meeting, setMeeting] = useState<Meeting | null>(() => readCache<Meeting>(cacheKey)?.value ?? [...knownMeetings, ...knownPublic].find((item) => item.slug === slug) ?? null);
   const [cameraOn, setCameraOn] = useState(false);
+  const [guestName, setGuestName] = useState(() => getGuestProfile(slug)?.displayName || "");
   const [micOn, setMicOn] = useState(true);
   const [loading, setLoading] = useState(() => !readCache(cacheKey) && ![...knownMeetings, ...knownPublic].some((item) => item.slug === slug));
   const [joining, setJoining] = useState(false);
@@ -611,13 +698,18 @@ function MeetingPage() {
   async function join(event: FormEvent) {
     event.preventDefault();
     if (!meeting) return;
-    if (!user) { setError("Sign in with Google to join this meeting."); return; }
+    if (!user && !getGuestProfile(slug)) { setError("Continue with Google or enter your first and last name to join as a guest."); return; }
     if (joining || mediaPrompt) return;
     await continueJoin(micOn, cameraOn);
   }
 
   async function enterRoom(audio: boolean, video: boolean) {
-    if (!meeting || !user || enteringRef.current) return;
+    if (!meeting || (!user && !getGuestProfile(slug)) || enteringRef.current) return;
+    if (activeRoomSlugInApp) {
+      if (activeRoomSlugInApp === slug) navigate(`/room/${encodeURIComponent(slug)}`);
+      else window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Leave your current meeting before joining another one." } }));
+      return;
+    }
     enteringRef.current = true;
     setJoining(true); setError("");
     try {
@@ -632,8 +724,8 @@ function MeetingPage() {
       const room = new Room(ROOM_OPTIONS);
       try {
         await Promise.all([
-          room.connect(result.serverUrl, result.token),
-          preloadPhoto(user.picture, 512), ...(result.participants ?? []).map((person) => preloadPhoto(person.picture, 512)),
+          room.connect(result.serverUrl, result.token).then(() => { preventLiveKitFreezeDisconnect(room); }),
+          ...(user?.picture ? [preloadPhoto(user.picture, 512)] : []), ...(result.participants ?? []).filter((person) => person.picture).map((person) => preloadPhoto(person.picture, 512)),
         ]);
         await Promise.all([
           room.localParticipant.setMicrophoneEnabled(audio).catch(() => { /* The room page asks again and shows the troubleshooting dialog. */ }),
@@ -646,11 +738,24 @@ function MeetingPage() {
         // If anything fails here the room page still connects on its own, exactly as before.
         await room.disconnect().catch(() => { /* Nothing to close. */ });
       }
+      window.dispatchEvent(new CustomEvent("meet-room-opened", { detail: { slug } }));
       navigate(`/room/${encodeURIComponent(slug)}`);
     } catch (cause) {
       setMediaPrompt(null);
       setError(cause instanceof Error ? cause.message : "Could not join this meeting.");
     } finally { enteringRef.current = false; setJoining(false); }
+  }
+
+  async function continueAsGuest() {
+    if (!meeting) return;
+    setError("");
+    try {
+      const result = await api.guestSession(slug, guestName);
+      saveGuestAuthToken(result.token, { guestId: result.guestId, displayName: result.displayName, meetingSlug: slug });
+      await continueJoin(micOn, cameraOn);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not prepare your guest access.");
+    }
   }
 
   async function googleCredential(credential: string) {
@@ -686,10 +791,10 @@ function MeetingPage() {
           <form className="join-form" onSubmit={join}>
             <div className="join-form-heading"><h2>{ended ? "This meeting has ended" : meeting.isOwner ? "Your meeting is ready" : meeting.status === "live" ? "Join the gathering" : "You're in the right place"}</h2><p>{ended ? "This invitation is no longer active." : meeting.isOwner ? "Start the room when you're ready. Your guests can join using the same link." : meeting.status === "live" ? "Enter your details and come on in." : "You can join as a guest when the host opens the room."}</p></div>
             {user && !ended && <div className="join-identity"><ProfilePhoto src={user.picture} name={user.displayName} className="join-identity-photo"/><span><b>{user.displayName}</b><small>{user.email}</small></span><button type="button" className="error-link" onClick={signOut}><LogOut size={12}/> Sign out</button></div>}
-            {!user && !ended && <div className="join-google"><p>Continue with Google to join. We use your Google name and profile photo so everyone knows who you are.</p><GoogleContinueButton oneTap onCredential={(credential) => void googleCredential(credential)}/></div>}
+            {!user && !ended && <div className="join-google"><p>Continue with Google (recommended) or join with your name as a temporary guest. Guest access is limited to this meeting.</p><GoogleContinueButton oneTap onCredential={(credential) => void googleCredential(credential)}/>{!getGuestProfile(slug) ? <div className="guest-access-form"><div className="guest-access-divider"><span>OR</span></div><label htmlFor="guest-full-name">Continue as Guest</label><input id="guest-full-name" value={guestName} onChange={(event) => setGuestName(event.target.value)} placeholder="First and last name" autoComplete="name" maxLength={80}/><small>Use your full name. No account or email is required.</small><button type="button" className="button button-soft button-full" onClick={() => void continueAsGuest()} disabled={joining || guestName.trim().split(/\s+/).filter(Boolean).length < 2}>{joining ? "Preparing guest access…" : "Continue as Guest"}</button></div> : <div className="join-identity guest-identity"><ProfilePhoto name={getGuestProfile(slug)?.displayName || guestName} className="join-identity-photo"/><span><b>{getGuestProfile(slug)?.displayName}</b><small>Temporary guest · this meeting only</small></span></div>}</div>}
             {!ended && <div className="join-preferences"><MediaToggle on={cameraOn} onChange={setCameraOn} onIcon={<Video size={16}/>} offIcon={<VideoOff size={16}/>} onLabel="Camera is on" offLabel="Camera is off" onHint="Join with video" offHint="Join without video"/><MediaToggle on={micOn} onChange={setMicOn} onIcon={<Mic size={16}/>} offIcon={<MicOff size={16}/>} onLabel="Microphone is on" offLabel="Microphone is off" onHint="Join with audio" offHint="Join muted"/></div>}
             {error && <div className="inline-error" role="alert">{error}{error.includes("Sign in") && <button type="button" className="error-link" onClick={openAuth}>Sign in</button>}</div>}
-            {ended ? <Link to="/meetings" className="button button-soft button-full"><ArrowLeft size={16}/> Back to meetings</Link> : user && <button className="button button-primary button-full join-submit" type="submit" disabled={joining}>{joining ? <LoaderCircle size={17} className="spin"/> : meeting.isOwner ? <Video size={17}/> : <DoorOpen size={17}/>} {joining ? "Joining…" : meeting.isOwner ? "Start meeting" : meeting.status === "live" ? "Join meeting" : "Check room availability"}<ArrowRight size={16}/></button>}
+            {ended ? <Link to="/meetings" className="button button-soft button-full"><ArrowLeft size={16}/> Back to meetings</Link> : (user || getGuestProfile(slug)) && <button className="button button-primary button-full join-submit" type="submit" disabled={joining}>{joining ? <LoaderCircle size={17} className="spin"/> : meeting.isOwner ? <Video size={17}/> : <DoorOpen size={17}/>} {joining ? "Joining…" : meeting.isOwner ? "Start meeting" : meeting.status === "live" ? "Join meeting" : "Check room availability"}<ArrowRight size={16}/></button>}
             <p className="join-footnote"><ShieldCheck size={13}/> Your camera and microphone are only requested when you enter the room.</p>
           </form>
         </section>
@@ -824,8 +929,7 @@ function MediaPermissionModal({ kind, state, skipLabel, grantedLabel, onRetry, o
   );
 }
 
-function MeetingRoomPage() {
-  const { slug = "" } = useParams();
+function MeetingRoomPage({ slug, isActive }: { slug: string; isActive: boolean }) {
   const navigate = useNavigate();
   const [session, setSession] = useState<JoinSession | null>(() => readStoredSession(slug));
   const [ending, setEnding] = useState(false);
@@ -833,7 +937,8 @@ function MeetingRoomPage() {
   const [disconnected, setDisconnected] = useState(false);
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [meetingEnded, setMeetingEnded] = useState(false);
-  // A room that was already connected and fully loaded on the meeting page; the room opens complete, with nothing left to load.
+  // A room that was already connected and fully loaded on the meeting page;
+  // the app-level host keeps it mounted while other SPA routes are displayed.
   const [preparedRoom] = useState<Room | null>(() => { const room = preparedRooms.get(slug); return room && room.state === ConnectionState.Connected ? room : null; });
 
   useEffect(() => {
@@ -842,6 +947,21 @@ function MeetingRoomPage() {
       if (stored) setSession(stored);
     } catch { setSession(null); }
   }, [slug]);
+
+  useEffect(() => {
+    if (!isActive) setConfirmEnd(false);
+  }, [isActive]);
+
+  useEffect(() => {
+    if ((!isActive && meetingEnded) || (!isActive && !session)) {
+      window.dispatchEvent(new CustomEvent("meet-room-closed", { detail: { slug } }));
+    }
+  }, [isActive, meetingEnded, session, slug]);
+
+  function leaveRoom() {
+    window.dispatchEvent(new CustomEvent("meet-room-closed", { detail: { slug } }));
+    navigate(`/meeting/${encodeURIComponent(slug)}`);
+  }
 
   // The host pressed End for everyone: ask first with our own confirmation, never the browser box.
   function endForEveryone() {
@@ -866,45 +986,73 @@ function MeetingRoomPage() {
       setEndError(cause instanceof Error ? cause.message : "Could not end the meeting.");
     } finally { setEnding(false); }
   }
-  // The room closed under us. If the host ended the meeting, everyone lands on the ended screen straight away.
+  // The room closed under us. If the host ended the meeting, show the ended screen.
   function handleRoomDisconnected(reason?: DisconnectReason) {
     if (reason === DisconnectReason.ROOM_DELETED) { showEnded(); return; }
     setDisconnected(true);
     void api.meeting(slug).then(({ meeting }) => { if (meeting.status === "ended" || meeting.status === "cancelled") showEnded(); }).catch(() => { /* Keep the normal disconnected notice. */ });
   }
 
-  if (meetingEnded) return <MeetingEndedScreen title={session?.meeting.title ?? ""} isHost={session?.role === "host"} onBack={() => navigate("/meetings")}/>;
-  if (!session) return <StandaloneError message="Your room session is missing or expired. Open the invitation again to rejoin." action={<Link className="button button-primary" to={`/meeting/${slug}`}>Return to meeting</Link>}/>;
+  if (meetingEnded) {
+    if (!isActive) return null;
+    return <MeetingEndedScreen title={session?.meeting.title ?? ""} isHost={session?.role === "host"} onBack={() => { window.dispatchEvent(new CustomEvent("meet-room-closed", { detail: { slug } })); navigate("/meetings"); }}/>;
+  }
+  if (!session) {
+    if (!isActive) return null;
+    return <StandaloneError message="Your room session is missing or expired. Open the invitation again to rejoin." action={<Link className="button button-primary" to={`/meeting/${slug}`}>Return to meeting</Link>}/>;
+  }
 
   return (
-    <div className="conference-page">
-      <header className="conference-topbar"><Link to={`/meeting/${slug}`} className="conference-brand"><span className="brand-mark"><AudioLines size={19}/></span><span><b>MEET ENIHAKOLE</b><small>{session.meeting.title}</small></span></Link><div className="conference-room-status">IN THE ROOM{session.role === "host" && <><span className="conference-divider"/> HOST</>}</div><div className="conference-header-actions"><ThemeToggle/><button className="button button-soft button-small" onClick={() => navigate(`/meeting/${slug}`)}><ArrowLeft size={15}/> Leave room</button></div></header>
-      {endError && <div className="room-alert" role="alert">{endError}</div>}
-      {disconnected && <div className="room-alert" role="status">You have disconnected from the call. <button onClick={() => navigate(`/meeting/${slug}`)}>Return to meeting</button></div>}
-      <main className="conference-main">
-        <div className="conference-title-row"><div><p className="section-overline">ENIHAKOLE CHOIR · LIVE CONFERENCE</p><h1>{session.meeting.title}</h1></div><div className="conference-tools"><span className="encrypted-pill"><ShieldCheck size={14}/> Secure connection</span>{session.role === "host" && <button className="button button-danger button-small" onClick={() => endForEveryone()} disabled={ending}>{ending ? <LoaderCircle size={15} className="spin"/> : <X size={15}/>} End for everyone</button>}</div></div>
-        <div className="conference-stage">
-          <LiveKitRoom
-            room={preparedRoom ?? undefined}
-            token={session.token}
-            serverUrl={session.serverUrl}
-            connect={true}
-            audio={session.audio}
-            video={session.video}
-            options={ROOM_OPTIONS}
-            onDisconnected={handleRoomDisconnected}
-            onMediaDeviceFailure={(failure, kind) => window.dispatchEvent(new CustomEvent("meet-media-failure", { detail: { failure, kind } }))}
-          >
-            <ConferenceWorkspace meeting={session.meeting} role={session.role} onLeave={() => navigate(`/meeting/${slug}`)} onEndForEveryone={() => endForEveryone()} ending={ending}/>
+    <LiveKitRoom
+      room={preparedRoom ?? undefined}
+      token={session.token}
+      serverUrl={session.serverUrl}
+      connect={true}
+      audio={session.audio}
+      video={session.video}
+      options={ROOM_OPTIONS}
+      onDisconnected={handleRoomDisconnected}
+      onMediaDeviceFailure={(failure, kind) => window.dispatchEvent(new CustomEvent("meet-media-failure", { detail: { failure, kind } }))}
+    >
+      {!isActive && <BackgroundMeetingDock title={session.meeting.title} disconnected={disconnected} onReturn={() => navigate(`/room/${encodeURIComponent(slug)}`)} onLeave={leaveRoom}/>}
+      <div className={`conference-page ${!isActive ? "conference-page-audio-host" : ""}`} aria-hidden={!isActive}>
+        <header className="conference-topbar"><Link to={`/meeting/${slug}`} className="conference-brand"><span className="brand-mark"><AudioLines size={19}/></span><span><b>MEET ENIHAKOLE</b><small>{session.meeting.title}</small></span></Link><div className="conference-room-status">IN THE ROOM{session.role === "host" && <><span className="conference-divider"/> HOST</>}</div><div className="conference-header-actions"><ThemeToggle/><button className="button button-soft button-small" onClick={leaveRoom}><ArrowLeft size={15}/> Leave room</button></div></header>
+        {endError && <div className="room-alert" role="alert">{endError}</div>}
+        {disconnected && <div className="room-alert" role="status">You have disconnected from the call. <button onClick={leaveRoom}>Return to meeting</button></div>}
+        <main className="conference-main">
+          <div className="conference-title-row"><div><p className="section-overline">ENIHAKOLE CHOIR · LIVE CONFERENCE</p><h1>{session.meeting.title}</h1></div><div className="conference-tools"><span className="encrypted-pill"><ShieldCheck size={14}/> Secure connection</span>{session.role === "host" && <button className="button button-danger button-small" onClick={() => endForEveryone()} disabled={ending}>{ending ? <LoaderCircle size={15} className="spin"/> : <X size={15}/>} End for everyone</button>}</div></div>
+          <div className="conference-stage">
+            <ConferenceWorkspace meeting={session.meeting} role={session.role} onLeave={leaveRoom} onEndForEveryone={() => endForEveryone()} ending={ending} isActive={isActive}/>
             {!preparedRoom && <RoomReadyOverlay expected={(session.participants ?? []).map((person) => person.identity)}/>}
-          </LiveKitRoom>
-        </div>
-        {confirmEnd && <ConfirmEndModal busy={ending} onCancel={() => setConfirmEnd(false)} onConfirm={() => void confirmEndForEveryone()}/>}
-        <div className="conference-bottom-note"><span><ShieldCheck size={15}/> {session.meeting.visibility === "public" ? "This gathering is publicly listed." : "This meeting uses an unlisted invitation link."}</span><span>For the clearest call, use headphones and a stable connection.</span></div>
-      </main>
-    </div>
+          </div>
+          {confirmEnd && <ConfirmEndModal busy={ending} onCancel={() => setConfirmEnd(false)} onConfirm={() => void confirmEndForEveryone()}/>}
+          <div className="conference-bottom-note"><span><ShieldCheck size={15}/> {session.meeting.visibility === "public" ? "This gathering is publicly listed." : "This meeting uses an unlisted invitation link."}</span><span>For the clearest call, use headphones and a stable connection.</span></div>
+        </main>
+      </div>
+    </LiveKitRoom>
   );
 }
+
+function BackgroundMeetingDock({ title, disconnected, onReturn, onLeave }: { title: string; disconnected: boolean; onReturn: () => void; onLeave: () => void }) {
+  const { localParticipant, isMicrophoneEnabled } = useLocalParticipant();
+  const participants = useParticipants();
+  const [micBusy, setMicBusy] = useState(false);
+  async function toggleMicrophone() {
+    if (micBusy) return;
+    setMicBusy(true);
+    try { await localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled); }
+    catch { window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Could not change microphone state. Return to the call and check permission." } })); }
+    finally { setMicBusy(false); }
+  }
+  return <aside className="background-meeting-dock" role="region" aria-label="Active meeting controls">
+    <span className="background-meeting-indicator" aria-hidden="true"/>
+    <div className="background-meeting-copy"><strong>{disconnected ? "Connection interrupted" : "Meeting continues"}</strong><span>{title} · {participants.length} participants</span></div>
+    <button type="button" className="background-meeting-action" onClick={() => void toggleMicrophone()} disabled={micBusy} aria-label={isMicrophoneEnabled ? "Mute microphone" : "Unmute microphone"} title={isMicrophoneEnabled ? "Mute microphone" : "Unmute microphone"}>{isMicrophoneEnabled ? <Mic size={16}/> : <MicOff size={16}/>}</button>
+    <button type="button" className="background-meeting-return" onClick={onReturn}>Return to call</button>
+    <button type="button" className="background-meeting-leave" onClick={onLeave}>Leave</button>
+  </aside>;
+}
+
 
 /** Our own confirmation for ending a meeting. It is drawn inside the fullscreen room when the room is fullscreen, so it is always visible. */
 function ConfirmEndModal({ busy, onCancel, onConfirm }: { busy: boolean; onCancel: () => void; onConfirm: () => void }) {
@@ -947,6 +1095,12 @@ function MeetingEndedScreen({ title, isHost, onBack }: { title: string; isHost: 
 const ROOM_OPTIONS: RoomOptions = {
   adaptiveStream: true,
   dynacast: true,
+  // Do not treat pagehide/beforeunload as an explicit leave. Browsers may
+  // freeze and later restore a page from BFCache; LiveKit reconnect logic
+  // remains responsible for transport recovery when the OS interrupts it.
+  // A full tab/browser termination still ends the web runtime and cannot be
+  // kept alive by this option.
+  disconnectOnPageLeave: false,
   videoCaptureDefaults: { resolution: { width: 1280, height: 720, frameRate: 30 } },
   // Voice path tuned for minimum delay: mono capture with the lowest capture latency hint, no pre-processing buffering beyond the browser's own echo/noise handling.
   audioCaptureDefaults: { channelCount: 1, latency: 0, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -1065,12 +1219,18 @@ function RoomReadyOverlay({ expected }: { expected: string[] }) {
 }
 
 type RoomSignal = { kind: "hand"; raised: boolean } | { kind: "reaction"; emoji: string; id: string };
-type FloatingReaction = { id: string; emoji: string; name: string; x: number; drift: number; rise: number; scale: number };
+type MeetingRecordingState = { id: string; status: string; hostName: string; consents: Array<{ displayName: string; identity: string; decision: string }>; myDecision: string; startedAt: string | null; endedAt: string | null; uploadProgressPercent: number; lastError: string; canRetry: boolean };
+type FloatingReaction = { id: string; emoji: string; name: string; x: number; rise: number; scale: number };
+type DirectContact = { userId: string; identity: string; name: string; picture: string };
+type PrivateDataSignal =
+  | { kind: "private-message"; recipientUserId: string; message: PrivateMessage }
+  | { kind: "moderator-request"; recipientUserId: string; media: "microphone" | "camera"; hostName: string }
+  | { kind: "moderator-media-control"; recipientUserId: string; media: "microphone" | "camera"; action: "disable"; hostName: string };
 const REACTION_LIFETIME = 3600;
-/** Random launch point, sideways drift and height so every reaction floats up its own way, like Google Meet. */
+const PRIVATE_MESSAGE_TOPIC = "meet-enihakole-private";
+/** Reactions use a fixed horizontal launch point and a vertical-only travel distance. */
 function makeReaction(id: string, emoji: string, name: string): FloatingReaction {
-  const dir = Math.random() < 0.5 ? -1 : 1;
-  return { id, emoji, name, x: 12 + Math.random() * 76, drift: dir * (14 + Math.random() * 46), rise: 62 + Math.random() * 22, scale: 0.9 + Math.random() * 0.35 };
+  return { id, emoji, name, x: 12 + Math.random() * 76, rise: 62 + Math.random() * 22, scale: 0.9 + Math.random() * 0.35 };
 }
 function reactionKind(emoji: string): string {
   if (emoji === "👏") return "clap"; if (emoji === "🙌") return "wave"; if (emoji === "❤️" || emoji === "💛") return "beat";
@@ -1079,21 +1239,6 @@ function reactionKind(emoji: string): string {
 }
 // Anything a person can press: a tap on these must keep doing its own job and never toggle fullscreen.
 const INTERACTIVE_SELECTOR = ".screen-annotate-layer.is-drawing, .screen-annotate-toolbar, button, a, input, textarea, select, label, summary, [role='button'], [role='dialog'], [data-popover], .room-device-menu, .reaction-picker, .messages-modal-backdrop, .room-alert, .room-message-toast, .room-presence-stack, .modal-backdrop";
-const VIEWPORT_CONTENT = "width=device-width, initial-scale=1.0";
-/** Phones can come back to the page pinch-zoomed or focus-zoomed (after an input was focused, or after leaving a call). Briefly pin the scale to 1, then give the viewport back exactly as designed so people can still pinch-zoom normally. */
-let viewportResetTimer = 0;
-function resetViewportZoom() {
-  try {
-    const meta = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
-    if (!meta) return;
-    const scale = window.visualViewport?.scale ?? 1;
-    if (Math.abs(scale - 1) < 0.02) return;
-    window.clearTimeout(viewportResetTimer);
-    meta.setAttribute("content", `${VIEWPORT_CONTENT}, maximum-scale=1`);
-    viewportResetTimer = window.setTimeout(() => meta.setAttribute("content", VIEWPORT_CONTENT), 400);
-  } catch { /* Zoom reset is a best-effort nicety. */ }
-}
-
 const PARTICIPANTS_PER_SCREEN = 8;
 const REACTION_SET = ["🙏", "❤️", "👏", "🙌", "😊", "🎉", "✨", "💛", "🕊️", "👍"];
 
@@ -1117,6 +1262,13 @@ function readStoredSession(slug: string): JoinSession | null {
     registerSession(stored);
     return stored;
   } catch { return null; }
+}
+function participantUserId(participant: Participant | undefined | null): string {
+  if (!participant) return "";
+  try {
+    const value = JSON.parse(participant.metadata || "{}").userId;
+    return typeof value === "string" ? value : "";
+  } catch { return ""; }
 }
 function participantName(participant: Participant): string {
   if (participant.name) return participant.name;
@@ -1438,6 +1590,18 @@ function ShareRedirect() {
 }
 
 /**
+ * LiveKit 2.22.x installs a private `onPageLeave` callback for the Chromium
+ * Page Lifecycle `freeze` event even when disconnectOnPageLeave is false.
+ * There is no public opt-out for that one listener in this SDK line. Remove it
+ * only when the callback exists; LiveKit continues to own ICE/signaling recovery.
+ */
+function preventLiveKitFreezeDisconnect(room: Room) {
+  const internalRoom = room as unknown as { onPageLeave?: EventListener };
+  const pageLeaveHandler = internalRoom.onPageLeave;
+  if (typeof pageLeaveHandler === "function") window.removeEventListener("freeze", pageLeaveHandler);
+}
+
+/**
  * Keeps an active LiveKit call usable when the browser backgrounds the page.
  * WebRTC media capture and active real-time connections receive browser-managed
  * treatment, but a page can still be suspended or terminated by the OS. We do
@@ -1465,6 +1629,16 @@ function useBackgroundCall(room: ReturnType<typeof useRoomContext>, title: strin
     };
     const audioSession = nav.audioSession;
     const previousAudioSessionType = audioSession?.type;
+
+    // LiveKit 2.22.x registers the same private page-leave callback for the
+    // Chromium Page Lifecycle `freeze` event even when disconnectOnPageLeave
+    // is false. Remove only that SDK-installed freeze callback so a sleeping
+    // tab can resume through LiveKit's normal reconnect path. This is guarded
+    // by runtime feature detection because the callback is not public API.
+    const removeSdkFreezeDisconnect = () => preventLiveKitFreezeDisconnect(room);
+    removeSdkFreezeDisconnect();
+    room.on(RoomEvent.Connected, removeSdkFreezeDisconnect);
+    room.on(RoomEvent.Reconnected, removeSdkFreezeDisconnect);
 
     // Supported by some browsers (notably Safari versions); ignored elsewhere.
     try { if (audioSession) audioSession.type = "play-and-record"; } catch { /* Optional platform integration. */ }
@@ -1529,7 +1703,12 @@ function useBackgroundCall(room: ReturnType<typeof useRoomContext>, title: strin
         ) {
           // Avoid repeated permission/restart attempts for the same failed capture.
           micRecoveryAttemptedForTrack = true;
-          await localTrack.restartTrack().catch(() => undefined);
+          await localTrack.restartTrack().catch(async () => {
+            // Mark the failed capture as off so the in-room control and status
+            // indicator cannot imply that audio is still being transmitted.
+            await room.localParticipant.setMicrophoneEnabled(false).catch(() => undefined);
+            window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Your microphone stopped in the background and is now off. Tap Unmute to request access again." } }));
+          });
         }
       })().finally(() => { audioResumeInFlight = null; });
     };
@@ -1589,6 +1768,8 @@ function useBackgroundCall(room: ReturnType<typeof useRoomContext>, title: strin
       room.off(RoomEvent.Connected, onRoomRestored);
       room.off(RoomEvent.Reconnected, onRoomRestored);
       room.off(RoomEvent.Disconnected, onRoomDisconnected);
+      room.off(RoomEvent.Connected, removeSdkFreezeDisconnect);
+      room.off(RoomEvent.Reconnected, removeSdkFreezeDisconnect);
       if (session) {
         const clearHandler = (action: string) => {
           try { (session.setActionHandler as (name: string, callback: null) => void).call(session, action, null); }
@@ -1601,7 +1782,6 @@ function useBackgroundCall(room: ReturnType<typeof useRoomContext>, title: strin
       if (audioSession && previousAudioSessionType !== undefined) {
         try { audioSession.type = previousAudioSessionType; } catch { /* Optional platform integration. */ }
       }
-      window.setTimeout(resetViewportZoom, 150);
     };
   }, [room, title]);
 }
@@ -1610,9 +1790,10 @@ type AnnotationArrow = { id: string; x1: number; y1: number; x2: number; y2: num
 type AnnotationMessage =
   | { k: "arrow"; arrow: AnnotationArrow }
   | { k: "pointer"; x: number; y: number; on: boolean }
+  | { k: "remove"; id: string }
   | { k: "clear" }
   | { k: "visible"; on: boolean }
-  | { k: "sync"; arrows: AnnotationArrow[]; visible: boolean }
+  | { k: "sync"; arrows: AnnotationArrow[]; visible: boolean; pointer?: { x: number; y: number } | null }
   | { k: "hello" };
 type AnnotationTool = "off" | "pointer" | "arrow";
 const ANNOTATION_TOPIC = "meet-enihakole-annotate";
@@ -1661,10 +1842,12 @@ function ScreenShareStage({ screenShare, onStop, onSwitch }: { screenShare: Trac
   const layerRef = useRef<HTMLDivElement>(null);
   const arrowsRef = useRef(arrows);
   const visibleRef = useRef(visible);
+  const pointerRef = useRef(pointer);
   const lastPointerSend = useRef(0);
   const drawing = useRef(false);
   arrowsRef.current = arrows;
   visibleRef.current = visible;
+  pointerRef.current = pointer;
 
   const send = useCallback((message: AnnotationMessage, reliable = true, to?: string[]) => {
     try {
@@ -1676,24 +1859,50 @@ function ScreenShareStage({ screenShare, onStop, onSwitch }: { screenShare: Trac
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
+    let video: HTMLVideoElement | null = null;
     const measure = () => {
-      const video = view.querySelector("video");
       const dims = screenShare.publication?.dimensions;
       const vw = (video && video.videoWidth) || dims?.width || 0;
       const vh = (video && video.videoHeight) || dims?.height || 0;
       const w = view.clientWidth, h = view.clientHeight;
-      if (!vw || !vh || !w || !h) return;
+      if (!vw || !vh || !w || !h) {
+        setBox((current) => current ? null : current);
+        return;
+      }
       const ratio = vw / vh;
       const width = w / h > ratio ? h * ratio : w;
       const height = w / h > ratio ? h : w / ratio;
       const next = { left: Math.round((w - width) / 2), top: Math.round((h - height) / 2), width: Math.round(width), height: Math.round(height) };
       setBox((current) => current && current.left === next.left && current.top === next.top && current.width === next.width && current.height === next.height ? current : next);
     };
-    measure();
+    const bindVideo = () => {
+      const next = view.querySelector("video");
+      if (next === video) { measure(); return; }
+      video?.removeEventListener("loadedmetadata", measure);
+      video?.removeEventListener("loadeddata", measure);
+      video?.removeEventListener("resize", measure);
+      video = next;
+      video?.addEventListener("loadedmetadata", measure);
+      video?.addEventListener("loadeddata", measure);
+      video?.addEventListener("resize", measure);
+      measure();
+    };
     const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
     observer?.observe(view);
-    const timer = window.setInterval(measure, 700);
-    return () => { observer?.disconnect(); window.clearInterval(timer); };
+    const mutations = typeof MutationObserver !== "undefined" ? new MutationObserver(bindVideo) : null;
+    mutations?.observe(view, { childList: true, subtree: true });
+    window.addEventListener("resize", measure, { passive: true });
+    window.visualViewport?.addEventListener("resize", measure, { passive: true });
+    bindVideo();
+    return () => {
+      observer?.disconnect();
+      mutations?.disconnect();
+      video?.removeEventListener("loadedmetadata", measure);
+      video?.removeEventListener("loadeddata", measure);
+      video?.removeEventListener("resize", measure);
+      window.removeEventListener("resize", measure);
+      window.visualViewport?.removeEventListener("resize", measure);
+    };
   }, [screenShare.publication, tool]);
 
   useEffect(() => {
@@ -1703,15 +1912,20 @@ function ScreenShareStage({ screenShare, onStop, onSwitch }: { screenShare: Trac
       try { data = JSON.parse(new TextDecoder().decode(payload)) as AnnotationMessage; } catch { return; }
       if (isPresenter) {
         // A viewer who just arrived asks for what is already drawn.
-        if (data.k === "hello") send({ k: "sync", arrows: arrowsRef.current, visible: visibleRef.current }, true, [participant.identity]);
+        if (data.k === "hello") send({ k: "sync", arrows: arrowsRef.current, visible: visibleRef.current, pointer: pointerRef.current }, true, [participant.identity]);
         return;
       }
       if (participant.identity !== presenterId) return; // Only the person presenting can draw.
       if (data.k === "arrow") { const arrow = cleanArrow(data.arrow); if (arrow) setArrows((current) => [...current.filter((item) => item.id !== arrow.id), arrow].slice(-MAX_ANNOTATION_ARROWS)); }
       else if (data.k === "pointer") setPointer(data.on ? { x: unit(data.x), y: unit(data.y) } : null);
+      else if (data.k === "remove" && typeof data.id === "string") setArrows((current) => current.filter((item) => item.id !== data.id));
       else if (data.k === "clear") setArrows([]);
       else if (data.k === "visible") { setVisible(Boolean(data.on)); if (!data.on) setPointer(null); }
-      else if (data.k === "sync") { setArrows((Array.isArray(data.arrows) ? data.arrows : []).map(cleanArrow).filter((item): item is AnnotationArrow => Boolean(item)).slice(-MAX_ANNOTATION_ARROWS)); setVisible(data.visible !== false); }
+      else if (data.k === "sync") {
+        setArrows((Array.isArray(data.arrows) ? data.arrows : []).map(cleanArrow).filter((item): item is AnnotationArrow => Boolean(item)).slice(-MAX_ANNOTATION_ARROWS));
+        setVisible(data.visible !== false);
+        setPointer(data.pointer && typeof data.pointer === "object" ? { x: unit(data.pointer.x), y: unit(data.pointer.y) } : null);
+      }
     };
     room.on(RoomEvent.DataReceived, onData);
     if (!isPresenter) send({ k: "hello" }, true, [presenterId]);
@@ -1738,6 +1952,12 @@ function ScreenShareStage({ screenShare, onStop, onSwitch }: { screenShare: Trac
     if (value !== "off" && !visible) { setVisible(true); send({ k: "visible", on: true }); }
   };
   const clearAll = () => { setArrows([]); setDraft(null); send({ k: "clear" }); };
+  const undoLast = () => {
+    const last = arrowsRef.current[arrowsRef.current.length - 1];
+    if (!last) return;
+    setArrows((current) => current.filter((item) => item.id !== last.id));
+    send({ k: "remove", id: last.id });
+  };
   const toggleVisible = () => {
     const next = !visible;
     setVisible(next); setPointer(null);
@@ -1771,6 +1991,7 @@ function ScreenShareStage({ screenShare, onStop, onSwitch }: { screenShare: Trac
   };
   const onLeave = () => { if (tool === "pointer" && !drawing.current) { setPointer(null); sendPointer(null); } };
   const onCancel = () => { drawing.current = false; setDraft(null); if (tool === "pointer") { setPointer(null); sendPointer(null); } };
+  const onLostCapture = () => { if (tool === "arrow") { drawing.current = false; setDraft(null); } };
 
   const shown = visible && box;
   const drawingOn = isPresenter && tool !== "off";
@@ -1780,7 +2001,7 @@ function ScreenShareStage({ screenShare, onStop, onSwitch }: { screenShare: Trac
       : isPresenter
         ? (screenShare.publication?.track ? <VideoTrack trackRef={screenShare}/> : null)
         : <VideoTrack trackRef={screenShare}/>}
-    {box && <div ref={layerRef} className={`screen-annotate-layer ${drawingOn ? "is-drawing" : ""} ${tool === "arrow" ? "tool-arrow" : tool === "pointer" ? "tool-pointer" : ""}`} style={{ left: box.left, top: box.top, width: box.width, height: box.height }} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onLeave} onPointerCancel={onCancel}>
+    {box && <div ref={layerRef} className={`screen-annotate-layer ${drawingOn ? "is-drawing" : ""} ${tool === "arrow" ? "tool-arrow" : tool === "pointer" ? "tool-pointer" : ""}`} style={{ left: box.left, top: box.top, width: box.width, height: box.height }} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onLeave} onPointerCancel={onCancel} onLostPointerCapture={onLostCapture}>
       {shown && <svg className="screen-annotate-svg" width={box.width} height={box.height} aria-hidden="true">
         {arrows.map((arrow) => <AnnotationArrowShape key={arrow.id} arrow={arrow} w={box.width} h={box.height}/>)}
         {draft && <AnnotationArrowShape arrow={draft} w={box.width} h={box.height} draft/>}
@@ -1791,6 +2012,7 @@ function ScreenShareStage({ screenShare, onStop, onSwitch }: { screenShare: Trac
     {isPresenter && <div className="screen-annotate-toolbar" role="toolbar" aria-label="Presenter annotation tools">
       <button type="button" className={tool === "pointer" ? "is-active" : ""} aria-pressed={tool === "pointer"} onClick={() => choose("pointer")} title="Pointer: everyone sees where you point" aria-label="Pointer"><MousePointer2 size={16}/><span>Pointer</span></button>
       <button type="button" className={tool === "arrow" ? "is-active" : ""} aria-pressed={tool === "arrow"} onClick={() => choose("arrow")} title="Arrow: drag to draw a directional arrow" aria-label="Arrow"><MoveUpRight size={16}/><span>Arrow</span></button>
+      <button type="button" onClick={undoLast} disabled={arrows.length === 0} title="Remove the most recent arrow" aria-label="Undo last arrow"><Undo2 size={16}/><span>Undo</span></button>
       <button type="button" onClick={clearAll} disabled={arrows.length === 0} title="Clear all arrows" aria-label="Clear arrows"><Eraser size={16}/><span>Clear</span></button>
       <button type="button" className={!visible ? "is-active" : ""} aria-pressed={!visible} onClick={toggleVisible} title={visible ? "Hide annotations for everyone" : "Show annotations for everyone"} aria-label={visible ? "Hide annotations" : "Show annotations"}>{visible ? <EyeOff size={16}/> : <Eye size={16}/>}<span>{visible ? "Hide" : "Show"}</span></button>
       {drawingOn && <span className="screen-annotate-hint"><PenLine size={12}/>{tool === "arrow" ? "Drag on the preview to draw" : "Move over the preview to point"}</span>}
@@ -1798,7 +2020,7 @@ function ScreenShareStage({ screenShare, onStop, onSwitch }: { screenShare: Trac
   </div>;
 }
 
-function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending }: { meeting: Meeting; role: "host" | "participant"; onLeave: () => void; onEndForEveryone: () => void; ending: boolean }) {
+function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending, isActive }: { meeting: Meeting; role: "host" | "participant"; onLeave: () => void; onEndForEveryone: () => void; ending: boolean; isActive: boolean }) {
   const room = useRoomContext();
   const { localParticipant, isMicrophoneEnabled, isCameraEnabled, isScreenShareEnabled } = useLocalParticipant();
   const participants = useParticipants();
@@ -1808,6 +2030,20 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
   const screenShare = screenRefs.filter((item): item is TrackReference => isTrackReference(item) && (item.participant.isLocal || Boolean(item.publication?.track))).slice(-1)[0];
   const { chatMessages, send, isSending } = useChat();
   const [messagesOpen, setMessagesOpen] = useState(false);
+  const [peopleOpen, setPeopleOpen] = useState(false);
+  const [recordingState, setRecordingState] = useState<MeetingRecordingState | null>(null);
+  const [recordingBusy, setRecordingBusy] = useState(false);
+  const [recordingConsentBusy, setRecordingConsentBusy] = useState(false);
+  const [directContact, setDirectContact] = useState<DirectContact | null>(null);
+  const [privateMessages, setPrivateMessages] = useState<PrivateMessage[]>([]);
+  const [recentConversations, setRecentConversations] = useState<PrivateConversationSummary[]>([]);
+  const [privateDraft, setPrivateDraft] = useState("");
+  const [privateLoading, setPrivateLoading] = useState(false);
+  const [privateSending, setPrivateSending] = useState(false);
+  const [privateNotice, setPrivateNotice] = useState<DirectContact | null>(null);
+  const [moderatorRequest, setModeratorRequest] = useState<{ media: "microphone" | "camera"; hostName: string } | null>(null);
+  const [moderationBusy, setModerationBusy] = useState<string | null>(null);
+  const [spotlightIdentity, setSpotlightIdentity] = useState<string | null>(null);
   const [mediaModal, setMediaModal] = useState<{ kind: MediaKind; state: MicPromptState } | null>(null);
   const mediaAttemptRef = useRef(0);
   const [messageText, setMessageText] = useState("");
@@ -1818,6 +2054,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
   const [page, setPage] = useState(0);
   const [fullScreen, setFullScreen] = useState(false);
   const [pseudoFull, setPseudoFull] = useState(false);
+  const [fullscreenPrompt, setFullscreenPrompt] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(false);
   const [dockHeight, setDockHeight] = useState(0);
   const dockRef = useRef<HTMLDivElement>(null);
@@ -1836,7 +2073,14 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
   const fullScreenRef = useRef<HTMLDivElement>(null);
   const autoFullscreenDone = useRef(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const privateChatEndRef = useRef<HTMLDivElement>(null);
+  const directContactRef = useRef<DirectContact | null>(null);
+  const privateNoticeTimer = useRef(0);
   const localIdentity = localParticipant.identity;
+  const localUserId = participantUserId(localParticipant);
+  const onLeaveRef = useRef(onLeave);
+  onLeaveRef.current = onLeave;
+  directContactRef.current = directContact;
   const localVoiceActivity = useVoiceActivity(localParticipant);
   useBackgroundCall(room, meeting.title, onLeave);
   // Keep the receive-side jitter buffer as small as the browser safely allows so other people's voices play back with minimal delay.
@@ -1879,7 +2123,155 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
     };
     room.on(RoomEvent.DataReceived, onData);
     return () => { room.off(RoomEvent.DataReceived, onData); };
-  }, [room]);
+  }, [room, participants]);
+
+  // Private messages and moderator requests use reliable, identity-targeted data packets.
+  // Message history is stored through the authenticated API, so a reconnect does not lose messages.
+  useEffect(() => {
+    const onPrivateData = (payload: Uint8Array, sender?: Participant, _kind?: unknown, topic?: string) => {
+      if (topic !== PRIVATE_MESSAGE_TOPIC || !sender || !localUserId) return;
+      let data: PrivateDataSignal;
+      try { data = JSON.parse(new TextDecoder().decode(payload)) as PrivateDataSignal; } catch { return; }
+      if (!data || typeof data !== "object" || data.recipientUserId !== localUserId) return;
+      if (data.kind === "private-message") {
+        const message = data.message;
+        if (!message || message.recipientUserId !== localUserId || message.senderUserId !== participantUserId(sender) || typeof message.id !== "string" || typeof message.message !== "string" || message.message.length > 2000) return;
+        const contact: DirectContact = {
+          userId: message.senderUserId,
+          identity: sender.identity,
+          name: message.senderName || sender.name || "Participant",
+          picture: participantPicture(sender.metadata, sender.identity),
+        };
+        setRecentConversations((current) => [
+          { userId: contact.userId, name: contact.name, picture: contact.picture, lastMessage: message.message, createdAt: message.createdAt },
+          ...current.filter((item) => item.userId !== contact.userId),
+        ].slice(0, 30));
+        if (directContactRef.current?.userId === contact.userId) {
+          setPrivateMessages((current) => current.some((item) => item.id === message.id) ? current : [...current, message].slice(-200));
+        } else {
+          setPrivateNotice(contact);
+          window.clearTimeout(privateNoticeTimer.current);
+          privateNoticeTimer.current = window.setTimeout(() => setPrivateNotice(null), 7000);
+        }
+      } else if (data.kind === "moderator-request") {
+        let senderRole = "";
+        try { senderRole = JSON.parse(sender.metadata || "{}").role || ""; } catch { /* Ignore malformed role metadata. */ }
+        if (participantUserId(sender) === meeting.ownerId && senderRole === "host" && (data.media === "microphone" || data.media === "camera")) {
+          setModeratorRequest({ media: data.media, hostName: data.hostName || sender.name || "The host" });
+        }
+      } else if (data.kind === "moderator-media-control") {
+        let senderRole = "";
+        try { senderRole = JSON.parse(sender.metadata || "{}").role || ""; } catch { /* Ignore malformed role metadata. */ }
+        if (participantUserId(sender) !== meeting.ownerId || senderRole !== "host" || data.action !== "disable") return;
+        const stopCapture = data.media === "microphone"
+          ? localParticipant.setMicrophoneEnabled(false)
+          : data.media === "camera" ? localParticipant.setCameraEnabled(false) : Promise.resolve();
+        void stopCapture.then(() => window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: `The host turned off your ${data.media}. You can turn it on again when appropriate.` } }))).catch(() => undefined);
+      }
+    };
+    room.on(RoomEvent.DataReceived, onPrivateData);
+    return () => room.off(RoomEvent.DataReceived, onPrivateData);
+  }, [room, localUserId, localParticipant, meeting.ownerId]);
+
+  useEffect(() => () => window.clearTimeout(privateNoticeTimer.current), []);
+  useEffect(() => { privateChatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [privateMessages.length, directContact]);
+
+  // Register the signed-in account even when an existing stored LiveKit token is reused after a refresh.
+  // A blocked account is disconnected again if it tries to reconnect with a still-valid token.
+  useEffect(() => {
+    let cancelled = false;
+    let retries = 0;
+    let retryTimer = 0;
+    const register = () => {
+      if (cancelled || room.state !== ConnectionState.Connected) return;
+      void api.registerParticipantProfile(meeting.slug, localIdentity).catch((cause) => {
+        if (cancelled) return;
+        if (cause instanceof ApiError && cause.status === 403) {
+          window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: cause.message } }));
+          onLeaveRef.current();
+        } else if (cause instanceof ApiError && cause.status === 409 && retries++ < 3) {
+          retryTimer = window.setTimeout(register, 900);
+        }
+      });
+    };
+    if (room.state === ConnectionState.Connected) register();
+    room.on(RoomEvent.Connected, register);
+    room.on(RoomEvent.Reconnected, register);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(retryTimer);
+      room.off(RoomEvent.Connected, register);
+      room.off(RoomEvent.Reconnected, register);
+      void api.leaveParticipantProfile(meeting.slug, localIdentity).catch(() => undefined);
+    };
+  }, [room, meeting.slug, localIdentity]);
+
+  // Recording consent and status are server-authoritative and shared with every connected client.
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () => {
+      if (cancelled || room.state !== ConnectionState.Connected) return;
+      void api.recordingStatus(meeting.slug, localIdentity)
+        .then((result) => { if (!cancelled) setRecordingState(result.recording); })
+        .catch(() => undefined);
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 4500);
+    room.on(RoomEvent.Connected, refresh);
+    room.on(RoomEvent.Reconnected, refresh);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      room.off(RoomEvent.Connected, refresh);
+      room.off(RoomEvent.Reconnected, refresh);
+    };
+  }, [room, meeting.slug, localIdentity]);
+
+  // Restore the open conversation's persisted history after LiveKit reconnects.
+  useEffect(() => {
+    const reload = () => {
+      const contact = directContactRef.current;
+      if (!contact) return;
+      void api.privateMessages(meeting.slug, contact.userId).then((result) => setPrivateMessages((current) => {
+        const merged = new Map([...result.messages, ...current].map((item) => [item.id, item]));
+        return [...merged.values()].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()).slice(-200);
+      })).catch(() => undefined);
+    };
+    room.on(RoomEvent.Reconnected, reload);
+    return () => room.off(RoomEvent.Reconnected, reload);
+  }, [room, meeting.slug]);
+
+  useEffect(() => {
+    if (!peopleOpen) return;
+    let cancelled = false;
+    api.privateConversations(meeting.slug)
+      .then((result) => { if (!cancelled) setRecentConversations(result.conversations); })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [peopleOpen, meeting.slug]);
+
+  useEffect(() => {
+    if (!peopleOpen) return;
+    const reloadConversations = () => {
+      void api.privateConversations(meeting.slug).then((result) => setRecentConversations(result.conversations)).catch(() => undefined);
+    };
+    room.on(RoomEvent.Reconnected, reloadConversations);
+    return () => room.off(RoomEvent.Reconnected, reloadConversations);
+  }, [room, meeting.slug, peopleOpen]);
+
+  useEffect(() => {
+    if (!directContact) return;
+    let cancelled = false;
+    setPrivateLoading(true);
+    api.privateMessages(meeting.slug, directContact.userId)
+      .then((result) => { if (!cancelled) setPrivateMessages((current) => {
+        const merged = new Map([...result.messages, ...current].map((item) => [item.id, item]));
+        return [...merged.values()].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()).slice(-200);
+      }); })
+      .catch((cause) => { if (!cancelled) window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: cause instanceof Error ? cause.message : "Could not load this private conversation." } })); })
+      .finally(() => { if (!cancelled) setPrivateLoading(false); });
+    return () => { cancelled = true; };
+  }, [meeting.slug, directContact?.userId]);
 
   useEffect(() => {
     const onFullscreen = () => {
@@ -1887,6 +2279,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
         autoFullscreenDone.current = true;
         pseudoFullRef.current = false;
         setPseudoFull(false);
+        setFullscreenPrompt(false);
         setFullScreen(true);
       } else if (!document.fullscreenElement && !pseudoFullRef.current) {
         // Esc or the browser's own fullscreen-exit control is an explicit exit;
@@ -1914,6 +2307,14 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
     room.on(RoomEvent.ActiveSpeakersChanged, onSpeakers);
     return () => { room.off(RoomEvent.ActiveSpeakersChanged, onSpeakers); };
   }, [room]);
+
+  useEffect(() => {
+    if (isActive) return;
+    setMessagesOpen(false);
+    setReactionsOpen(false);
+    setDeviceMenu(null);
+    setMediaModal(null);
+  }, [isActive]);
 
   // New message from someone else: play a tone and show a 4 second pop-up with the message at the bottom of the call.
   useEffect(() => {
@@ -1984,11 +2385,11 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
     return () => document.removeEventListener("pointerdown", unlock, true);
   }, []);
 
-  // Attempt native fullscreen on entry and once more after 15 seconds. The
-  // Fullscreen API requires a recent user gesture. Blocked attempts wait for
-  // deliberate interaction; the one 15-second retry falls back to the existing
-  // CSS fullscreen mode if native fullscreen is still unavailable.
+  // Request native fullscreen on entry and retry once after 15 seconds.
+  // Browsers that require transient user activation can reject both requests;
+  // in that case expose a clear one-tap fallback instead of forcing pseudo mode.
   useEffect(() => {
+    if (!isActive) return;
     const target = fullScreenRef.current;
     if (!target) return;
 
@@ -2015,7 +2416,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
       try { request = target.requestFullscreen({ navigationUI: "hide" }); }
       catch {
         requestPending = false;
-        if (fallbackToPseudo) enterPseudoFullscreen();
+        if (fallbackToPseudo) setFullscreenPrompt(true);
         return;
       }
       void request.then(() => {
@@ -2027,9 +2428,10 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
         gestureCleanup();
       }).catch(() => {
         requestPending = false;
-        // A failed initial no-gesture request waits for real interaction. The
-        // one 15-second retry or a real gesture may use CSS fullscreen instead.
-        if (fallbackToPseudo) enterPseudoFullscreen();
+        // The initial no-gesture request may be rejected by browser policy.
+        // After the timed retry, offer one explicit tap that can enter native
+        // fullscreen or the viewport-filling fallback where native is denied.
+        if (fallbackToPseudo) setFullscreenPrompt(true);
       });
     };
 
@@ -2059,7 +2461,18 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
       window.clearTimeout(retryTimer);
       gestureCleanup();
     };
-  }, []);
+  }, [isActive]);
+
+  useEffect(() => {
+    if (isActive) return;
+    setFullscreenPrompt(false);
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+    if (pseudoFullRef.current) {
+      pseudoFullRef.current = false;
+      setPseudoFull(false);
+      setFullScreen(false);
+    }
+  }, [isActive]);
 
   // Close the microphone / camera / reaction popovers as soon as the user presses anywhere outside them.
   useEffect(() => {
@@ -2080,6 +2493,150 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
     } catch {
       window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Your action could not be sent. Check your connection." } }));
     }
+  }
+  function focusParticipant(identity: string | null) {
+    // Spotlight is a personal viewing preference; do not change other participants' layouts.
+    setSpotlightIdentity((current) => identity && current === identity ? null : identity);
+    setPage(0);
+    setPeopleOpen(false);
+  }
+  async function openPrivateConversation(participant: Participant) {
+    const userId = participantUserId(participant);
+    if (!userId || participant.isLocal) return;
+    const contact = { userId, identity: participant.identity, name: participantName(participant) || "Participant", picture: participantPicture(participant.metadata, participant.identity) };
+    setPrivateMessages([]);
+    setPrivateLoading(true);
+    setDirectContact(contact);
+    setPrivateDraft("");
+    setPeopleOpen(false);
+  }
+  function openPrivateContact(contact: DirectContact) {
+    setPrivateMessages([]);
+    setPrivateLoading(true);
+    setDirectContact(contact);
+    setPrivateDraft("");
+    setPrivateNotice(null);
+    setPeopleOpen(false);
+  }
+  async function sendPrivateMessage(event: FormEvent) {
+    event.preventDefault();
+    const message = privateDraft.trim();
+    const contact = directContactRef.current;
+    if (!message || !contact || privateSending) return;
+    setPrivateSending(true);
+    try {
+      const result = await api.sendPrivateMessage(meeting.slug, contact.userId, message);
+      const saved = result.message;
+      setPrivateMessages((current) => current.some((item) => item.id === saved.id) ? current : [...current, saved].slice(-200));
+      setRecentConversations((current) => [
+        { userId: saved.recipientUserId, name: saved.recipientName || contact.name, picture: contact.picture, lastMessage: saved.message, createdAt: saved.createdAt },
+        ...current.filter((item) => item.userId !== saved.recipientUserId),
+      ].slice(0, 30));
+      setPrivateDraft("");
+      try {
+        const recipientIdentities = saved.recipientIdentities?.length ? saved.recipientIdentities : saved.recipientIdentity ? [saved.recipientIdentity] : [];
+        if (saved.recipientOnline && room.state === ConnectionState.Connected && recipientIdentities.length > 0) {
+          const signal: PrivateDataSignal = { kind: "private-message", recipientUserId: saved.recipientUserId, message: saved };
+          await localParticipant.publishData(new TextEncoder().encode(JSON.stringify(signal)), { reliable: true, topic: PRIVATE_MESSAGE_TOPIC, destinationIdentities: recipientIdentities });
+        } else {
+          window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Your private message was saved. It will appear when the recipient returns to the meeting." } }));
+        }
+      } catch {
+        window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Your message was saved. The recipient can read it when they return to the meeting." } }));
+      }
+    } catch (cause) {
+      window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: cause instanceof Error ? cause.message : "Could not send this private message." } }));
+    } finally { setPrivateSending(false); }
+  }
+  async function refreshRecordingStatus() {
+    try {
+      const result = await api.recordingStatus(meeting.slug, localIdentity);
+      setRecordingState(result.recording);
+    } catch { /* Status refreshes automatically after a reconnect. */ }
+  }
+  async function startRecording() {
+    if (role !== "host" || recordingBusy || !window.confirm("Start recording this meeting? Every connected participant will receive a consent request. Recording starts only after everyone accepts.")) return;
+    setRecordingBusy(true);
+    try {
+      const result = await api.startRecording(meeting.slug);
+      await refreshRecordingStatus();
+      window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: result.recording.status === "recording" ? "Meeting recording started." : "Recording consent requests sent to everyone in the meeting." } }));
+    } catch (cause) {
+      window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: cause instanceof Error ? cause.message : "Could not start meeting recording." } }));
+    } finally { setRecordingBusy(false); }
+  }
+  async function stopRecording() {
+    if (role !== "host" || recordingBusy || !recordingState || !window.confirm("Stop the recording and save it to your recordings library?")) return;
+    setRecordingBusy(true);
+    try {
+      await api.stopRecording(meeting.slug);
+      await refreshRecordingStatus();
+      window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Recording stopped. The file is being uploaded securely." } }));
+    } catch (cause) {
+      window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: cause instanceof Error ? cause.message : "Could not stop the recording." } }));
+    } finally { setRecordingBusy(false); }
+  }
+  async function retryRecordingUpload() {
+    if (role !== "host" || recordingBusy || !recordingState?.canRetry) return;
+    setRecordingBusy(true);
+    try {
+      await api.retryRecording(meeting.slug);
+      await refreshRecordingStatus();
+      window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Recording upload retry started." } }));
+    } catch (cause) {
+      window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: cause instanceof Error ? cause.message : "Could not retry the recording upload." } }));
+    } finally { setRecordingBusy(false); }
+  }
+  async function respondToRecordingConsent(accepted: boolean) {
+    if (!recordingState || recordingConsentBusy || recordingState.myDecision !== "pending") return;
+    setRecordingConsentBusy(true);
+    try {
+      await api.recordingConsent(meeting.slug, recordingState.id, localIdentity, accepted);
+      await refreshRecordingStatus();
+      if (!accepted) window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "You declined recording. The host has been notified and recording will not start." } }));
+    } catch (cause) {
+      window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: cause instanceof Error ? cause.message : "Could not save your recording decision." } }));
+    } finally { setRecordingConsentBusy(false); }
+  }
+
+  async function moderateParticipant(participant: Participant, action: "mute-mic" | "disable-camera" | "remove" | "ban" | "request-unmute" | "request-camera") {
+    if (role !== "host" || participant.isLocal || moderationBusy) return;
+    if ((action === "remove" || action === "ban") && !window.confirm(action === "ban" ? `Remove ${participantName(participant) || "this participant"} and block their account from rejoining?` : `Remove ${participantName(participant) || "this participant"} from the meeting?`)) return;
+    setModerationBusy(participant.identity);
+    try {
+      const moderationResult = await api.moderateParticipant(meeting.slug, participant.identity, action);
+      if (action === "request-unmute" || action === "request-camera") {
+        const signal: PrivateDataSignal = { kind: "moderator-request", recipientUserId: participantUserId(participant), media: action === "request-unmute" ? "microphone" : "camera", hostName: localParticipant.name || "The host" };
+        if (signal.recipientUserId) {
+          try { await localParticipant.publishData(new TextEncoder().encode(JSON.stringify(signal)), { reliable: true, topic: PRIVATE_MESSAGE_TOPIC, destinationIdentities: [participant.identity] }); } catch { /* The participant sees the request on their next connection only if still online. */ }
+        }
+        window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: action === "request-unmute" ? "Unmute request sent. The participant must allow their microphone." : "Camera-on request sent. The participant must allow their camera." } }));
+      } else if (action === "mute-mic" || action === "disable-camera") {
+        const signal: PrivateDataSignal = { kind: "moderator-media-control", recipientUserId: participantUserId(participant), media: action === "mute-mic" ? "microphone" : "camera", action: "disable", hostName: localParticipant.name || "The host" };
+        if (signal.recipientUserId) {
+          try { await localParticipant.publishData(new TextEncoder().encode(JSON.stringify(signal)), { reliable: true, topic: PRIVATE_MESSAGE_TOPIC, destinationIdentities: [participant.identity] }); } catch { /* The server-side mute remains applied even if the capture-stop notice cannot be delivered. */ }
+        }
+        window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: action === "mute-mic" ? "Participant microphone muted." : "Participant camera disabled." } }));
+      } else {
+        window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: action === "ban" || action === "remove" ? moderationResult.message : action === "mute-mic" ? "Participant microphone muted." : "Participant camera disabled." } }));
+      }
+    } catch (cause) {
+      window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: cause instanceof Error ? cause.message : "Could not apply that participant action." } }));
+    } finally { setModerationBusy(null); }
+  }
+  async function acceptModeratorRequest() {
+    const request = moderatorRequest;
+    if (!request) return;
+    setModeratorRequest(null);
+    if (await queryMediaPermission(request.media) === "denied") {
+      setMediaModal({ kind: request.media, state: mediaFailure("blocked", request.media) });
+      return;
+    }
+    if (!(await mediaAlreadyAllowed(request.media))) {
+      setMediaModal({ kind: request.media, state: { phase: "ask" } });
+      return;
+    }
+    await enableMedia(request.media);
   }
   // Turns the device on once it is allowed; anything that goes wrong opens the troubleshooting dialog instead of failing silently.
   async function enableMedia(kind: MediaKind) {
@@ -2161,8 +2718,9 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
           if (lastName === "NotAllowedError" || lastName === "AbortError" || lastName === "NotFoundError") break;
         }
       }
-      if (lastName === "NotAllowedError" || lastName === "AbortError") return; // The person closed the picker or declined: nothing to report.
-      notify(lastName === "NotFoundError" ? "There is no screen or window available to share." : "Could not start screen sharing. Check your browser permissions and try again.");
+      if (lastName === "AbortError") notify("Screen sharing was cancelled.");
+      else if (lastName === "NotAllowedError") notify("Screen sharing was not allowed. Check your browser permission and try again.");
+      else notify(lastName === "NotFoundError" ? "There is no screen or window available to share." : "Could not start screen sharing. Check your browser permissions and try again.");
     } finally { screenBusy.current = false; }
   }
   // Leaving the room always ends your share, so nobody is left looking at a frozen screen.
@@ -2192,6 +2750,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
     if (enterOnly && (document.fullscreenElement || pseudoFullRef.current || pseudoFull)) return;
     autoFullscreenDone.current = true;
     lastFullscreenAction.current = Date.now();
+    setFullscreenPrompt(false);
     const target = fullScreenRef.current;
     try {
       if (document.fullscreenElement) {
@@ -2209,8 +2768,8 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
         setFullScreen(true);
       }
     } catch {
-      // If native fullscreen is denied by browser policy, keep the manual
-      // control functional with the viewport-filling CSS fallback.
+      // A deliberate tap is the valid activation needed by native fullscreen.
+      // Keep the control usable even when that browser still denies the API.
       pseudoFullRef.current = true;
       setPseudoFull(true);
       setFullScreen(true);
@@ -2236,6 +2795,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
   useEffect(() => {
     const onDown = () => { suppressNextClick.current = overlayOpenRef.current; };
     const onClick = (event: MouseEvent) => {
+      if (!isActive) return;
       const wasOverlay = suppressNextClick.current; suppressNextClick.current = false;
       if (wasOverlay || event.defaultPrevented || event.button !== 0) return;
       const target = event.target instanceof Element ? event.target : null;
@@ -2253,12 +2813,14 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
     document.addEventListener("pointerdown", onDown, true);
     document.addEventListener("click", onClick);
     return () => { document.removeEventListener("pointerdown", onDown, true); document.removeEventListener("click", onClick); };
-  }, []);
+  }, [isActive]);
 
   const getParticipantRole = (participant: typeof participants[number]) => {
     try { return JSON.parse(participant.metadata || "{}").role === "host" ? "host" : "participant"; } catch { return "participant"; }
   };
   const orderedParticipants = [...participants].sort((a, b) => {
+    const aSpotlight = a.identity === spotlightIdentity; const bSpotlight = b.identity === spotlightIdentity;
+    if (aSpotlight !== bSpotlight) return aSpotlight ? -1 : 1;
     const aTop = a.identity === topSpeaker; const bTop = b.identity === topSpeaker;
     if (aTop !== bTop) return aTop ? -1 : 1;
     const aHost = getParticipantRole(a) === "host"; const bHost = getParticipantRole(b) === "host";
@@ -2267,8 +2829,11 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
     return (a.name || a.identity).localeCompare(b.name || b.identity);
   });
   // Your own card always lives on the first screen (right after the current speaker and the host), so you never have to page to find yourself.
+  useEffect(() => {
+    if (spotlightIdentity && !participants.some((participant) => participant.identity === spotlightIdentity)) setSpotlightIdentity(null);
+  }, [participants, spotlightIdentity]);
   const localSlot = orderedParticipants.findIndex((participant) => participant.isLocal);
-  if (localSlot >= PARTICIPANTS_PER_SCREEN) {
+  if (localSlot >= PARTICIPANTS_PER_SCREEN && orderedParticipants[0]?.identity !== spotlightIdentity) {
     const [self] = orderedParticipants.splice(localSlot, 1);
     orderedParticipants.splice(PARTICIPANTS_PER_SCREEN - 1, 0, self);
   }
@@ -2279,20 +2844,25 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
   const visibleParticipants = visualParticipants.slice(currentPage * PARTICIPANTS_PER_SCREEN, currentPage * PARTICIPANTS_PER_SCREEN + PARTICIPANTS_PER_SCREEN);
 
   return <div className={`conference-fullscreen-target ${fullScreen ? "is-fullscreen" : ""} ${pseudoFull ? "is-pseudo-fullscreen" : ""} ${fullScreen && controlsVisible ? "controls-shown" : ""}`} ref={fullScreenRef} style={{ "--dock-space": fullScreen && controlsVisible ? `${dockHeight}px` : "0px" } as CSSProperties}>
+    {fullscreenPrompt && !fullScreen && <div className="fullscreen-fallback-prompt" role="status"><span>Fullscreen needs your permission. Tap once to enter.</span><button type="button" onClick={() => void toggleFullscreen()}>Enter fullscreen <Maximize2 size={15}/></button></div>}
+    {moderatorRequest && <div className="moderator-request-banner" role="status"><span>{moderatorRequest.hostName} asks you to turn on your {moderatorRequest.media === "microphone" ? "microphone" : "camera"}. You choose whether to allow it.</span><button type="button" onClick={() => void acceptModeratorRequest()}>Review request</button><button type="button" className="request-dismiss" onClick={() => setModeratorRequest(null)} aria-label="Dismiss request"><X size={15}/></button></div>}
+    {privateNotice && <div className="room-private-notice" role="status"><span><MessageCircle size={16}/> Private message from <b>{privateNotice.name}</b></span><button type="button" onClick={() => openPrivateContact(privateNotice)}>Open chat</button><button type="button" className="notice-dismiss" onClick={() => setPrivateNotice(null)} aria-label="Dismiss notification"><X size={14}/></button></div>}
     <div className="conference-media-area">
       <RoomAudioRenderer />
       <div className="room-top-stack">
+        <div className="room-fullscreen-meeting-title" title={meeting.title}>{meeting.title}</div>
         <div className="active-count-pill" role="status" aria-live="polite" title="People currently in this meeting"><Users size={14}/><b>{participants.length}</b><span>{participants.length === 1 ? "person" : "people"} in the meeting</span></div>
+        {recordingState && <div className={`meeting-recording-banner meeting-recording-${recordingState.status}`} role="status" aria-live="polite"><span className="meeting-recording-dot"/><b>{recordingState.status === "recording" ? "Recording" : recordingState.status === "consent_pending" ? "Waiting for recording consent" : recordingState.status === "uploading" ? "Saving recording" : recordingState.status === "ready" ? "Recording saved" : recordingState.status === "failed" ? "Recording upload failed" : recordingState.status === "declined" ? "Recording declined" : "Recording"}</b>{recordingState.status === "consent_pending" && <small>{recordingState.consents.filter((item) => item.decision === "accepted").length}/{recordingState.consents.length} approved</small>}{recordingState.status === "uploading" && <><small>{recordingState.uploadProgressPercent || 0}% uploaded</small><span className="meeting-recording-progress"><i style={{ width: `${Math.max(0, Math.min(100, recordingState.uploadProgressPercent || 0))}%` }}/></span></>}</div>}
         {participants.filter((participant) => raisedHands[participant.identity]).map((participant) => <div className="raised-hand-chip" key={participant.identity} title={`${participantName(participant) || "Participant"} raised a hand`}><Hand size={13}/><span>{participantName(participant) || "Participant"}{participant.identity === localIdentity ? " (You)" : ""}</span></div>)}
       </div>
       <div className={`participant-grid-wrap ${screenShare ? "has-screen-share" : ""}`}>
         {screenShare && <ScreenShareStage key={screenShare.participant.identity} screenShare={screenShare} onStop={() => void toggleScreenShare()} onSwitch={() => void toggleScreenShare(true)}/>}
-        <div className={`participant-grid participant-grid-count-${visibleParticipants.length || 1}`}>
+        <div className={`participant-grid participant-grid-count-${visibleParticipants.length || 1} ${spotlightIdentity && visibleParticipants.some((item) => item.participant.identity === spotlightIdentity) ? "has-spotlight" : ""}`}>
           {visibleParticipants.map(({ participant, trackRef }) => {
             const isHost = getParticipantRole(participant) === "host";
             const hand = Boolean(raisedHands[participant.identity]);
             const speaking = participant.identity === localIdentity ? localVoiceActivity.speaking : participant.isSpeaking;
-            return <div className={`participant-card ${speaking ? "participant-speaking" : ""} ${isHost ? "participant-host" : ""} ${participant.identity === localIdentity ? "participant-local" : ""}`} key={participant.identity}>
+            return <div className={`participant-card ${speaking ? "participant-speaking" : ""} ${isHost ? "participant-host" : ""} ${participant.identity === localIdentity ? "participant-local" : ""} ${participant.identity === spotlightIdentity ? "participant-spotlight" : ""}`} key={participant.identity}>
               <ParticipantTile trackRef={trackRef!} />
               <ParticipantAvatar trackRef={trackRef!} participant={participant} />
               {isHost && <span className="participant-role-label">HOST</span>}
@@ -2300,7 +2870,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
             </div>;
           })}
         </div>
-        {reactions.length > 0 && <div className="reaction-float-stack" aria-live="polite">{reactions.map((reaction) => <div className="reaction-float" key={reaction.id} style={{ "--x": `${reaction.x}%`, "--drift": `${reaction.drift}px`, "--rise": `${reaction.rise}%`, "--rs": reaction.scale } as CSSProperties}><span className={`reaction-emoji reaction-emoji-${reactionKind(reaction.emoji)}`}>{reaction.emoji}</span><b>{reaction.name}</b></div>)}</div>}
+        {reactions.length > 0 && <div className="reaction-float-stack" aria-live="polite">{reactions.map((reaction) => <div className="reaction-float" key={reaction.id} style={{ "--x": `${reaction.x}%`, "--rise": `${reaction.rise}%`, "--rs": reaction.scale } as CSSProperties}><span className={`reaction-emoji reaction-emoji-${reactionKind(reaction.emoji)}`}>{reaction.emoji}</span><b>{reaction.name}</b></div>)}</div>}
         {presenceToasts.length > 0 && <div className={`room-presence-stack ${messageToast ? "room-presence-stack-raised" : ""}`} aria-live="polite">{presenceToasts.map((toast) => <div className={`room-presence-toast room-presence-${toast.kind}`} key={toast.id} role="status"><span className="room-presence-icon">{toast.kind === "joined" ? <LogIn size={15}/> : <LogOut size={15}/>}</span><span className="room-presence-text"><b>{toast.name}</b> {toast.kind === "joined" ? "joined the meeting" : "left the meeting"}</span></div>)}</div>}
         {messageToast && <div className="room-message-toast" key={messageToast.id} role="status" aria-live="polite"><span className="room-message-toast-icon"><MessageCircle size={16}/></span><span className="room-message-toast-body"><b>{messageToast.name}</b><span>{messageToast.text}</span></span></div>}
         {pages > 1 && <div className="participant-pagination"><span>Screen {currentPage + 1} of {pages} · {visualParticipants.length} participants</span><div><button className="room-icon-button" onClick={() => setPage(Math.max(0, currentPage - 1))} disabled={currentPage === 0} aria-label="Previous participant screen"><ChevronLeft size={18}/></button><button className="room-icon-button" onClick={() => setPage(Math.min(pages - 1, currentPage + 1))} disabled={currentPage >= pages - 1} aria-label="Next participant screen"><ChevronRight size={18}/></button></div></div>}
@@ -2313,7 +2883,9 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
           <button className={`room-control-button ${handRaised ? "control-selected" : ""}`} onClick={() => void toggleHand()} title={handRaised ? "Lower your hand" : "Raise your hand"}><Hand size={18}/><span>{handRaised ? "Lower hand" : "Raise hand"}</span></button>
         </div>
         <div className="room-control-group room-control-row-b">
-          <button className={`room-control-button message-control ${messagesOpen ? "control-selected" : ""}`} onClick={() => setMessagesOpen(true)} title="Open messages"><MessageCircle size={18}/><span>Messages</span>{chatMessages.length > 0 && <i>{chatMessages.length}</i>}</button>
+          <button className={`room-control-button message-control ${messagesOpen ? "control-selected" : ""}`} onClick={() => setMessagesOpen(true)} title="Open room messages"><MessageCircle size={18}/><span>Messages</span>{chatMessages.length > 0 && <i>{chatMessages.length}</i>}</button>
+          <button className={`room-control-button people-control ${peopleOpen ? "control-selected" : ""}`} onClick={() => { setPeopleOpen(true); setMessagesOpen(false); }} title="See who is in the meeting"><Users size={18}/><span>People</span><i>{participants.length}</i></button>
+          {role === "host" && <button className={`room-control-button recording-control ${recordingState?.status === "recording" ? "recording-control-active" : ""}`} onClick={() => recordingState?.status === "recording" ? void stopRecording() : recordingState?.status === "uploading" || recordingState?.status === "consent_pending" ? undefined : recordingState?.status === "failed" && recordingState.canRetry ? void retryRecordingUpload() : void startRecording()} disabled={recordingBusy || recordingState?.status === "uploading" || recordingState?.status === "consent_pending"} title={recordingState?.status === "recording" ? "Stop recording" : recordingState?.status === "failed" && recordingState.canRetry ? "Retry recording upload" : "Start meeting recording"}>{recordingBusy ? <LoaderCircle size={18} className="spin"/> : <span className="meeting-recording-dot"/>}<span>{recordingState?.status === "recording" ? "Stop" : recordingState?.status === "uploading" ? "Saving" : recordingState?.status === "consent_pending" ? "Consent" : recordingState?.status === "failed" && recordingState.canRetry ? "Retry upload" : "Record"}</span></button>}
           <div className="reaction-control-wrap"><button data-popover="reactions" className={`room-control-button ${reactionsOpen ? "control-selected" : ""}`} onClick={() => setReactionsOpen((open) => !open)} title="Send an emoji or sticker reaction"><Smile size={18}/><span>React</span></button>{reactionsOpen && <div data-popover="reactions" className="reaction-picker" role="dialog" aria-label="Choose a reaction">{REACTION_SET.map((emoji) => <button key={emoji} onClick={() => void react(emoji)} aria-label={`Send ${emoji}`}>{emoji}</button>)}</div>}</div>
         <div className="room-control-side"><button className="room-icon-button fullscreen-control" onClick={() => void toggleFullscreen()} aria-label={fullScreen ? "Exit fullscreen" : "Enter fullscreen"} title={fullScreen ? "Exit fullscreen" : "Fullscreen"}>{fullScreen ? <Minimize2 size={18}/> : <Maximize2 size={18}/>}</button>{role === "host" && <button className="room-icon-button room-end-button" onClick={onEndForEveryone} disabled={ending} title="End for everyone" aria-label="End for everyone"><X size={18}/></button>}<button className="room-leave-button" onClick={onLeave}><DoorOpen size={17}/><span>Leave</span></button></div></div>
       </div>
@@ -2328,7 +2900,20 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
       onSkip={() => { mediaAttemptRef.current++; setMediaModal(null); }}
       onClose={() => { mediaAttemptRef.current++; setMediaModal(null); }}
     />}
+    {recordingState?.status === "consent_pending" && recordingState.myDecision === "pending" && <div className="recording-consent-backdrop" role="presentation"><section className="recording-consent-modal" role="dialog" aria-modal="true" aria-labelledby="recording-consent-title"><span className="recording-consent-icon"><Video size={24}/></span><p className="section-overline">MEETING RECORDING REQUEST</p><h2 id="recording-consent-title">The host would like to record</h2><p>The recording will capture the meeting's shared audio mix and participant video layout. Your choice is saved with the meeting record. You can decline; recording will not begin unless everyone currently connected accepts.</p><div className="recording-consent-list">{recordingState.consents.map((item) => <span key={item.identity}><b>{item.displayName}</b><small>{item.decision === "accepted" ? "Accepted" : item.decision === "declined" ? "Declined" : "Awaiting response"}</small></span>)}</div><div className="recording-consent-actions"><button type="button" className="button button-soft" disabled={recordingConsentBusy} onClick={() => void respondToRecordingConsent(false)}>Decline</button><button type="button" className="button button-primary" disabled={recordingConsentBusy} onClick={() => void respondToRecordingConsent(true)}>{recordingConsentBusy ? "Saving…" : "I consent"}</button></div></section></div>}
     {messagesOpen && <div className="messages-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setMessagesOpen(false); }}><section className="messages-modal" role="dialog" aria-modal="true" aria-label="Meeting messages"><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setMessagesOpen(false)} aria-label="Back to call"><ArrowLeft size={18}/></button><div><b>Meeting messages</b><small>Chat with everyone in this room</small></div><button className="room-icon-button" onClick={() => setMessagesOpen(false)} aria-label="Close messages"><X size={18}/></button></header><div className="messages-modal-body">{chatMessages.length === 0 ? <div className="messages-empty"><MessageCircle size={25}/><b>No messages yet</b><span>Send a note to everyone in this gathering.</span></div> : chatMessages.map((message, index) => <article className={`chat-message ${message.from?.identity === localIdentity ? "chat-message-own" : ""}`} key={`${message.timestamp}-${index}`}><span className="chat-message-author">{message.from?.name || (message.from?.identity === localIdentity ? "You" : "Choir guest")}</span><p>{message.message}</p><time>{new Date(message.timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></article>)}<div ref={chatEndRef}/></div><form className="messages-composer" onSubmit={sendMessage}><input value={messageText} onChange={(event) => setMessageText(event.target.value)} placeholder="Write a message…" maxLength={2000} aria-label="Message"/><button className="button button-primary" type="submit" disabled={!messageText.trim() || isSending} aria-label="Send message"><Send size={17}/></button></form></section></div>}
+    {peopleOpen && <div className="messages-modal-backdrop people-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setPeopleOpen(false); }}><section className="messages-modal people-modal" role="dialog" aria-modal="true" aria-label="People in this meeting"><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setPeopleOpen(false)} aria-label="Back to call"><ArrowLeft size={18}/></button><div><b>People</b><small>{participants.length} currently online · presence updates live</small></div><button className="room-icon-button" onClick={() => setPeopleOpen(false)} aria-label="Close people"><X size={18}/></button></header><div className="people-directory-body"><div className="people-online-heading"><span><span className="people-online-dot"/> Online now</span><b>{participants.length}</b></div>{[...participants].sort((a, b) => getParticipantRole(a) === getParticipantRole(b) ? participantName(a).localeCompare(participantName(b)) : getParticipantRole(a) === "host" ? -1 : 1).map((person) => {
+      const isSelf = person.identity === localIdentity;
+      const micMuted = person.getTrackPublication(Track.Source.Microphone)?.isMuted ?? true;
+      const cameraMuted = person.getTrackPublication(Track.Source.Camera)?.isMuted ?? true;
+      const isHostPerson = getParticipantRole(person) === "host";
+      const busy = moderationBusy === person.identity;
+      return <article className="people-person-row" key={person.identity}><ProfilePhoto src={participantPicture(person.metadata, person.identity)} name={participantName(person)} size={128} className="people-person-avatar"/><div className="people-person-details"><div className="people-person-title"><b>{participantName(person) || "Participant"}{isSelf ? " · You" : ""}</b>{isHostPerson && <span className="people-host-tag">HOST</span>}</div><small><span className="people-online-dot"/> Connected {person.isSpeaking ? "· Speaking" : ""}{micMuted ? " · Mic off" : " · Mic on"}{cameraMuted ? " · Camera off" : " · Camera on"}</small></div>{!isSelf && <div className="people-person-actions"><button type="button" onClick={() => void focusParticipant(person.identity)} title={spotlightIdentity === person.identity ? "Clear participant focus" : "Bring participant into the main view"}>{spotlightIdentity === person.identity ? "Unfocus" : "Focus"}</button><button type="button" onClick={() => openPrivateConversation(person)} title={`Private message ${participantName(person) || "participant"}`}><MessageCircle size={15}/><span>Message</span></button>{role === "host" && !isHostPerson && <details className="people-more-menu"><summary aria-label={`Host actions for ${participantName(person) || "participant"}`}><ChevronDown size={16}/></summary><div className="people-more-popover"><button type="button" disabled={busy} onClick={() => void moderateParticipant(person, micMuted ? "request-unmute" : "mute-mic")}>{micMuted ? "Request microphone" : "Mute microphone"}</button><button type="button" disabled={busy} onClick={() => void moderateParticipant(person, cameraMuted ? "request-camera" : "disable-camera")}>{cameraMuted ? "Request camera" : "Disable camera"}</button><button type="button" disabled={busy} onClick={() => void moderateParticipant(person, "remove")}>Remove from meeting</button><button type="button" className="people-ban-action" disabled={busy} onClick={() => void moderateParticipant(person, "ban")}>Remove and block re-entry</button></div></details>}</div>}{isSelf && <span className="people-you-tag">You</span>}</article>;
+    })}{participants.length === 1 && <div className="people-alone-note">You are the only person connected right now.</div>}{recentConversations.length > 0 && <section className="people-recent-conversations"><div className="people-recent-heading">Recent private conversations</div>{recentConversations.map((contact) => {
+      const online = participants.some((person) => participantUserId(person) === contact.userId);
+      return <button type="button" className="people-recent-row" key={contact.userId} onClick={() => openPrivateContact({ userId: contact.userId, identity: "", name: contact.name, picture: contact.picture })}><ProfilePhoto src={contact.picture} name={contact.name} size={96} className="people-person-avatar"/><span className="people-recent-copy"><b>{contact.name}</b><small>{contact.lastMessage}</small></span><span className={`people-recent-status ${online ? "is-online" : ""}`}>{online ? "Online" : "Saved"}</span></button>;
+    })}</section>}</div></section></div>}
+    {directContact && <div className="messages-modal-backdrop private-chat-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setDirectContact(null); }}><section className="messages-modal private-chat-modal" role="dialog" aria-modal="true" aria-label={`Private conversation with ${directContact.name}`}><header className="messages-modal-header"><button className="room-icon-button" onClick={() => { setDirectContact(null); setPeopleOpen(true); }} aria-label="Back to people"><ArrowLeft size={18}/></button><ProfilePhoto src={directContact.picture} name={directContact.name} size={64} className="private-chat-avatar"/><div><b>{directContact.name}</b><small>Private one-to-one conversation</small></div><button className="room-icon-button" onClick={() => setDirectContact(null)} aria-label="Close private messages"><X size={18}/></button></header><div className="messages-modal-body private-chat-body">{privateLoading ? <div className="messages-empty"><LoaderCircle size={23} className="spin"/><span>Loading private conversation…</span></div> : privateMessages.length === 0 ? <div className="messages-empty"><MessageCircle size={25}/><b>No private messages yet</b><span>Only you and {directContact.name} can see this conversation.</span></div> : privateMessages.map((message) => <article className={`chat-message ${message.senderUserId === localUserId ? "chat-message-own" : ""}`} key={message.id}><span className="chat-message-author">{message.senderUserId === localUserId ? "You" : message.senderName}</span><p>{message.message}</p><time>{new Date(message.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></article>)}<div ref={privateChatEndRef}/></div><form className="messages-composer" onSubmit={sendPrivateMessage}><input value={privateDraft} onChange={(event) => setPrivateDraft(event.target.value)} placeholder={`Message ${directContact.name} privately…`} maxLength={2000} aria-label="Private message"/><button className="button button-primary" type="submit" disabled={!privateDraft.trim() || privateSending || privateLoading} aria-label="Send private message">{privateSending ? <LoaderCircle size={17} className="spin"/> : <Send size={17}/>}</button></form></section></div>}
     {role === "host" && <span className="room-host-sr" aria-hidden="true">{meeting.ownerName} is hosting</span>}
   </div>;
 }

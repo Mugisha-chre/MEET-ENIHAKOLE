@@ -3,6 +3,7 @@ export interface User {
   displayName: string;
   email: string;
   picture?: string;
+  isAdmin?: boolean;
 }
 
 export interface Meeting {
@@ -29,7 +30,31 @@ export interface JoinSession {
   serverUrl: string;
   role: "host" | "participant";
   meeting: Meeting;
-  participants?: { identity: string; name: string; picture: string }[];
+  participants?: { identity: string; name: string; picture: string; userId?: string; role?: "host" | "participant" }[];
   audio: boolean;
   video: boolean;
+}
+
+
+export interface PrivateMessage {
+  id: string;
+  senderUserId: string;
+  recipientUserId: string;
+  senderIdentity: string;
+  recipientIdentity: string;
+  senderName: string;
+  recipientName: string;
+  message: string;
+  createdAt: string;
+  recipientOnline?: boolean;
+  recipientIdentities?: string[];
+}
+
+
+export interface PrivateConversationSummary {
+  userId: string;
+  name: string;
+  picture: string;
+  lastMessage: string;
+  createdAt: string;
 }

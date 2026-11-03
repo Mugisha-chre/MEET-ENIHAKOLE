@@ -15,6 +15,14 @@ const meetingSchema = new mongoose.Schema(
     status: { type: String, enum: ["scheduled", "live", "ended", "cancelled"], default: "scheduled", index: true },
     startedAt: { type: Date, default: null },
     endedAt: { type: Date, default: null },
+    bannedUserIds: { type: [String], default: [] },
+    bannedGuestIds: { type: [String], default: [] },
+    recordingStatus: { type: String, enum: ["idle", "consent_pending", "recording", "uploading", "ready", "failed", "declined"], default: "idle", index: true },
+    activeRecordingId: { type: mongoose.Schema.Types.ObjectId, ref: "Recording", default: null },
+    participantAccounts: {
+      type: [{ userId: { type: String, required: true }, displayName: { type: String, required: true, maxlength: 80 }, picture: { type: String, default: "", maxlength: 2000 }, isGuest: { type: Boolean, default: false }, guestId: { type: String, default: "" } }],
+      default: [],
+    },
   },
   { timestamps: true, versionKey: false },
 );

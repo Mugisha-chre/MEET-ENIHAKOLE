@@ -30,7 +30,7 @@ export async function createJoinToken(input: {
     identity,
     name: input.displayName,
     ttl: Math.max(60, Math.min(input.ttlSeconds ?? 4 * 60 * 60, 4 * 60 * 60)),
-    metadata: JSON.stringify({ displayName: input.displayName, role: input.role, picture: input.picture || "" }),
+    metadata: JSON.stringify({ displayName: input.displayName, role: input.role, picture: input.picture || "", userId: input.userId || "" }),
   });
   token.addGrant({
     room: input.roomName,
@@ -42,8 +42,8 @@ export async function createJoinToken(input: {
   return token.toJwt();
 }
 
-/** Who is already in the room (name + photo), so the browser can load everything before the person arrives. Best effort, never blocks joining for long. */
-export async function listRoomPeople(roomName: string): Promise<Array<{ identity: string; name: string; picture: string }>> {
+/** Who is already in the room (name + photo + account identity), so the browser can load everyone before the person arrives. */
+export async function listRoomPeople(roomName: string): Promise<Array<{ identity: string; name: string; picture: string; userId: string; role: "host" | "participant" }>> {
   if (!isLiveKitConfigured()) return [];
   try {
     const service = new RoomServiceClient(liveKitHttpUrl(), liveKitKey(), liveKitSecret());
@@ -52,11 +52,52 @@ export async function listRoomPeople(roomName: string): Promise<Array<{ identity
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 1500)),
     ]);
     return found.map((item) => {
-      let picture = "";
-      try { const value = JSON.parse(item.metadata || "{}").picture; if (typeof value === "string" && value.startsWith("https://")) picture = value; } catch { /* No photo in metadata. */ }
-      return { identity: item.identity, name: item.name || "", picture };
+      let metadata: Record<string, unknown> = {};
+      try { metadata = JSON.parse(item.metadata || "{}") as Record<string, unknown>; } catch { /* Metadata is optional. */ }
+      const picture = typeof metadata.picture === "string" && metadata.picture.startsWith("https://") ? metadata.picture : "";
+      return {
+        identity: item.identity,
+        name: item.name || (typeof metadata.displayName === "string" ? metadata.displayName : ""),
+        picture,
+        userId: typeof metadata.userId === "string" ? metadata.userId : "",
+        role: metadata.role === "host" ? "host" : "participant",
+      };
     });
   } catch { return []; }
+}
+
+export type LiveKitModerationAction = "mute-mic" | "disable-camera" | "remove";
+
+/** Host-authorized moderation primitives. The API route verifies ownership before calling this helper. */
+export async function moderateLiveKitParticipant(roomName: string, identity: string, action: LiveKitModerationAction): Promise<{ found: boolean; userId: string }> {
+  if (!isLiveKitConfigured()) throw new Error("LiveKit is not configured.");
+  const service = new RoomServiceClient(liveKitHttpUrl(), liveKitKey(), liveKitSecret());
+  const people = await service.listParticipants(roomName);
+  const target = people.find((person) => person.identity === identity);
+  if (!target) return { found: false, userId: "" };
+  let userId = "";
+  try {
+    const metadata = JSON.parse(target.metadata || "{}") as { userId?: unknown };
+    if (typeof metadata.userId === "string") userId = metadata.userId;
+  } catch { /* Older connections may not have account metadata. */ }
+
+  if (action === "remove") {
+    await service.removeParticipant(roomName, identity, { revokeTokenTs: BigInt(Math.floor(Date.now() / 1000)) });
+    return { found: true, userId };
+  }
+
+  // LiveKit's protobuf enums are TrackType AUDIO=0/VIDEO=1 and
+  // TrackSource CAMERA=1/MICROPHONE=2. Prefer the source so a camera action
+  // never mutes screen sharing (and a mic action never mutes screen-share audio).
+  const trackType = action === "mute-mic" ? 0 : 1;
+  const trackSource = action === "mute-mic" ? 2 : 1;
+  const tracks = target.tracks.filter((track) =>
+    Number(track.source) === trackSource || (Number(track.source) === 0 && Number(track.type) === trackType),
+  );
+  if (!tracks.length) return { found: true, userId };
+  const muted = action === "mute-mic" || action === "disable-camera";
+  await Promise.all(tracks.map((track) => service.mutePublishedTrack(roomName, identity, track.sid, muted)));
+  return { found: true, userId };
 }
 
 export async function closeLiveKitRoom(roomName: string): Promise<void> {

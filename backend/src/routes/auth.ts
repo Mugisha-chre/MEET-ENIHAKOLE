@@ -2,15 +2,20 @@ import { Router } from "express";
 import { OAuth2Client } from "google-auth-library";
 import { z } from "zod";
 import { User } from "../models/User.js";
-import { optionalAuth, requireAuth, signAccessToken } from "../middleware/auth.js";
+import { optionalAuth, requireAuth, requireRegisteredAuth, signAccessToken } from "../middleware/auth.js";
+import { UserSession } from "../models/UserSession.js";
+import { PlatformEvent } from "../models/PlatformEvent.js";
+import crypto from "node:crypto";
 
 const router = Router();
 const googleSchema = z.object({ credential: z.string().min(20).max(4096) });
 let googleClient: OAuth2Client | null = null;
 
-function publicUser(user: { _id: unknown; displayName: string; email: string; picture?: string | null }) {
-  return { id: String(user._id), displayName: user.displayName, email: user.email, picture: user.picture || "" };
+function publicUser(user: { _id: unknown; displayName: string; email: string; picture?: string | null; platformRole?: string }) {
+  return { id: String(user._id), displayName: user.displayName, email: user.email, picture: user.picture || "", isAdmin: user.platformRole === "system_admin" };
 }
+
+function systemAdminEmails(): Set<string> { return new Set((process.env.SYSTEM_ADMIN_EMAILS || "").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean)); }
 
 function safePicture(value: unknown): string {
   if (typeof value !== "string") return "";
@@ -36,7 +41,7 @@ router.post("/google", async (req, res) => {
     googleClient ??= new OAuth2Client(clientId);
     const ticket = await googleClient.verifyIdToken({ idToken: parsed.data.credential, audience: clientId });
     const payload = ticket.getPayload();
-    if (!payload?.sub || !payload.email || payload.email_verified === false) {
+    if (!payload?.sub || !payload.email || payload.email_verified !== true) {
       return res.status(401).json({ error: "Your Google account email could not be verified." });
     }
     const email = payload.email.trim().toLowerCase();
@@ -51,12 +56,17 @@ router.post("/google", async (req, res) => {
       user.googleId = payload.sub;
       user.displayName = displayName;
       user.picture = picture;
+      user.platformRole = systemAdminEmails().has(email) ? "system_admin" : "member";
+      if (user.accountStatus === "suspended") return res.status(403).json({ error: "This account has been suspended. Contact the platform administrator." });
       await user.save();
     } else {
-      user = await User.create({ googleId: payload.sub, email, displayName, picture });
+      user = await User.create({ googleId: payload.sub, email, displayName, picture, platformRole: systemAdminEmails().has(email) ? "system_admin" : "member" });
     }
     const profile = publicUser(user);
-    const token = signAccessToken({ userId: profile.id, email: profile.email, displayName: profile.displayName, picture: profile.picture });
+    const sessionId = crypto.randomUUID();
+    await UserSession.create({ sessionId, user: user._id, expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60_000), userAgent: String(req.headers["user-agent"] || "").slice(0, 300) });
+    const token = signAccessToken({ userId: profile.id, email: profile.email, displayName: profile.displayName, picture: profile.picture, platformRole: user.platformRole === "system_admin" ? "system_admin" : "member", sessionId }, sessionId);
+    void PlatformEvent.create({ category: "auth", action: "google_login", actorId: profile.id, actorName: profile.displayName, path: "/api/auth/google" }).catch(() => undefined);
     return res.json({ token, user: profile });
   } catch (error) {
     console.error("[auth/google] failed", error instanceof Error ? error.message : error);
@@ -64,8 +74,18 @@ router.post("/google", async (req, res) => {
   }
 });
 
-router.get("/me", optionalAuth, requireAuth, async (req, res) => {
-  return res.json({ user: { id: req.auth!.userId, displayName: req.auth!.displayName, email: req.auth!.email, picture: req.auth!.picture || "" } });
+router.get("/me", optionalAuth, requireRegisteredAuth, requireAuth, async (req, res) => {
+  return res.json({ user: { id: req.auth!.userId, displayName: req.auth!.displayName, email: req.auth!.email, picture: req.auth!.picture || "", isAdmin: req.auth!.platformRole === "system_admin" } });
+});
+
+router.post("/session-heartbeat", optionalAuth, requireRegisteredAuth, requireAuth, async (req, res) => {
+  if (req.auth!.sessionId) await UserSession.updateOne({ sessionId: req.auth!.sessionId, user: req.auth!.userId, revokedAt: null }, { $set: { lastSeenAt: new Date() } });
+  return res.json({ success: true });
+});
+
+router.post("/logout", optionalAuth, async (req, res) => {
+  if (req.auth?.sessionId) await UserSession.updateOne({ sessionId: req.auth.sessionId }, { $set: { revokedAt: new Date() } });
+  return res.json({ success: true });
 });
 
 export default router;

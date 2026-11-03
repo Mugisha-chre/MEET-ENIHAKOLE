@@ -40,3 +40,19 @@ services:
         sync: false
       - key: MEETING_MAX_DURATION_MINUTES
         value: 240
+      - key: SYSTEM_ADMIN_EMAILS
+        sync: false
+      - key: RECORDING_S3_BUCKET
+        sync: false
+      - key: RECORDING_S3_REGION
+        sync: false
+      - key: RECORDING_S3_ACCESS_KEY
+        sync: false
+      - key: RECORDING_S3_SECRET
+        sync: false
+      - key: RECORDING_S3_ENDPOINT
+        sync: false
+      - key: RECORDING_S3_FORCE_PATH_STYLE
+        value: false
+      - key: RECORDING_MAX_FILE_BYTES
+        value: 20000000000

@@ -5,6 +5,11 @@ import rateLimit from "express-rate-limit";
 import { connectDB } from "./config/db.js";
 import authRoutes from "./routes/auth.js";
 import meetingRoutes from "./routes/meetings.js";
+import recordingRoutes from "./routes/recordings.js";
+import adminRoutes from "./routes/admin.js";
+import analyticsRoutes from "./routes/analytics.js";
+import webhookRoutes from "./routes/webhooks.js";
+import { PlatformEvent } from "./models/PlatformEvent.js";
 
 const defaultAppUrl = process.env.NODE_ENV === "production" ? "https://meet-enihakole.vercel.app" : "http://localhost:5173";
 function getFrontendBaseUrl(): string {
@@ -58,6 +63,8 @@ export function createApp(): Express {
     methods: ["GET", "POST", "PATCH", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
   }));
+  // LiveKit webhook signatures cover the raw body, so parse this content type before JSON.
+  app.use(express.raw({ type: "application/webhook+json", limit: "2mb" }));
   app.use(express.json({ limit: "12mb" }));
 
   // Supports both a long-running Node process and serverless Express deployments.
@@ -77,6 +84,9 @@ export function createApp(): Express {
     limit: 240,
     standardHeaders: "draft-7",
     legacyHeaders: false,
+    // LiveKit webhooks are independently authenticated by their signed JWT;
+    // a busy room must not exhaust the browser API quota and drop lifecycle events.
+    skip: (req) => req.path.startsWith("/webhooks/"),
     message: { error: "Too many requests. Please wait a moment and try again." },
   });
   const authLimiter = rateLimit({
@@ -96,9 +106,23 @@ export function createApp(): Express {
     res.redirect(302, absoluteAppUrl(`/share/${encodeURIComponent(req.params.slug)}`));
   });
 
+  // Persist actual API traffic metadata. Do not store query strings, payloads, cookies, IPs, or credentials.
+  app.use("/api", (req, res, next) => {
+    const started = Date.now();
+    res.on("finish", () => {
+      if (req.path === "/webhooks/livekit") return;
+      void PlatformEvent.create({ category: "traffic", action: "api_request", path: req.path.split("?")[0].slice(0, 300), method: req.method, statusCode: res.statusCode, durationMs: Date.now() - started }).catch(() => undefined);
+    });
+    next();
+  });
+
   app.use("/api", apiLimiter);
   app.use("/api/auth/google", authLimiter);
+  app.use("/api/webhooks", webhookRoutes);
   app.use("/api/auth", authRoutes);
+  app.use("/api/analytics", analyticsRoutes);
+  app.use("/api/recordings", recordingRoutes);
+  app.use("/api/admin", adminRoutes);
   app.use("/api/meetings", meetingRoutes);
 
   app.use((_req, res) => res.status(404).json({ error: "Route not found." }));
