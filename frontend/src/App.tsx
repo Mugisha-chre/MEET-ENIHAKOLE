@@ -1,7 +1,7 @@
 import { createPortal } from "react-dom";
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject, type FormEvent, type ReactNode, type TouchEvent as ReactTouchEvent } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
-import { LiveKitRoom, ParticipantTile, RoomAudioRenderer, isTrackReference, useChat, useIsMuted, useLocalParticipant, useParticipants, useRoomContext, useTracks } from "@livekit/components-react";
+import { LiveKitRoom, ParticipantTile, RoomAudioRenderer, isTrackReference, useChat, useIsMuted, useLocalParticipant, useParticipants, useRoomContext, useTracks, VideoTrack, type TrackReference } from "@livekit/components-react";
 import { ConnectionState, DisconnectReason, MediaDeviceFailure, ParticipantEvent, Room, RoomEvent, Track, VideoPreset, type Participant, type RemoteParticipant, type RoomOptions } from "livekit-client";
 import {
   ArrowDownRight, ArrowLeft, ArrowRight, AudioLines, CalendarClock, CalendarDays, Check,
@@ -937,6 +937,7 @@ const ROOM_OPTIONS: RoomOptions = {
   videoCaptureDefaults: { resolution: { width: 1280, height: 720, frameRate: 30 } },
   publishDefaults: {
     videoEncoding: { maxBitrate: 1_500_000, maxFramerate: 30 },
+    screenShareEncoding: { maxBitrate: 3_000_000, maxFramerate: 15 },
     videoSimulcastLayers: [new VideoPreset(640, 360, 500_000, 20), new VideoPreset(320, 180, 150_000, 15)],
   },
 };
@@ -1392,6 +1393,9 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
   const { localParticipant, isMicrophoneEnabled, isCameraEnabled, isScreenShareEnabled } = useLocalParticipant();
   const participants = useParticipants();
   const trackRefs = useTracks([{ source: Track.Source.Camera, withPlaceholder: true }], { onlySubscribed: false });
+  const screenRefs = useTracks([{ source: Track.Source.ScreenShare, withPlaceholder: false }], { onlySubscribed: false });
+  // Whoever is presenting right now (their screen has arrived), shown big for everyone.
+  const screenShare = screenRefs.filter((item): item is TrackReference => isTrackReference(item) && (item.participant.isLocal || Boolean(item.publication?.track))).slice(-1)[0];
   const { chatMessages, send, isSending } = useChat();
   const [messagesOpen, setMessagesOpen] = useState(false);
   const [mediaModal, setMediaModal] = useState<{ kind: MediaKind; state: MicPromptState } | null>(null);
@@ -1639,6 +1643,24 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
       window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Could not switch that device. Check browser permissions and try again." } }));
     }
   }
+  async function toggleScreenShare() {
+    const notify = (message: string) => window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message } }));
+    if (isScreenShareEnabled) {
+      try { await localParticipant.setScreenShareEnabled(false); } catch { notify("Could not stop sharing. Please try again."); }
+      return;
+    }
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getDisplayMedia !== "function") {
+      notify("Screen sharing is not supported on this device or browser. Try a computer with Chrome, Edge, Firefox or Safari.");
+      return;
+    }
+    try {
+      await localParticipant.setScreenShareEnabled(true, { audio: true, contentHint: "detail", resolution: { width: 1920, height: 1080, frameRate: 15 } });
+    } catch (cause) {
+      const name = cause instanceof Error ? cause.name : "";
+      if (name === "NotAllowedError" || name === "AbortError") return; // The person closed the picker or declined: nothing to report.
+      notify(name === "NotFoundError" ? "There is no screen or window available to share." : "Could not start screen sharing. Check your browser permissions and try again.");
+    }
+  }
   async function toggleHand() {
     const next = !handRaised;
     setHandRaised(next);
@@ -1742,7 +1764,13 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
         <div className="active-count-pill" role="status" aria-live="polite" title="People currently in this meeting"><Users size={14}/><b>{participants.length}</b><span>{participants.length === 1 ? "person" : "people"} in the meeting</span></div>
         {participants.filter((participant) => raisedHands[participant.identity]).map((participant) => <div className="raised-hand-chip" key={participant.identity} title={`${participantName(participant) || "Participant"} raised a hand`}><Hand size={13}/><span>{participantName(participant) || "Participant"}{participant.identity === localIdentity ? " (You)" : ""}</span></div>)}
       </div>
-      <div className="participant-grid-wrap">
+      <div className={`participant-grid-wrap ${screenShare ? "has-screen-share" : ""}`}>
+        {screenShare && <div className="screen-share-view">
+          {screenShare.participant.isLocal
+            ? <div className="screen-share-self"><MonitorUp size={34}/><b>You are presenting your screen</b><span>Everyone in the meeting can see it.</span></div>
+            : <VideoTrack trackRef={screenShare}/>}
+          <div className="screen-share-label"><MonitorUp size={14}/><span>{screenShare.participant.isLocal ? "You are presenting" : `${participantName(screenShare.participant) || "Someone"} is presenting`}</span>{screenShare.participant.isLocal && <button type="button" className="screen-share-stop" onClick={() => void toggleScreenShare()}>Stop sharing</button>}</div>
+        </div>}
         <div className={`participant-grid participant-grid-count-${visibleParticipants.length || 1}`}>
           {visibleParticipants.map(({ participant, trackRef }) => {
             const isHost = getParticipantRole(participant) === "host";
@@ -1764,7 +1792,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
         <div className="room-control-group room-control-row-a">
           <div className="room-split-control"><button className={`room-control-button room-split-main ${!isMicrophoneEnabled ? "control-disabled" : ""}`} onClick={() => void toggleMedia("microphone")} title={isMicrophoneEnabled ? "Turn microphone off" : "Turn microphone on"}>{isMicrophoneEnabled ? <Mic size={18}/> : <MicOff size={18}/>}<span>{isMicrophoneEnabled ? "Mic" : "Unmute"}</span></button><button data-popover="audioinput" className="room-control-dropdown" onClick={() => setDeviceMenu(deviceMenu === "audioinput" ? null : "audioinput")} aria-label="Choose microphone" title="Choose microphone"><ChevronDown size={14}/></button>{deviceMenu === "audioinput" && <div data-popover="audioinput" className="room-device-menu">{inputDevices.filter((device) => device.kind === "audioinput").map((device) => <button key={device.deviceId} onClick={() => void chooseDevice("audioinput", device.deviceId)}>{device.label || `Microphone ${device.deviceId.slice(0, 5)}`}</button>)}{inputDevices.filter((device) => device.kind === "audioinput").length === 0 && <span>No microphones found</span>}</div>}</div>
           <div className="room-split-control"><button className={`room-control-button room-split-main ${!isCameraEnabled ? "control-disabled" : ""}`} onClick={() => void toggleMedia("camera")} title={isCameraEnabled ? "Turn camera off" : "Turn camera on"}>{isCameraEnabled ? <VideoIcon size={18}/> : <VideoOff size={18}/>}<span>{isCameraEnabled ? "Camera" : "Camera off"}</span></button><button data-popover="videoinput" className="room-control-dropdown" onClick={() => setDeviceMenu(deviceMenu === "videoinput" ? null : "videoinput")} aria-label="Choose camera" title="Choose camera"><ChevronDown size={14}/></button>{deviceMenu === "videoinput" && <div data-popover="videoinput" className="room-device-menu">{inputDevices.filter((device) => device.kind === "videoinput").map((device) => <button key={device.deviceId} onClick={() => void chooseDevice("videoinput", device.deviceId)}>{device.label || `Camera ${device.deviceId.slice(0, 5)}`}</button>)}{inputDevices.filter((device) => device.kind === "videoinput").length === 0 && <span>No cameras found</span>}</div>}</div>
-          <button className={`room-control-button ${isScreenShareEnabled ? "control-selected" : ""}`} onClick={() => void localParticipant.setScreenShareEnabled(!isScreenShareEnabled)} title={isScreenShareEnabled ? "Stop sharing screen" : "Share screen"}><MonitorUp size={18}/><span>Share</span></button>
+          <button className={`room-control-button ${isScreenShareEnabled ? "control-selected" : ""}`} onClick={() => void toggleScreenShare()} title={isScreenShareEnabled ? "Stop sharing screen" : "Share screen"}><MonitorUp size={18}/><span>{isScreenShareEnabled ? "Stop share" : "Share"}</span></button>
           <button className={`room-control-button ${handRaised ? "control-selected" : ""}`} onClick={() => void toggleHand()} title={handRaised ? "Lower your hand" : "Raise your hand"}><Hand size={18}/><span>{handRaised ? "Lower hand" : "Raise hand"}</span></button>
         </div>
         <div className="room-control-group room-control-row-b">

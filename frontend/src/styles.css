@@ -1708,3 +1708,73 @@ html.is-scrolling .meeting-card:hover { transform: translateZ(0); box-shadow: no
 .meeting-ended-card h1 { margin: 0 0 8px; font-size: clamp(22px, 5vw, 26px); }
 .meeting-ended-title { margin: 0 0 10px; color: #e8ca91; font-weight: 700; font-size: 14px; overflow-wrap: anywhere; }
 .meeting-ended-text { margin: 0 0 26px; color: #c5abb5; font-size: 13px; line-height: 1.6; }
+
+/* ===== Update round 6: badge layering, own card above the bar, dark room dialogs, selected corners ===== */
+
+/* Messages count badge always sits on top of the neighbouring buttons. */
+.room-control-dock .message-control { z-index: 6; }
+.room-control-dock .message-control i { z-index: 7; }
+
+/* Your own small card lifts above the control bar whenever the bar is shown in fullscreen. */
+.conference-fullscreen-target.is-fullscreen .participant-grid.participant-grid-count-2 > .participant-card.participant-local { bottom: calc(22px + var(--dock-space, 0px)); transition: bottom .38s cubic-bezier(.22,1,.36,1); }
+@media (max-width: 720px) { .conference-fullscreen-target.is-fullscreen .participant-grid.participant-grid-count-2 > .participant-card.participant-local { bottom: auto; transition: none; } }
+
+/* The room is always dark: dialogs opened inside it (mic / camera permission, end meeting) keep the dark look even when the site theme is light. */
+:root[data-theme="light"] .conference-fullscreen-target,
+:root[data-theme="light"] .confirm-end-backdrop {
+  color-scheme: dark; color: #f8f1ef;
+  --bg: #130d10; --bg-elevated: #1c1317; --bg-panel: #21171b; --bg-soft: #2a1c22;
+  --line: rgba(248,234,235,.09); --line-strong: rgba(248,234,235,.16);
+  --text: #f8f1ef; --muted: #b4a3a8; --quiet: #89767d;
+  --burgundy: #8f2141; --burgundy-bright: #a92b4e; --burgundy-soft: #4a1e2c;
+  --gold: #ddbd83; --gold-soft: #372b1e; --cream: #f6ede2; --danger: #c85060;
+}
+:root[data-theme="light"] .conference-fullscreen-target .modal-backdrop,
+:root[data-theme="light"] .confirm-end-backdrop { background: rgba(8,4,6,.76); }
+:root[data-theme="light"] .conference-fullscreen-target .modal-panel,
+:root[data-theme="light"] .confirm-end-backdrop .modal-panel { color: #f8f1ef; border-color: rgba(225,162,180,.18); background: #1c1318; box-shadow: 0 35px 100px rgba(0,0,0,.48); }
+:root[data-theme="light"] .conference-fullscreen-target .modal-panel h2,
+:root[data-theme="light"] .confirm-end-backdrop .modal-panel h2 { color: #f8f1ef; }
+:root[data-theme="light"] .conference-fullscreen-target .mic-modal-text,
+:root[data-theme="light"] .conference-fullscreen-target .mic-modal-status-soft,
+:root[data-theme="light"] .conference-fullscreen-target .mic-modal-help,
+:root[data-theme="light"] .confirm-end-backdrop .confirm-end-panel p { color: #a89299; }
+:root[data-theme="light"] .conference-fullscreen-target .mic-modal-status { color: #e8ca91; }
+:root[data-theme="light"] .conference-fullscreen-target .mic-modal-status-ok { color: #8ab49a; }
+:root[data-theme="light"] .conference-fullscreen-target .mic-modal-actions { background: #1c1318; }
+:root[data-theme="light"] .conference-fullscreen-target .section-overline,
+:root[data-theme="light"] .conference-fullscreen-target .eyebrow { color: #ae8995; }
+:root[data-theme="light"] .conference-fullscreen-target .modal-panel .button-soft,
+:root[data-theme="light"] .confirm-end-backdrop .button-soft { background: rgba(255,255,255,.035); border-color: rgba(248,234,235,.16); color: #dfd0d2; }
+:root[data-theme="light"] .conference-fullscreen-target .modal-panel .button-soft:hover:not(:disabled),
+:root[data-theme="light"] .confirm-end-backdrop .button-soft:hover:not(:disabled) { border-color: rgba(234,190,199,.3); background: rgba(255,255,255,.07); }
+:root[data-theme="light"] .conference-fullscreen-target .modal-panel .icon-button { color: #dfd0d2; }
+
+/* Selected rounded corners on the control bar; everything else stays square. */
+.room-control-dock .room-control-row-a > .room-split-control:first-child > .room-split-main { border-top-left-radius: 10px; }
+.room-control-dock .room-control-button.message-control { border-bottom-left-radius: 10px; }
+.room-control-dock .room-leave-button { border-top-right-radius: 10px; border-bottom-right-radius: 10px; }
+@media (max-width: 720px) {
+  .room-control-dock .room-control-row-a > .room-control-button:last-child { border-top-right-radius: 10px; }
+  .room-control-dock .room-leave-button { border-top-right-radius: 0; border-bottom-right-radius: 10px; }
+}
+
+/* ===== Update round 7: screen sharing ===== */
+.screen-share-view { position: relative; flex: 1 1 0; min-height: 0; margin-bottom: 8px; overflow: hidden; border: 1px solid rgba(248,233,234,.13); border-radius: 12px; background: #000; display: grid; place-items: center; }
+.screen-share-view video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+.screen-share-label { position: absolute; z-index: 3; left: 10px; top: 10px; max-width: calc(100% - 20px); display: inline-flex; align-items: center; gap: 8px; padding: 6px 8px 6px 11px; border-radius: 999px; color: #fff; background: rgba(24,12,18,.82); border: 1px solid rgba(255,255,255,.16); font-size: 11px; font-weight: 700; backdrop-filter: blur(6px); }
+.screen-share-label span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.screen-share-label:not(:has(button)) { padding-right: 12px; }
+.screen-share-stop { flex: 0 0 auto; padding: 5px 11px; border: 0; border-radius: 999px; color: #fff; background: #93263f; font-size: 10px; font-weight: 800; cursor: pointer; }
+.screen-share-stop:hover { background: #ae3150; }
+.screen-share-self { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 20px; text-align: center; color: #e8ca91; }
+.screen-share-self b { color: #fff7f4; font-size: 15px; }
+.screen-share-self span { color: #a89299; font-size: 12px; }
+/* While someone presents, the people become a scrolling strip under the shared screen. */
+.participant-grid-wrap.has-screen-share .participant-grid { flex: 0 0 auto; display: flex; gap: 8px; height: clamp(92px, 20vh, 150px); overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.participant-grid-wrap.has-screen-share .participant-grid > .participant-card,
+.participant-grid-wrap.has-screen-share .participant-grid > .participant-card.participant-local { position: relative !important; inset: auto !important; flex: 0 0 auto; width: auto !important; height: 100% !important; aspect-ratio: 16 / 10 !important; grid-column: auto !important; grid-row: auto !important; }
+.participant-grid-wrap.has-screen-share .participant-name-overlay { min-height: 28px; padding: 4px 8px 5px 8px; }
+.participant-grid-wrap.has-screen-share .participant-name-copy b { font-size: 10px; max-width: 90px; }
+.participant-grid-wrap.has-screen-share .participant-role-label { display: none; }
+@media (max-width: 720px) { .participant-grid-wrap.has-screen-share .participant-grid { height: clamp(78px, 15vh, 110px); } .screen-share-label { font-size: 10px; } }
