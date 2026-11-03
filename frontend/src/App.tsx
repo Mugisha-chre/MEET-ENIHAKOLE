@@ -1,7 +1,8 @@
+import { createPortal } from "react-dom";
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject, type FormEvent, type ReactNode, type TouchEvent as ReactTouchEvent } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { LiveKitRoom, ParticipantTile, RoomAudioRenderer, isTrackReference, useChat, useIsMuted, useLocalParticipant, useParticipants, useRoomContext, useTracks } from "@livekit/components-react";
-import { ConnectionState, MediaDeviceFailure, ParticipantEvent, Room, RoomEvent, Track, VideoPreset, type Participant, type RemoteParticipant, type RoomOptions } from "livekit-client";
+import { ConnectionState, DisconnectReason, MediaDeviceFailure, ParticipantEvent, Room, RoomEvent, Track, VideoPreset, type Participant, type RemoteParticipant, type RoomOptions } from "livekit-client";
 import {
   ArrowDownRight, ArrowLeft, ArrowRight, AudioLines, CalendarClock, CalendarDays, Check,
   CheckCircle2, CircleHelp, Clock3, Copy, DoorOpen, HeartHandshake, Home,
@@ -71,6 +72,16 @@ function meetingImage(meeting: Meeting) {
   return meeting.thumbnailUrl || "/og-default.png";
 }
 
+/** True once a meeting's time is over (same rule the server uses), so it stops looking upcoming or live without waiting for a refresh. */
+function expireMeetingLocally(meeting: Meeting, now: number): Meeting {
+  if (meeting.status !== "scheduled" && meeting.status !== "live") return meeting;
+  const minute = 60_000;
+  const over = meeting.status === "scheduled"
+    ? now > new Date(meeting.startsAt).getTime() + meeting.durationMinutes * minute
+    : now > new Date(meeting.startedAt || meeting.startsAt).getTime() + meeting.durationMinutes * minute + 30 * minute;
+  return over ? { ...meeting, status: "ended", endedAt: meeting.endedAt || new Date(now).toISOString() } : meeting;
+}
+
 function getMeetingStateLabel(meeting: Meeting) {
   if (meeting.status === "live") return "Live now";
   if (meeting.status === "ended") return "Ended";
@@ -85,6 +96,7 @@ export default function App() {
   const [publicMeetings, setPublicMeetings] = useState<Meeting[]>(() => readCache<Meeting[]>("public")?.value ?? []);
   const [loadingMeetings, setLoadingMeetings] = useState(() => !readCache("public") && !(getAuthToken() && readCache("mine")));
   const lastMeetingsFetch = useRef(0);
+  const [clock, setClock] = useState(() => Date.now());
   const [authOpen, setAuthOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [instantMode, setInstantMode] = useState(false);
@@ -216,9 +228,18 @@ export default function App() {
     void refreshMeetings(true);
   }, [refreshMeetings]);
 
+  // Every 20 seconds past meetings drop out of the lists on their own, and the lists are re-checked with the server every minute.
+  useEffect(() => {
+    const tick = window.setInterval(() => setClock(Date.now()), 20_000);
+    const sync = window.setInterval(() => { if (document.visibilityState === "visible") void refreshMeetings(true); }, 60_000);
+    return () => { window.clearInterval(tick); window.clearInterval(sync); };
+  }, [refreshMeetings]);
+  const liveMeetings = useMemo(() => meetings.map((meeting) => expireMeetingLocally(meeting, clock)), [meetings, clock]);
+  const livePublicMeetings = useMemo(() => publicMeetings.map((meeting) => expireMeetingLocally(meeting, clock)), [publicMeetings, clock]);
+
   const contextValue = useMemo<AppContextValue>(() => ({
-    user, meetings, publicMeetings, loadingMeetings, refreshMeetings, openAuth, completeAuth, openSchedule, signOut, theme, toggleTheme,
-  }), [user, meetings, publicMeetings, loadingMeetings, refreshMeetings, openAuth, completeAuth, openSchedule, signOut, theme, toggleTheme]);
+    user, meetings: liveMeetings, publicMeetings: livePublicMeetings, loadingMeetings, refreshMeetings, openAuth, completeAuth, openSchedule, signOut, theme, toggleTheme,
+  }), [user, liveMeetings, livePublicMeetings, loadingMeetings, refreshMeetings, openAuth, completeAuth, openSchedule, signOut, theme, toggleTheme]);
 
   return (
     <AppContext.Provider value={contextValue}>
@@ -491,7 +512,8 @@ function MeetingCard({ meeting }: { meeting: Meeting }) {
 
 function MeetingsPage() {
   const { user, meetings, publicMeetings, loadingMeetings, openAuth, openSchedule, refreshMeetings } = useAppContext();
-  const visible = user ? meetings : publicMeetings;
+  // Everything the person can see: their own meetings plus every public gathering, without duplicates.
+  const visible = [...(user ? meetings : []), ...publicMeetings].filter((meeting, index, array) => array.findIndex((other) => other.slug === meeting.slug) === index);
   const [filter, setFilter] = useState<"upcoming" | "past" | "all">("upcoming");
   const list = visible.filter((meeting) => {
     if (filter === "upcoming") return meeting.status === "scheduled" || meeting.status === "live";
@@ -654,7 +676,7 @@ function MeetingPage() {
             {!user && !ended && <div className="join-google"><p>Continue with Google to join. We use your Google name and profile photo so everyone knows who you are.</p><GoogleContinueButton oneTap onCredential={(credential) => void googleCredential(credential)}/></div>}
             {!ended && <div className="join-preferences"><MediaToggle on={cameraOn} onChange={setCameraOn} onIcon={<Video size={16}/>} offIcon={<VideoOff size={16}/>} onLabel="Camera is on" offLabel="Camera is off" onHint="Join with video" offHint="Join without video"/><MediaToggle on={micOn} onChange={setMicOn} onIcon={<Mic size={16}/>} offIcon={<MicOff size={16}/>} onLabel="Microphone is on" offLabel="Microphone is off" onHint="Join with audio" offHint="Join muted"/></div>}
             {error && <div className="inline-error" role="alert">{error}{error.includes("Sign in") && <button type="button" className="error-link" onClick={openAuth}>Sign in</button>}</div>}
-            {ended ? <Link to="/" className="button button-soft button-full"><ArrowLeft size={16}/> Back to home</Link> : user && <button className="button button-primary button-full join-submit" type="submit" disabled={joining}>{joining ? <LoaderCircle size={17} className="spin"/> : meeting.isOwner ? <Video size={17}/> : <DoorOpen size={17}/>} {joining ? "Joining…" : meeting.isOwner ? "Start meeting" : meeting.status === "live" ? "Join meeting" : "Check room availability"}<ArrowRight size={16}/></button>}
+            {ended ? <Link to="/meetings" className="button button-soft button-full"><ArrowLeft size={16}/> Back to meetings</Link> : user && <button className="button button-primary button-full join-submit" type="submit" disabled={joining}>{joining ? <LoaderCircle size={17} className="spin"/> : meeting.isOwner ? <Video size={17}/> : <DoorOpen size={17}/>} {joining ? "Joining…" : meeting.isOwner ? "Start meeting" : meeting.status === "live" ? "Join meeting" : "Check room availability"}<ArrowRight size={16}/></button>}
             <p className="join-footnote"><ShieldCheck size={13}/> Your camera and microphone are only requested when you enter the room.</p>
           </form>
         </section>
@@ -796,6 +818,8 @@ function MeetingRoomPage() {
   const [ending, setEnding] = useState(false);
   const [endError, setEndError] = useState("");
   const [disconnected, setDisconnected] = useState(false);
+  const [confirmEnd, setConfirmEnd] = useState(false);
+  const [meetingEnded, setMeetingEnded] = useState(false);
   // A room that was already connected and fully loaded on the meeting page; the room opens complete, with nothing left to load.
   const [preparedRoom] = useState<Room | null>(() => { const room = preparedRooms.get(slug); return room && room.state === ConnectionState.Connected ? room : null; });
 
@@ -806,21 +830,37 @@ function MeetingRoomPage() {
     } catch { setSession(null); }
   }, [slug]);
 
-  async function endForEveryone() {
+  // The host pressed End for everyone: ask first with our own confirmation, never the browser box.
+  function endForEveryone() {
+    if (!session || session.role !== "host" || ending) return;
+    setConfirmEnd(true);
+  }
+  function showEnded() {
+    sessionStorage.removeItem(`meet-session:${slug}`);
+    preparedRooms.delete(slug);
+    setConfirmEnd(false);
+    setMeetingEnded(true);
+  }
+  async function confirmEndForEveryone() {
     if (!session || session.role !== "host") return;
-    const confirmed = window.confirm("End this meeting for everyone in the room?");
-    if (!confirmed) return;
     setEnding(true); setEndError("");
     try {
       await api.endMeeting(slug);
       window.dispatchEvent(new CustomEvent("meet-meeting-changed", { detail: { slug, patch: { status: "ended", endedAt: new Date().toISOString() } } }));
-      sessionStorage.removeItem(`meet-session:${slug}`);
-      navigate(`/meeting/${encodeURIComponent(slug)}`);
+      showEnded();
     } catch (cause) {
+      setConfirmEnd(false);
       setEndError(cause instanceof Error ? cause.message : "Could not end the meeting.");
     } finally { setEnding(false); }
   }
+  // The room closed under us. If the host ended the meeting, everyone lands on the ended screen straight away.
+  function handleRoomDisconnected(reason?: DisconnectReason) {
+    if (reason === DisconnectReason.ROOM_DELETED) { showEnded(); return; }
+    setDisconnected(true);
+    void api.meeting(slug).then(({ meeting }) => { if (meeting.status === "ended" || meeting.status === "cancelled") showEnded(); }).catch(() => { /* Keep the normal disconnected notice. */ });
+  }
 
+  if (meetingEnded) return <MeetingEndedScreen title={session?.meeting.title ?? ""} isHost={session?.role === "host"} onBack={() => navigate("/meetings")}/>;
   if (!session) return <StandaloneError message="Your room session is missing or expired. Open the invitation again to rejoin." action={<Link className="button button-primary" to={`/meeting/${slug}`}>Return to meeting</Link>}/>;
 
   return (
@@ -829,7 +869,7 @@ function MeetingRoomPage() {
       {endError && <div className="room-alert" role="alert">{endError}</div>}
       {disconnected && <div className="room-alert" role="status">You have disconnected from the call. <button onClick={() => navigate(`/meeting/${slug}`)}>Return to meeting</button></div>}
       <main className="conference-main">
-        <div className="conference-title-row"><div><p className="section-overline">ENIHAKOLE CHOIR · LIVE CONFERENCE</p><h1>{session.meeting.title}</h1></div><div className="conference-tools"><span className="encrypted-pill"><ShieldCheck size={14}/> Secure connection</span>{session.role === "host" && <button className="button button-danger button-small" onClick={() => void endForEveryone()} disabled={ending}>{ending ? <LoaderCircle size={15} className="spin"/> : <X size={15}/>} End for everyone</button>}</div></div>
+        <div className="conference-title-row"><div><p className="section-overline">ENIHAKOLE CHOIR · LIVE CONFERENCE</p><h1>{session.meeting.title}</h1></div><div className="conference-tools"><span className="encrypted-pill"><ShieldCheck size={14}/> Secure connection</span>{session.role === "host" && <button className="button button-danger button-small" onClick={() => endForEveryone()} disabled={ending}>{ending ? <LoaderCircle size={15} className="spin"/> : <X size={15}/>} End for everyone</button>}</div></div>
         <div className="conference-stage">
           <LiveKitRoom
             room={preparedRoom ?? undefined}
@@ -839,17 +879,56 @@ function MeetingRoomPage() {
             audio={session.audio}
             video={session.video}
             options={ROOM_OPTIONS}
-            onDisconnected={() => setDisconnected(true)}
+            onDisconnected={handleRoomDisconnected}
             onMediaDeviceFailure={(failure, kind) => window.dispatchEvent(new CustomEvent("meet-media-failure", { detail: { failure, kind } }))}
           >
-            <ConferenceWorkspace meeting={session.meeting} role={session.role} onLeave={() => navigate(`/meeting/${slug}`)} onEndForEveryone={() => void endForEveryone()} ending={ending}/>
+            <ConferenceWorkspace meeting={session.meeting} role={session.role} onLeave={() => navigate(`/meeting/${slug}`)} onEndForEveryone={() => endForEveryone()} ending={ending}/>
             {!preparedRoom && <RoomReadyOverlay expected={(session.participants ?? []).map((person) => person.identity)}/>}
           </LiveKitRoom>
         </div>
+        {confirmEnd && <ConfirmEndModal busy={ending} onCancel={() => setConfirmEnd(false)} onConfirm={() => void confirmEndForEveryone()}/>}
         <div className="conference-bottom-note"><span><ShieldCheck size={15}/> {session.meeting.visibility === "public" ? "This gathering is publicly listed." : "This meeting uses an unlisted invitation link."}</span><span>For the clearest call, use headphones and a stable connection.</span></div>
       </main>
     </div>
   );
+}
+
+/** Our own confirmation for ending a meeting. It is drawn inside the fullscreen room when the room is fullscreen, so it is always visible. */
+function ConfirmEndModal({ busy, onCancel, onConfirm }: { busy: boolean; onCancel: () => void; onConfirm: () => void }) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape" && !busy) onCancel(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [busy, onCancel]);
+  const host = document.fullscreenElement ?? document.querySelector(".conference-fullscreen-target.is-pseudo-fullscreen") ?? document.body;
+  return createPortal(
+    <div className="modal-backdrop confirm-end-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onCancel(); }}>
+      <section className="modal-panel modal-panel-narrow confirm-end-panel" role="alertdialog" aria-modal="true" aria-labelledby="confirm-end-title" aria-describedby="confirm-end-text">
+        <div className="confirm-end-icon" aria-hidden="true"><DoorOpen size={26}/></div>
+        <h2 id="confirm-end-title">End this meeting for everyone?</h2>
+        <p id="confirm-end-text">Everyone in the room will be disconnected right away and the meeting will be closed. This cannot be undone.</p>
+        <div className="confirm-end-actions">
+          <button type="button" className="button button-soft" onClick={onCancel} disabled={busy} autoFocus>Keep meeting open</button>
+          <button type="button" className="button button-danger" onClick={onConfirm} disabled={busy}>{busy ? <LoaderCircle size={16} className="spin"/> : <X size={16}/>} {busy ? "Ending…" : "End for everyone"}</button>
+        </div>
+      </section>
+    </div>,
+    host,
+  );
+}
+
+/** Shown to everyone the moment the meeting is ended. */
+function MeetingEndedScreen({ title, isHost, onBack }: { title: string; isHost: boolean; onBack: () => void }) {
+  return <div className="meeting-ended-page" role="status" aria-live="polite">
+    <div className="meeting-ended-card">
+      <span className="meeting-ended-icon"><DoorOpen size={30}/></span>
+      <p className="eyebrow"><span className="eyebrow-dot"/> GATHERING CLOSED</p>
+      <h1>This meeting has ended</h1>
+      {title && <p className="meeting-ended-title">{title}</p>}
+      <p className="meeting-ended-text">{isHost ? "You ended this meeting for everyone. Thank you for hosting." : "The host has ended this meeting for everyone. Thank you for joining."}</p>
+      <button type="button" className="button button-primary button-full" onClick={onBack}><ArrowLeft size={16}/> Back to meetings</button>
+    </div>
+  </div>;
 }
 
 const ROOM_OPTIONS: RoomOptions = {
@@ -967,9 +1046,20 @@ function RoomReadyOverlay({ expected }: { expected: string[] }) {
 }
 
 type RoomSignal = { kind: "hand"; raised: boolean } | { kind: "reaction"; emoji: string; id: string };
-type FloatingReaction = { id: string; emoji: string; name: string };
+type FloatingReaction = { id: string; emoji: string; name: string; x: number; drift: number; rise: number; scale: number };
+const REACTION_LIFETIME = 3600;
+/** Random launch point, sideways drift and height so every reaction floats up its own way, like Google Meet. */
+function makeReaction(id: string, emoji: string, name: string): FloatingReaction {
+  const dir = Math.random() < 0.5 ? -1 : 1;
+  return { id, emoji, name, x: 12 + Math.random() * 76, drift: dir * (14 + Math.random() * 46), rise: 62 + Math.random() * 22, scale: 0.9 + Math.random() * 0.35 };
+}
+function reactionKind(emoji: string): string {
+  if (emoji === "👏") return "clap"; if (emoji === "🙌") return "wave"; if (emoji === "❤️" || emoji === "💛") return "beat";
+  if (emoji === "🎉") return "pop"; if (emoji === "✨") return "twinkle"; if (emoji === "🕊️") return "flap"; if (emoji === "👍") return "thumb";
+  return "float";
+}
 // Anything a person can press: a tap on these must keep doing its own job and never toggle fullscreen.
-const INTERACTIVE_SELECTOR = "button, a, input, textarea, select, label, summary, [role='button'], [role='dialog'], [data-popover], .room-device-menu, .reaction-picker, .messages-modal-backdrop, .room-alert, .room-message-toast, .room-presence-stack";
+const INTERACTIVE_SELECTOR = "button, a, input, textarea, select, label, summary, [role='button'], [role='dialog'], [data-popover], .room-device-menu, .reaction-picker, .messages-modal-backdrop, .room-alert, .room-message-toast, .room-presence-stack, .modal-backdrop";
 const PARTICIPANTS_PER_SCREEN = 8;
 const REACTION_SET = ["🙏", "❤️", "👏", "🙌", "😊", "🎉", "✨", "💛", "🕊️", "👍"];
 
@@ -1314,6 +1404,10 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
   const [page, setPage] = useState(0);
   const [fullScreen, setFullScreen] = useState(false);
   const [pseudoFull, setPseudoFull] = useState(false);
+  const [controlsVisible, setControlsVisible] = useState(false);
+  const [dockHeight, setDockHeight] = useState(0);
+  const dockRef = useRef<HTMLDivElement>(null);
+  const fullScreenStateRef = useRef(false);
   const [topSpeaker, setTopSpeaker] = useState("");
   const [messageToast, setMessageToast] = useState<{ id: number; name: string; text: string } | null>(null);
   const [presenceToasts, setPresenceToasts] = useState<Array<{ id: number; kind: "joined" | "left"; name: string }>>([]);
@@ -1354,9 +1448,9 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
         const identity = participant?.identity || "unknown";
         if (data.kind === "hand") setRaisedHands((current) => ({ ...current, [identity]: data.raised }));
         if (data.kind === "reaction" && REACTION_SET.includes(data.emoji)) {
-          const item = { id: data.id, emoji: data.emoji, name: participant?.name || "A participant" };
-          setReactions((current) => [...current.slice(-5), item]);
-          window.setTimeout(() => setReactions((current) => current.filter((reaction) => reaction.id !== item.id)), 3200);
+          const item = makeReaction(`${data.id}-${Math.random().toString(36).slice(2, 6)}`, data.emoji, participant?.name || "A participant");
+          setReactions((current) => [...current.slice(-11), item]);
+          window.setTimeout(() => setReactions((current) => current.filter((reaction) => reaction.id !== item.id)), REACTION_LIFETIME);
         }
       } catch { /* Ignore unrelated or malformed room data. */ }
     };
@@ -1403,7 +1497,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
     if (messagesOpenRef.current) return;
     setMessageToast({ id: Date.now(), name: latest.from?.name || "Choir guest", text: latest.message });
     window.clearTimeout(messageToastTimer.current);
-    messageToastTimer.current = window.setTimeout(() => setMessageToast(null), 4000);
+    messageToastTimer.current = window.setTimeout(() => setMessageToast(null), 5000);
   }, [chatMessages, localIdentity]);
   useEffect(() => () => window.clearTimeout(messageToastTimer.current), []);
   // Someone joins or leaves: play a tone and show a bottom pop-up saying who. People already in the room when we arrive are not announced.
@@ -1554,8 +1648,8 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
   async function react(emoji: string) {
     setReactionsOpen(false);
     const id = `${localIdentity}-${Date.now()}`;
-    setReactions((current) => [...current.slice(-5), { id, emoji, name: localParticipant.name || "You" }]);
-    window.setTimeout(() => setReactions((current) => current.filter((reaction) => reaction.id !== id)), 3200);
+    setReactions((current) => [...current.slice(-11), makeReaction(id, emoji, localParticipant.name || "You")]);
+    window.setTimeout(() => setReactions((current) => current.filter((reaction) => reaction.id !== id)), REACTION_LIFETIME);
     await broadcast({ kind: "reaction", emoji, id });
   }
   async function sendMessage(event: FormEvent) {
@@ -1583,6 +1677,19 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
   // Tapping or clicking anywhere on the room page (outside fullscreen) enters fullscreen; it never exits it. Buttons, links, menus and the chat keep working normally.
   const toggleFullscreenRef = useRef(toggleFullscreen);
   toggleFullscreenRef.current = toggleFullscreen;
+  // Fullscreen: the control bar starts hidden and each tap on the stage fades it in or out.
+  fullScreenStateRef.current = fullScreen;
+  useEffect(() => { setControlsVisible(false); }, [fullScreen]);
+  useEffect(() => {
+    const dock = dockRef.current;
+    if (!dock) return;
+    const measure = () => setDockHeight(Math.round(dock.getBoundingClientRect().height));
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(dock);
+    return () => observer.disconnect();
+  }, []);
   useEffect(() => {
     const onDown = () => { suppressNextClick.current = overlayOpenRef.current; };
     const onClick = (event: MouseEvent) => {
@@ -1591,7 +1698,12 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
       const target = event.target instanceof Element ? event.target : null;
       if (!target || !target.isConnected || target.closest(INTERACTIVE_SELECTOR)) return;
       if (window.getSelection()?.toString()) return;
-      if (document.fullscreenElement || pseudoFullRef.current) return; // already fullscreen: clicking the page never exits it
+      if (document.fullscreenElement || pseudoFullRef.current || fullScreenStateRef.current) {
+        // Already fullscreen: a tap never exits it, it only shows or hides the control bar.
+        if (Date.now() - lastFullscreenAction.current < 350) return;
+        setControlsVisible((visible) => !visible);
+        return;
+      }
       if (Date.now() - lastFullscreenAction.current < 350) return;
       void toggleFullscreenRef.current(true, true);
     };
@@ -1623,7 +1735,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
   const currentPage = Math.min(page, pages - 1);
   const visibleParticipants = visualParticipants.slice(currentPage * PARTICIPANTS_PER_SCREEN, currentPage * PARTICIPANTS_PER_SCREEN + PARTICIPANTS_PER_SCREEN);
 
-  return <div className={`conference-fullscreen-target ${fullScreen ? "is-fullscreen" : ""} ${pseudoFull ? "is-pseudo-fullscreen" : ""}`} ref={fullScreenRef}>
+  return <div className={`conference-fullscreen-target ${fullScreen ? "is-fullscreen" : ""} ${pseudoFull ? "is-pseudo-fullscreen" : ""} ${fullScreen && controlsVisible ? "controls-shown" : ""}`} ref={fullScreenRef} style={{ "--dock-space": fullScreen && controlsVisible ? `${dockHeight}px` : "0px" } as CSSProperties}>
     <div className="conference-media-area">
       <RoomAudioRenderer />
       <div className="room-top-stack">
@@ -1643,15 +1755,15 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
             </div>;
           })}
         </div>
-        {reactions.length > 0 && <div className="reaction-float-stack" aria-live="polite">{reactions.map((reaction) => <div className="reaction-float" key={reaction.id}><span>{reaction.emoji}</span><b>{reaction.name}</b></div>)}</div>}
+        {reactions.length > 0 && <div className="reaction-float-stack" aria-live="polite">{reactions.map((reaction) => <div className="reaction-float" key={reaction.id} style={{ "--x": `${reaction.x}%`, "--drift": `${reaction.drift}px`, "--rise": `${reaction.rise}%`, "--rs": reaction.scale } as CSSProperties}><span className={`reaction-emoji reaction-emoji-${reactionKind(reaction.emoji)}`}>{reaction.emoji}</span><b>{reaction.name}</b></div>)}</div>}
         {presenceToasts.length > 0 && <div className={`room-presence-stack ${messageToast ? "room-presence-stack-raised" : ""}`} aria-live="polite">{presenceToasts.map((toast) => <div className={`room-presence-toast room-presence-${toast.kind}`} key={toast.id} role="status"><span className="room-presence-icon">{toast.kind === "joined" ? <LogIn size={15}/> : <LogOut size={15}/>}</span><span className="room-presence-text"><b>{toast.name}</b> {toast.kind === "joined" ? "joined the meeting" : "left the meeting"}</span></div>)}</div>}
         {messageToast && <div className="room-message-toast" key={messageToast.id} role="status" aria-live="polite"><span className="room-message-toast-icon"><MessageCircle size={16}/></span><span className="room-message-toast-body"><b>{messageToast.name}</b><span>{messageToast.text}</span></span></div>}
         {pages > 1 && <div className="participant-pagination"><span>Screen {currentPage + 1} of {pages} · {visualParticipants.length} participants</span><div><button className="room-icon-button" onClick={() => setPage(Math.max(0, currentPage - 1))} disabled={currentPage === 0} aria-label="Previous participant screen"><ChevronLeft size={18}/></button><button className="room-icon-button" onClick={() => setPage(Math.min(pages - 1, currentPage + 1))} disabled={currentPage >= pages - 1} aria-label="Next participant screen"><ChevronRight size={18}/></button></div></div>}
       </div>
-      <div className="room-control-dock">
+      <div className={`room-control-dock ${!fullScreen || controlsVisible ? "dock-open" : "dock-hidden"}`} ref={dockRef} aria-hidden={fullScreen && !controlsVisible}>
         <div className="room-control-group room-control-row-a">
-          <div className="room-split-control"><button className={`room-control-button room-split-main ${!isMicrophoneEnabled ? "control-disabled" : ""}`} onClick={() => void toggleMedia("microphone")} title={isMicrophoneEnabled ? "Turn microphone off" : "Turn microphone on"}><Mic size={18}/><span>{isMicrophoneEnabled ? "Mic" : "Unmute"}</span></button><button data-popover="audioinput" className="room-control-dropdown" onClick={() => setDeviceMenu(deviceMenu === "audioinput" ? null : "audioinput")} aria-label="Choose microphone" title="Choose microphone"><ChevronDown size={14}/></button>{deviceMenu === "audioinput" && <div data-popover="audioinput" className="room-device-menu">{inputDevices.filter((device) => device.kind === "audioinput").map((device) => <button key={device.deviceId} onClick={() => void chooseDevice("audioinput", device.deviceId)}>{device.label || `Microphone ${device.deviceId.slice(0, 5)}`}</button>)}{inputDevices.filter((device) => device.kind === "audioinput").length === 0 && <span>No microphones found</span>}</div>}</div>
-          <div className="room-split-control"><button className={`room-control-button room-split-main ${!isCameraEnabled ? "control-disabled" : ""}`} onClick={() => void toggleMedia("camera")} title={isCameraEnabled ? "Turn camera off" : "Turn camera on"}><VideoIcon size={18}/><span>{isCameraEnabled ? "Camera" : "Camera off"}</span></button><button data-popover="videoinput" className="room-control-dropdown" onClick={() => setDeviceMenu(deviceMenu === "videoinput" ? null : "videoinput")} aria-label="Choose camera" title="Choose camera"><ChevronDown size={14}/></button>{deviceMenu === "videoinput" && <div data-popover="videoinput" className="room-device-menu">{inputDevices.filter((device) => device.kind === "videoinput").map((device) => <button key={device.deviceId} onClick={() => void chooseDevice("videoinput", device.deviceId)}>{device.label || `Camera ${device.deviceId.slice(0, 5)}`}</button>)}{inputDevices.filter((device) => device.kind === "videoinput").length === 0 && <span>No cameras found</span>}</div>}</div>
+          <div className="room-split-control"><button className={`room-control-button room-split-main ${!isMicrophoneEnabled ? "control-disabled" : ""}`} onClick={() => void toggleMedia("microphone")} title={isMicrophoneEnabled ? "Turn microphone off" : "Turn microphone on"}>{isMicrophoneEnabled ? <Mic size={18}/> : <MicOff size={18}/>}<span>{isMicrophoneEnabled ? "Mic" : "Unmute"}</span></button><button data-popover="audioinput" className="room-control-dropdown" onClick={() => setDeviceMenu(deviceMenu === "audioinput" ? null : "audioinput")} aria-label="Choose microphone" title="Choose microphone"><ChevronDown size={14}/></button>{deviceMenu === "audioinput" && <div data-popover="audioinput" className="room-device-menu">{inputDevices.filter((device) => device.kind === "audioinput").map((device) => <button key={device.deviceId} onClick={() => void chooseDevice("audioinput", device.deviceId)}>{device.label || `Microphone ${device.deviceId.slice(0, 5)}`}</button>)}{inputDevices.filter((device) => device.kind === "audioinput").length === 0 && <span>No microphones found</span>}</div>}</div>
+          <div className="room-split-control"><button className={`room-control-button room-split-main ${!isCameraEnabled ? "control-disabled" : ""}`} onClick={() => void toggleMedia("camera")} title={isCameraEnabled ? "Turn camera off" : "Turn camera on"}>{isCameraEnabled ? <VideoIcon size={18}/> : <VideoOff size={18}/>}<span>{isCameraEnabled ? "Camera" : "Camera off"}</span></button><button data-popover="videoinput" className="room-control-dropdown" onClick={() => setDeviceMenu(deviceMenu === "videoinput" ? null : "videoinput")} aria-label="Choose camera" title="Choose camera"><ChevronDown size={14}/></button>{deviceMenu === "videoinput" && <div data-popover="videoinput" className="room-device-menu">{inputDevices.filter((device) => device.kind === "videoinput").map((device) => <button key={device.deviceId} onClick={() => void chooseDevice("videoinput", device.deviceId)}>{device.label || `Camera ${device.deviceId.slice(0, 5)}`}</button>)}{inputDevices.filter((device) => device.kind === "videoinput").length === 0 && <span>No cameras found</span>}</div>}</div>
           <button className={`room-control-button ${isScreenShareEnabled ? "control-selected" : ""}`} onClick={() => void localParticipant.setScreenShareEnabled(!isScreenShareEnabled)} title={isScreenShareEnabled ? "Stop sharing screen" : "Share screen"}><MonitorUp size={18}/><span>Share</span></button>
           <button className={`room-control-button ${handRaised ? "control-selected" : ""}`} onClick={() => void toggleHand()} title={handRaised ? "Lower your hand" : "Raise your hand"}><Hand size={18}/><span>{handRaised ? "Lower hand" : "Raise hand"}</span></button>
         </div>

@@ -3,10 +3,13 @@ import { Router } from "express";
 import { z } from "zod";
 import { Meeting } from "../models/Meeting.js";
 import { optionalAuth, requireAuth } from "../middleware/auth.js";
+import { expireStaleMeetingsThrottled } from "../lib/expiry.js";
 import { closeLiveKitRoom, createJoinToken, getLiveKitUrl, isLiveKitConfigured, listRoomPeople } from "../lib/livekit.js";
 
 const router = Router();
 router.use(optionalAuth);
+// Every request first lets the server close meetings whose time is over (throttled), so lists and links are never stale.
+router.use(async (_req, _res, next) => { await expireStaleMeetingsThrottled(); next(); });
 
 const createMeetingSchema = z.object({
   title: z.string().trim().min(3, "Give your meeting a title of at least 3 characters.").max(120),
@@ -71,7 +74,7 @@ router.get("/mine", requireAuth, async (req, res) => {
   try {
     const meetings = await Meeting.find({ owner: req.auth!.userId })
       .sort({ startsAt: -1 })
-      .limit(40)
+      .limit(200)
       .lean();
     return res.json({ meetings: meetings.map((meeting) => publicMeeting(meeting, req.auth!.userId)) });
   } catch (error) {
@@ -84,7 +87,7 @@ router.get("/public", async (_req, res) => {
   try {
     const meetings = await Meeting.find({ visibility: "public", status: { $in: ["scheduled", "live"] } })
       .sort({ startsAt: 1 })
-      .limit(20)
+      .limit(200)
       .lean();
     return res.json({ meetings: meetings.map((meeting) => publicMeeting(meeting)) });
   } catch (error) {

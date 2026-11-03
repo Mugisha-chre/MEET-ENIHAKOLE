@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { createApp } from "./app.js";
 import { connectDB } from "./config/db.js";
+import { startMeetingExpiry } from "./lib/expiry.js";
 
 const port = Number(process.env.PORT || 4000);
 const app = createApp();
@@ -11,6 +12,7 @@ export default app;
 
 async function main(): Promise<void> {
   await connectDB();
+  startMeetingExpiry();
   const server = app.listen(port, "0.0.0.0", () => {
     console.info(`[api] MEET ENIHAKOLE listening on port ${port}`);
   });

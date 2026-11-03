@@ -1570,3 +1570,141 @@ html.is-scrolling .meeting-card:hover { transform: translateZ(0); box-shadow: no
 
 /* 7) Room cover while the room finishes drawing: plain stage, no words. */
 .room-ready-overlay .room-ready-spinner { color: #e8ca91; opacity: .85; }
+
+/* ===== Update round 4: room layout, fullscreen controls, flat buttons, reactions ===== */
+
+/* 1) Top row (people count + raised hands) is part of the layout, so the cards always sit below it and move down as more hands go up. */
+.room-top-stack { position: relative; top: auto; left: auto; right: auto; flex: 0 0 auto; padding: 10px 12px 0; max-height: 34%; overflow-y: auto; overscroll-behavior: contain; pointer-events: auto; scrollbar-width: none; }
+.room-top-stack::-webkit-scrollbar { display: none; }
+.room-top-stack .active-count-pill { position: relative; }
+.conference-fullscreen-target.is-fullscreen .room-top-stack { padding-top: max(10px, env(safe-area-inset-top)); }
+@media (max-width: 720px) { .room-top-stack { padding: 8px 8px 0; } .conference-fullscreen-target.is-fullscreen .room-top-stack { padding-top: max(8px, env(safe-area-inset-top)); } }
+
+/* 2) Fullscreen: control bar hidden by default, fades/slides in and out on tap; the cards make room smoothly. */
+.room-control-dock { transition: transform .38s cubic-bezier(.22,1,.36,1), opacity .3s ease, visibility 0s linear 0s; }
+.conference-fullscreen-target.is-fullscreen .participant-grid-wrap { transition: padding-bottom .38s cubic-bezier(.22,1,.36,1); padding-bottom: calc(12px + var(--dock-space, 0px)); }
+.conference-fullscreen-target.is-fullscreen .room-control-dock { position: absolute; left: 0; right: 0; bottom: 0; z-index: 12; }
+.conference-fullscreen-target.is-fullscreen .room-control-dock.dock-hidden { transform: translateY(100%); opacity: 0; visibility: hidden; pointer-events: none; transition: transform .32s cubic-bezier(.4,0,.8,.4), opacity .24s ease, visibility 0s linear .32s; }
+.conference-fullscreen-target.is-fullscreen .room-control-dock.dock-open { transform: translateY(0); opacity: 1; visibility: visible; }
+.conference-fullscreen-target.is-fullscreen .room-presence-stack { bottom: calc(14px + var(--dock-space, 0px)); transition: bottom .38s cubic-bezier(.22,1,.36,1); }
+.conference-fullscreen-target.is-fullscreen .room-presence-stack-raised { bottom: calc(84px + var(--dock-space, 0px)); }
+.conference-fullscreen-target.is-fullscreen .room-message-toast { bottom: calc(14px + var(--dock-space, 0px)); transition: bottom .38s cubic-bezier(.22,1,.36,1); }
+@media (max-width: 720px) {
+  .conference-fullscreen-target.is-fullscreen .participant-grid-wrap { padding-bottom: calc(7px + var(--dock-space, 0px)); }
+  .conference-fullscreen-target.is-fullscreen .room-presence-stack { bottom: calc(8px + var(--dock-space, 0px)); }
+  .conference-fullscreen-target.is-fullscreen .room-presence-stack-raised { bottom: calc(78px + var(--dock-space, 0px)); }
+  .conference-fullscreen-target.is-fullscreen .room-message-toast { bottom: calc(8px + var(--dock-space, 0px)); }
+}
+@media (prefers-reduced-motion: reduce) { .room-control-dock, .conference-fullscreen-target.is-fullscreen .participant-grid-wrap { transition-duration: .01s !important; } }
+
+/* 3) Photo circle + voice ring always fit the card (few or many cards), with breathing room on every side. */
+.participant-avatar { container-type: size; }
+.participant-avatar-stack { --av: min(30vw, 150px); width: var(--av); height: var(--av); min-height: 0; aspect-ratio: 1; flex: 0 0 auto; }
+@supports (width: 1cqw) { .participant-avatar-stack { --av: max(40px, min(52cqh, 56cqw, 150px)); } }
+.participant-avatar-stack .participant-avatar-photo { width: 100%; height: 100%; min-height: 0; min-width: 0; }
+/* The speaking microphone badge stays fully inside the card: lifted and moved in from the corner, with a smaller pulse. */
+.participant-name-overlay { padding-right: 16px; padding-bottom: 14px; }
+.participant-badges { padding-right: 2px; }
+@keyframes voice-mic-ring { 0% { box-shadow: 0 0 0 0 rgba(232,202,145,.65); } 100% { box-shadow: 0 0 0 6px rgba(232,202,145,0); } }
+@media (max-width: 720px) { .participant-name-overlay { padding-right: 12px; padding-bottom: 11px; } }
+
+/* 4) Message toast: full width and left aligned on phones, gone after 5 seconds. */
+.room-message-toast { animation: room-toast-in .24s cubic-bezier(.22,1,.36,1) both, room-toast-out .3s ease 4.7s forwards; }
+@media (max-width: 720px) {
+  .room-message-toast { left: 8px; right: 8px; bottom: 8px; width: auto; max-width: none; transform: none; text-align: left; justify-content: flex-start; animation: room-toast-in-m .24s cubic-bezier(.22,1,.36,1) both, room-toast-out-m .3s ease 4.7s forwards; }
+  .room-message-toast-body { flex: 1; align-items: flex-start; text-align: left; }
+}
+@keyframes room-toast-in-m { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes room-toast-out-m { to { opacity: 0; transform: translateY(8px); } }
+
+/* 5) Bottom buttons: completely square, joined with no gaps; split buttons are flat where they meet. */
+.room-control-dock .room-control-button, .room-control-dock .room-control-dropdown, .room-control-dock .room-icon-button, .room-control-dock .room-leave-button { border-radius: 0; }
+.room-control-dock .room-control-group, .room-control-dock .room-control-side { gap: 0; }
+.room-control-dock .room-control-group > * + *, .room-control-dock .room-control-side > * + * { margin-left: -1px; }
+.room-control-dock .room-split-control > .room-control-dropdown { margin-left: -1px; }
+.room-control-dock .room-split-main { border-right: 1px solid rgba(234,210,217,.15); }
+.room-control-dock .room-icon-button { height: auto; min-height: 44px; width: 44px; }
+.room-control-dock .room-leave-button { min-height: 44px; }
+.room-control-dock .reaction-control-wrap { display: flex; }
+.room-control-dock .reaction-control-wrap > .room-control-button { flex: 1 1 auto; }
+.room-control-dock .room-control-button, .room-control-dock .room-control-dropdown, .room-control-dock .room-icon-button, .room-control-dock .room-leave-button { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+.room-control-dock .room-control-dropdown { align-self: stretch; }
+@media (max-width: 720px) {
+  .room-control-dock .room-control-group { gap: 0; justify-content: stretch; }
+  .room-control-dock .room-control-row-a > .room-split-control { flex: 1 1 0; min-width: 0; }
+  .room-control-dock .room-control-row-a > .room-control-button { flex: 1 1 0; min-width: 0; }
+  .room-control-dock .room-split-main { flex: 1 1 auto; min-width: 0; }
+  .room-control-dock .room-control-row-b > .room-control-button, .room-control-dock .room-control-row-b > .reaction-control-wrap { flex: 1 1 0; min-width: 0; }
+  .room-control-dock .room-control-row-b .room-control-side { display: contents; }
+  .room-control-dock .room-control-row-b .room-control-side > .room-icon-button { flex: 0 0 auto; width: 44px; min-height: 39px; margin-left: -1px; }
+  .room-control-dock .room-control-row-b .room-control-side > .room-leave-button { flex: 1 1 0; min-width: 0; min-height: 39px; margin-left: -1px; }
+  .room-control-dock .room-control-row-b .room-control-side > .room-end-button { margin-left: -1px; }
+}
+
+/* 6) Touch screens have no real hover: a tap must never leave a button looking hovered. */
+@media (hover: none) {
+  .room-control-button:not(.control-disabled):not(.control-selected):hover { background: #2b1c23; }
+  .room-control-dropdown:hover { background: #2b1c23; }
+  .room-icon-button:hover:not(:disabled) { background: #33202a; border-color: rgba(234,210,217,.17); }
+  .room-end-button:hover:not(:disabled) { background: #662035; }
+  .room-leave-button:hover { background: #93263f; }
+  .room-device-menu button:hover, .reaction-picker button:hover { background: transparent; }
+  .room-control-button:not(.control-disabled):not(.control-selected):active, .room-control-dropdown:active { background: #41222e; }
+}
+
+/* 7) Floating reactions: rise from the bottom, drift sideways, fade as they climb; each emoji has its own motion. */
+.reaction-float-stack { position: absolute; z-index: 10; inset: 0 0 var(--dock-space, 0px); right: 0; left: 0; top: 0; display: block; overflow: hidden; pointer-events: none; container-type: size; transition: bottom .38s cubic-bezier(.22,1,.36,1); }
+.reaction-float { position: absolute; bottom: 12px; left: clamp(64px, var(--x, 50%), calc(100% - 64px)); display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; opacity: 0; will-change: transform, opacity; animation: reaction-rise 3.5s cubic-bezier(.25,.6,.35,1) forwards; }
+.reaction-float .reaction-emoji { display: block; font-size: calc(36px * var(--rs, 1)); line-height: 1.1; font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Twemoji Mozilla", sans-serif; filter: drop-shadow(0 4px 8px rgba(0,0,0,.35)); transform-origin: 50% 70%; }
+.reaction-float b { max-width: 130px; padding: 3px 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #fff; border-radius: 999px; background: rgba(24,12,18,.78); border: 1px solid rgba(255,255,255,.16); font-size: 10px; font-weight: 700; }
+@keyframes reaction-rise {
+  0% { opacity: 0; transform: translate(-50%, 0) scale(.5); }
+  8% { opacity: 1; transform: translate(-50%, -4cqh) scale(1.08); }
+  14% { transform: translate(-50%, -8cqh) scale(1); }
+  35% { transform: translate(calc(-50% + var(--drift, 0px) * -.45), calc(var(--rise, 65%) * -.35)); }
+  65% { opacity: .62; transform: translate(calc(-50% + var(--drift, 0px) * .6), calc(var(--rise, 65%) * -.7)); }
+  100% { opacity: 0; transform: translate(calc(-50% + var(--drift, 0px)), calc(var(--rise, 65%) * -1)); }
+}
+.reaction-emoji-clap { animation: emoji-clap .42s ease-in-out infinite; }
+.reaction-emoji-wave { animation: emoji-wave .7s ease-in-out infinite; }
+.reaction-emoji-beat { animation: emoji-beat .8s ease-in-out infinite; }
+.reaction-emoji-pop { animation: emoji-pop .9s cubic-bezier(.3,1.6,.5,1) infinite; }
+.reaction-emoji-twinkle { animation: emoji-twinkle .9s ease-in-out infinite; }
+.reaction-emoji-flap { animation: emoji-flap .55s ease-in-out infinite; }
+.reaction-emoji-thumb { animation: emoji-thumb .75s ease-in-out infinite; }
+.reaction-emoji-float { animation: emoji-sway 1.2s ease-in-out infinite; }
+@keyframes emoji-clap { 0%, 100% { transform: scale(1) rotate(0); } 35% { transform: scale(1.22, .86) rotate(-8deg); } 55% { transform: scale(.92, 1.14) rotate(7deg); } }
+@keyframes emoji-wave { 0%, 100% { transform: rotate(-14deg) translateY(0); } 50% { transform: rotate(14deg) translateY(-4px); } }
+@keyframes emoji-beat { 0%, 100% { transform: scale(1); } 30% { transform: scale(1.28); } 55% { transform: scale(1.05); } 75% { transform: scale(1.18); } }
+@keyframes emoji-pop { 0%, 100% { transform: scale(1) rotate(0); } 40% { transform: scale(1.3) rotate(-12deg); } 70% { transform: scale(.95) rotate(8deg); } }
+@keyframes emoji-twinkle { 0%, 100% { transform: scale(.85) rotate(0); opacity: .8; } 50% { transform: scale(1.25) rotate(25deg); opacity: 1; } }
+@keyframes emoji-flap { 0%, 100% { transform: scaleX(1) rotate(-6deg); } 50% { transform: scaleX(.78) rotate(8deg) translateY(-3px); } }
+@keyframes emoji-thumb { 0%, 100% { transform: translateY(0) rotate(0); } 40% { transform: translateY(-9px) rotate(-14deg); } 70% { transform: translateY(0) rotate(4deg); } }
+@keyframes emoji-sway { 0%, 100% { transform: rotate(-7deg) scale(1); } 50% { transform: rotate(7deg) scale(1.1); } }
+@media (prefers-reduced-motion: reduce) { .reaction-float .reaction-emoji { animation: none !important; } }
+
+/* ===== Update round 5: letterboxed video, end-meeting confirmation, ended screen ===== */
+
+/* Video: on larger screens show the whole picture with black bars at the sides instead of cropping it. */
+.participant-card .lk-participant-tile video { background: #000; }
+@media (min-width: 721px) {
+  .participant-card .lk-participant-tile video { object-fit: contain; }
+  .participant-card .lk-participant-tile:has(video) { background: #000 !important; }
+}
+
+.confirm-end-panel { padding: 28px clamp(22px, 4vw, 32px) 24px; text-align: center; }
+.confirm-end-icon { width: 54px; height: 54px; margin: 0 auto 14px; display: grid; place-items: center; border-radius: 50%; color: #fff; background: #782739; box-shadow: 0 0 0 8px rgba(120,39,57,.22); }
+.confirm-end-panel h2 { margin: 0 0 8px; font-size: 19px; line-height: 1.3; }
+.confirm-end-panel p { margin: 0 auto 22px; max-width: 340px; color: #c5abb5; font-size: 13px; line-height: 1.6; }
+.confirm-end-actions { display: flex; gap: 10px; }
+.confirm-end-actions .button { flex: 1 1 0; justify-content: center; }
+:root[data-theme="light"] .confirm-end-panel p { color: #6f5a63; }
+@media (max-width: 720px) { .confirm-end-actions { flex-direction: column-reverse; } .confirm-end-panel { padding-bottom: calc(22px + env(safe-area-inset-bottom)); } }
+
+.meeting-ended-page { min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; padding: 24px; background: #180e12; color: #fff7f4; animation: backdrop-in .25s ease both; }
+.meeting-ended-card { width: min(100%, 440px); padding: 36px clamp(22px, 5vw, 36px); text-align: center; border: 1px solid rgba(225,162,180,.18); border-radius: 22px; background: #1c1318; box-shadow: 0 35px 100px rgba(0,0,0,.48); animation: modal-in .3s cubic-bezier(.2,.8,.2,1) both; }
+.meeting-ended-icon { width: 66px; height: 66px; margin: 0 auto 18px; display: grid; place-items: center; border-radius: 50%; color: #3a1e2b; background: #e8ca91; box-shadow: 0 0 0 10px rgba(232,202,145,.12); }
+.meeting-ended-card .eyebrow { justify-content: center; margin-bottom: 8px; }
+.meeting-ended-card h1 { margin: 0 0 8px; font-size: clamp(22px, 5vw, 26px); }
+.meeting-ended-title { margin: 0 0 10px; color: #e8ca91; font-weight: 700; font-size: 14px; overflow-wrap: anywhere; }
+.meeting-ended-text { margin: 0 0 26px; color: #c5abb5; font-size: 13px; line-height: 1.6; }
