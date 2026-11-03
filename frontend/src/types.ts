@@ -29,6 +29,7 @@ export interface JoinSession {
   serverUrl: string;
   role: "host" | "participant";
   meeting: Meeting;
+  participants?: { identity: string; name: string; picture: string }[];
   audio: boolean;
   video: boolean;
 }

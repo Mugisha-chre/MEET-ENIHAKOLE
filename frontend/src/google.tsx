@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { LoaderCircle } from "lucide-react";
+import { getAuthToken } from "./api";
 
 const CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID || "").trim();
 const SCRIPT_SRC = "https://accounts.google.com/gsi/client";
@@ -50,9 +52,10 @@ function loadGoogle(): Promise<void> {
   return scriptPromise;
 }
 
-async function ensureInitialized(): Promise<GoogleId> {
-  await loadGoogle();
-  const id = window.google!.accounts.id;
+/** Synchronous: returns Google's API the moment the script is loaded (initialising it once), otherwise null. */
+function initializeNow(): GoogleId | null {
+  const id = window.google?.accounts?.id;
+  if (!id) return null;
   if (!initialized) {
     id.initialize({
       client_id: CLIENT_ID,
@@ -67,6 +70,14 @@ async function ensureInitialized(): Promise<GoogleId> {
   return id;
 }
 
+async function ensureInitialized(): Promise<GoogleId> {
+  await loadGoogle();
+  return initializeNow()!;
+}
+
+const BUTTON_OPTIONS = { type: "standard", size: "large", text: "continue_with", shape: "pill", logo_alignment: "left" } as const;
+const buttonTheme = () => (document.documentElement.dataset.theme === "dark" ? "filled_black" : "outline");
+
 /** Shows the official "Continue with Google" button; optionally also Google One Tap (automatic account chooser). */
 export function GoogleContinueButton({ onCredential, oneTap = false, onError }: { onCredential: (credential: string) => void; oneTap?: boolean; onError?: (message: string) => void }) {
   const holder = useRef<HTMLDivElement>(null);
@@ -74,17 +85,20 @@ export function GoogleContinueButton({ onCredential, oneTap = false, onError }: 
   callbackRef.current = onCredential;
   const [failed, setFailed] = useState("");
 
-  useEffect(() => {
+  // Layout effect + synchronous path: when Google is already preloaded the real button is drawn before the first paint.
+  useLayoutEffect(() => {
     if (!googleConfigured) return;
     let cancelled = false;
     handler = (credential) => callbackRef.current(credential);
-    ensureInitialized().then((id) => {
+    const paint = (id: GoogleId) => {
       if (cancelled || !holder.current) return;
-      const width = Math.max(200, Math.min(360, Math.floor(holder.current.getBoundingClientRect().width) || 320));
+      const width = Math.max(200, Math.min(360, holder.current.offsetWidth || 320));
       holder.current.innerHTML = "";
-      id.renderButton(holder.current, { type: "standard", theme: document.documentElement.dataset.theme === "dark" ? "filled_black" : "outline", size: "large", text: "continue_with", shape: "pill", logo_alignment: "left", width });
+      id.renderButton(holder.current, { ...BUTTON_OPTIONS, theme: buttonTheme(), width });
       if (oneTap) id.prompt();
-    }).catch((cause: unknown) => {
+    };
+    const ready = initializeNow();
+    (ready ? Promise.resolve(ready) : ensureInitialized()).then(paint).catch((cause: unknown) => {
       const message = cause instanceof Error ? cause.message : "Google sign-in is unavailable.";
       if (!cancelled) { setFailed(message); onError?.(message); }
     });
@@ -96,14 +110,56 @@ export function GoogleContinueButton({ onCredential, oneTap = false, onError }: 
   }, [oneTap, onError]);
 
   if (!googleConfigured) return <div className="inline-error" role="alert">Google sign-in is not configured yet. Add VITE_GOOGLE_CLIENT_ID to the frontend environment.</div>;
-  return <div className="google-continue"><div ref={holder} className="google-continue-button" />{failed && <div className="inline-error" role="alert">{failed}</div>}</div>;
+  // The look-alike button under the real one is visible instantly (logo and label included) while Google's own button finishes drawing on top of it.
+  return <div className="google-continue"><div className="google-slot">{!failed && <div className="google-fallback" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg><span>Continue with Google</span></div>}<div ref={holder} className="google-continue-button" /></div>{failed && <div className="inline-error" role="alert">{failed}</div>}</div>;
 }
 
-/** Profile photo in a circle; falls back to initials when there is no photo or it fails to load. */
+const loadedPhotos = new Set<string>();
+const pendingPhotos = new Map<string, Promise<void>>();
+
+/** Downloads and decodes a profile photo ahead of time so it appears instantly (and without a spinner) when shown. */
+export function preloadPhoto(src: string | undefined, size = 512): Promise<void> {
+  const url = hiResPhoto(src, size);
+  if (!url || loadedPhotos.has(url)) return Promise.resolve();
+  let task = pendingPhotos.get(url);
+  if (!task) {
+    task = new Promise<void>((resolve) => {
+      const img = new Image();
+      img.referrerPolicy = "no-referrer";
+      img.decoding = "async";
+      img.onload = () => { loadedPhotos.add(url); resolve(); };
+      img.onerror = () => resolve();
+      img.src = url;
+    });
+    pendingPhotos.set(url, task);
+  }
+  return task;
+}
+
+/** Profile photo in a circle. While it downloads a small spinner shows (never a "?"); initials appear only if there is no photo or it fails. */
 export function ProfilePhoto({ src, name, className = "", size = 256 }: { src?: string; name: string; className?: string; size?: number }) {
-  const [broken, setBroken] = useState(false);
-  useEffect(() => { setBroken(false); }, [src]);
+  const url = src ? hiResPhoto(src, size) : "";
+  const [state, setState] = useState<"loading" | "ready" | "error">(() => !url ? "error" : loadedPhotos.has(url) ? "ready" : "loading");
+  useEffect(() => { setState(!url ? "error" : loadedPhotos.has(url) ? "ready" : "loading"); }, [url]);
   const words = name.replace(/[<>]/g, "").trim().split(/\s+/).filter(Boolean);
-  const initials = (words.length ? (words.length === 1 ? Array.from(words[0]).slice(0, 2) : [Array.from(words[0])[0], Array.from(words[1])[0]]) : ["?"]).join("").toUpperCase();
-  return <span className={`profile-photo ${className}`}>{src && !broken ? <img src={hiResPhoto(src, size)} alt="" decoding="async" referrerPolicy="no-referrer" draggable={false} onError={() => setBroken(true)} /> : <b>{initials}</b>}</span>;
+  const initials = (words.length === 1 ? Array.from(words[0]).slice(0, 2) : words.length ? [Array.from(words[0])[0], Array.from(words[1])[0]] : []).join("").toUpperCase();
+  const markReady = () => { loadedPhotos.add(url); setState("ready"); };
+  const spinner = <span className="profile-photo-spinner" aria-hidden="true"><LoaderCircle className="spin"/></span>;
+  return <span className={`profile-photo ${state === "loading" ? "profile-photo-loading" : ""} ${className}`}>
+    {url && state !== "error" && <img ref={(el) => { if (el?.complete && el.naturalWidth > 0 && state === "loading") markReady(); }} src={url} alt="" loading="eager" decoding="async" referrerPolicy="no-referrer" draggable={false} onLoad={markReady} onError={() => setState("error")} />}
+    {state === "loading" ? spinner : state === "error" ? (initials ? <b>{initials}</b> : spinner) : null}
+  </span>;
+}
+
+// Preload at app start: script, initialisation and a hidden warm-up render, so the sign-in modal never waits on Google.
+if (googleConfigured && typeof window !== "undefined") {
+  void ensureInitialized().then((id) => {
+    if (getAuthToken() || !document.body) return;
+    const warm = document.createElement("div");
+    warm.setAttribute("aria-hidden", "true");
+    warm.style.cssText = "position:fixed;left:-9999px;top:0;width:320px;height:44px;overflow:hidden;opacity:0;pointer-events:none";
+    document.body.appendChild(warm);
+    try { id.renderButton(warm, { ...BUTTON_OPTIONS, theme: buttonTheme(), width: 320 }); } catch { /* Warm-up is optional. */ }
+    window.setTimeout(() => warm.remove(), 8000);
+  }).catch(() => { /* The button reports the error itself when it is shown. */ });
 }

@@ -42,6 +42,23 @@ export async function createJoinToken(input: {
   return token.toJwt();
 }
 
+/** Who is already in the room (name + photo), so the browser can load everything before the person arrives. Best effort, never blocks joining for long. */
+export async function listRoomPeople(roomName: string): Promise<Array<{ identity: string; name: string; picture: string }>> {
+  if (!isLiveKitConfigured()) return [];
+  try {
+    const service = new RoomServiceClient(liveKitHttpUrl(), liveKitKey(), liveKitSecret());
+    const found = await Promise.race([
+      service.listParticipants(roomName),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 1500)),
+    ]);
+    return found.map((item) => {
+      let picture = "";
+      try { const value = JSON.parse(item.metadata || "{}").picture; if (typeof value === "string" && value.startsWith("https://")) picture = value; } catch { /* No photo in metadata. */ }
+      return { identity: item.identity, name: item.name || "", picture };
+    });
+  } catch { return []; }
+}
+
 export async function closeLiveKitRoom(roomName: string): Promise<void> {
   if (!isLiveKitConfigured()) return;
   try {

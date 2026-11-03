@@ -3,7 +3,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { Meeting } from "../models/Meeting.js";
 import { optionalAuth, requireAuth } from "../middleware/auth.js";
-import { closeLiveKitRoom, createJoinToken, getLiveKitUrl, isLiveKitConfigured } from "../lib/livekit.js";
+import { closeLiveKitRoom, createJoinToken, getLiveKitUrl, isLiveKitConfigured, listRoomPeople } from "../lib/livekit.js";
 
 const router = Router();
 router.use(optionalAuth);
@@ -268,8 +268,10 @@ router.post("/:slug/token", async (req, res) => {
           ))
         : 4 * 60 * 60,
     });
+    const participants = await listRoomPeople(`eni-${meeting.slug}`);
     return res.json({
       token,
+      participants,
       serverUrl: getLiveKitUrl(),
       role: isHost ? "host" : "participant",
       meeting: publicMeeting(meeting, req.auth?.userId),

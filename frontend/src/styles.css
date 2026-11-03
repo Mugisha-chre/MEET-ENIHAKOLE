@@ -1354,3 +1354,100 @@ html.is-scrolling .meeting-card:hover { transform: translateZ(0); box-shadow: no
 .participant-avatar-stack .participant-avatar-photo { width: 100%; height: 100%; min-height: 0; }
 .voice-ring { position: absolute; left: 50%; top: 50%; width: 156.25%; height: 156.25%; transform: translate(-50%, -50%); pointer-events: none; filter: drop-shadow(0 0 4px rgba(232,202,145,.5)); }
 .participant-speaking .participant-avatar-photo { border-color: #e8ca91; }
+
+/* ===== Update round 3: sidebar account card, thumbnails, instant Google button, install/share placement, on/off switches ===== */
+
+/* A) Sidebar account card: never wider than the menu; long names and emails wrap (2 lines max) and the sign-out button gets its own full-width row. */
+.sidebar-bottom { min-width: 0; width: 100%; }
+@media (max-width: 720px) { .sidebar .sidebar-bottom { align-items: stretch; } }
+.sidebar-account { box-sizing: border-box; width: 100%; max-width: 100%; min-width: 0; flex-wrap: wrap; row-gap: 9px; overflow: hidden; }
+.sidebar-account > span:nth-child(2) { flex: 1 1 0; min-width: 0; }
+.sidebar-account b, .sidebar-account small { display: block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.3; }
+.sidebar-account small { font-size: 10px; }
+.sidebar-account-photo { flex: 0 0 auto; }
+.sidebar-signout { flex: 1 1 100%; justify-content: center; }
+@media (min-width: 721px) and (max-width: 980px) {
+  .sidebar-account { flex-direction: column; flex-wrap: nowrap; padding: 8px 4px; gap: 8px; }
+  .sidebar-account > span:nth-child(2), .sidebar-signout span { display: none; }
+  .sidebar-signout { flex: 0 0 auto; padding: 7px; }
+}
+
+/* A) Sidebar open/close on phones: fades and slides in from the left, slides back out to the left while fading. */
+@media (max-width: 720px) {
+  .sidebar { opacity: 0; transform: translateX(-100%); transition: transform .38s cubic-bezier(.22,1,.36,1), opacity .3s ease, box-shadow .38s ease; }
+  .sidebar.sidebar-open { opacity: 1; transform: translateX(0); }
+  .sidebar:not(.sidebar-open) { visibility: hidden; transition: transform .3s cubic-bezier(.4,0,.7,.2), opacity .24s ease, box-shadow .3s ease, visibility 0s linear .3s; }
+  .sidebar.sidebar-open > * { animation: sidebar-item-in .45s cubic-bezier(.22,1,.36,1) both; }
+  .sidebar.sidebar-open > *:nth-child(2) { animation-delay: .04s; }
+  .sidebar.sidebar-open > *:nth-child(3) { animation-delay: .08s; }
+  .sidebar.sidebar-open > *:nth-child(4) { animation-delay: .12s; }
+  .sidebar.sidebar-open > *:nth-child(5) { animation-delay: .16s; }
+}
+@keyframes sidebar-item-in { from { opacity: 0; transform: translateX(-16px); } to { opacity: 1; transform: translateX(0); } }
+@media (prefers-reduced-motion: reduce) { .sidebar.sidebar-open > * { animation: none; } }
+
+/* B) Meeting thumbnail on cards: the whole 1200x630 picture is always visible, so the text on it stays readable. Phones stack it on top of the card. */
+.meeting-card .meeting-cover { height: auto; min-height: 0; aspect-ratio: 1200 / 630; border: 0; border-bottom: 1px solid var(--line); }
+.meeting-card .meeting-cover::after { background: none; }
+.meeting-card .meeting-cover-img { object-fit: cover; }
+.meeting-card-grid .meeting-card { display: block; }
+@media (max-width: 720px) {
+  .meeting-card .meeting-cover { border-right: 0; }
+  .meeting-card .meeting-status { left: 10px; top: 10px; padding: 5px 8px; font-size: 9px; }
+  .meeting-card .cover-open { display: grid; right: 10px; top: 10px; }
+  .meeting-card-body { padding: 14px 14px 13px; }
+  .meeting-card .meeting-date { font-size: 10px; }
+  .meeting-card .meeting-title-link h3 { font-size: 15px; }
+  .meeting-card .meeting-description { font-size: 11px; max-height: none; }
+  .meeting-card .meeting-duration { font-size: 10px; }
+  .meeting-card .button-join-small { font-size: 11px; padding: 9px 13px; }
+  .meeting-card .meeting-card-bottom { margin-top: 13px; padding-top: 12px; }
+}
+
+/* C) Meeting page thumbnail card (invitation, live and ended): same picture, share button sits on it. */
+.join-cover.join-cover-thumb { min-height: 0; aspect-ratio: 1200 / 630; display: block; overflow: hidden; padding: 0; background: #2b1c23; }
+.join-cover-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; user-select: none; -webkit-user-drag: none; }
+.thumb-share-button { position: absolute; z-index: 2; top: 12px; right: 12px; display: inline-flex; align-items: center; gap: 7px; padding: 8px 12px; border: 1px solid rgba(143,33,65,.18); border-radius: 999px; color: #8f2141; background: #fff; font: inherit; font-size: 11px; font-weight: 750; cursor: pointer; box-shadow: 0 6px 18px rgba(0,0,0,.28); transition: transform .18s ease, box-shadow .18s ease; -webkit-tap-highlight-color: transparent; }
+.thumb-share-button:hover { transform: translateY(-1px); box-shadow: 0 9px 22px rgba(0,0,0,.34); }
+.thumb-share-button:active { transform: scale(.95); }
+.thumb-share-button:focus-visible { outline: 2px solid #c9a05a; outline-offset: 2px; }
+.thumb-share-button svg { color: #8f2141; flex: 0 0 auto; }
+@media (max-width: 720px) { .join-cover.join-cover-thumb { min-height: 0; } .thumb-share-button { top: 9px; right: 9px; padding: 7px 10px; font-size: 10px; } }
+
+/* D) Top-bar Install App button (meeting page). */
+.pwa-install-inline { position: relative; display: inline-flex; }
+.pwa-install-inline-button { white-space: nowrap; gap: 6px; }
+.pwa-install-tip-inline { position: absolute; z-index: 60; top: calc(100% + 8px); right: 0; width: 230px; max-width: calc(100vw - 24px); }
+@media (max-width: 720px) { .landing-topbar-actions .pwa-install-inline-button { padding: 9px 10px; font-size: 10px; } }
+
+/* E) Instant Google button: a look-alike (logo + label) shows immediately; Google's own button draws right on top of it. */
+.google-slot { position: relative; width: 100%; min-height: 44px; }
+.google-slot .google-continue-button { position: absolute; inset: 0; z-index: 1; display: flex; align-items: center; justify-content: center; }
+.google-fallback { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); box-sizing: border-box; width: min(100%, 360px); min-width: 200px; height: 40px; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 0 16px; border: 1px solid #dadce0; border-radius: 999px; color: #3c4043; background: #fff; font: 500 14px/1 Roboto, "DM Sans", Arial, sans-serif; letter-spacing: .01em; pointer-events: none; }
+:root[data-theme="dark"] .google-fallback { color: #e3e3e3; background: #131314; border-color: #8e918f; }
+
+/* F) Camera / microphone on-off switches. */
+.toggle-row-switch { width: 100%; border: 0; text-align: left; font: inherit; color: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; transition: background-color .2s ease; }
+.toggle-row-switch:focus-visible { outline: 2px solid #c9a05a; outline-offset: -2px; }
+.toggle-row-switch:active .switch-knob { width: 22px; }
+.toggle-row-switch .toggle-icon { transition: color .25s ease, background-color .25s ease, transform .25s ease; }
+.toggle-row-switch.is-off .toggle-icon { color: #8e7b83; background: rgba(142,123,131,.16); }
+:root[data-theme="light"] .toggle-row-switch.is-off .toggle-icon { color: #9b858d; background: #f1e8e8; }
+.toggle-icon-swap { display: grid; place-items: center; animation: toggle-icon-pop .32s cubic-bezier(.34,1.56,.64,1) both; }
+@keyframes toggle-icon-pop { from { opacity: 0; transform: scale(.55) rotate(-18deg); } to { opacity: 1; transform: scale(1) rotate(0); } }
+.toggle-row-switch b { font-size: 11px; transition: color .2s ease; }
+.toggle-row-switch.is-off b { color: #8e7b83; }
+:root[data-theme="light"] .toggle-row-switch.is-off b { color: #8d7880; }
+.switch { position: relative; flex: 0 0 auto; width: 44px; height: 26px; border-radius: 999px; background: rgba(142,123,131,.34); box-shadow: inset 0 1px 3px rgba(0,0,0,.18); transition: background .3s ease, box-shadow .3s ease; }
+.switch-knob { position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 999px; background: #fff; box-shadow: 0 2px 6px rgba(0,0,0,.3); transition: left .32s cubic-bezier(.34,1.56,.64,1), width .18s ease; }
+.toggle-row-switch.is-on .switch { background: linear-gradient(145deg, #a92b4e, #7a1a37); box-shadow: 0 0 0 4px rgba(143,33,65,.14), inset 0 1px 2px rgba(0,0,0,.2); }
+.toggle-row-switch.is-on .switch-knob { left: 21px; }
+.toggle-row-switch.is-on:active .switch-knob { left: 17px; }
+@media (prefers-reduced-motion: reduce) { .switch, .switch-knob, .toggle-icon-swap { transition: none; animation: none; } }
+
+/* ===== Update round 4: profile photo loading state ===== */
+.profile-photo { position: relative; }
+.profile-photo img { transition: opacity .18s ease; }
+.profile-photo.profile-photo-loading img { position: absolute; inset: 0; opacity: 0; }
+.profile-photo-spinner { position: absolute; inset: 0; display: grid; place-items: center; color: rgba(249,233,227,.85); }
+.profile-photo-spinner svg { width: 42%; height: 42%; }

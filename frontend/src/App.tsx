@@ -6,13 +6,13 @@ import {
   ArrowDownRight, ArrowLeft, ArrowRight, AudioLines, CalendarClock, CalendarDays, Check,
   CheckCircle2, CircleHelp, Clock3, Copy, DoorOpen, HeartHandshake, Home,
   Link2, LoaderCircle, LogIn, LogOut, Menu, Mic, Plus, Share2, ShieldCheck,
-  Sparkles, Users, Video, VideoIcon, X, Sun, Moon, MessageCircle,
+  Sparkles, Users, Video, VideoIcon, VideoOff, X, Sun, Moon, MessageCircle,
   Hand, Send, MonitorUp, MicOff, Maximize2, Minimize2, ChevronLeft, ChevronRight, Smile, ChevronDown, Download,
 } from "lucide-react";
 import { api, ApiError, clearAuthToken, getAuthToken, saveAuthToken } from "./api";
 import { clearCachePrefix, patchCache, readCache, removeCache, writeCache } from "./cache";
 import type { JoinSession, Meeting, User } from "./types";
-import { GoogleContinueButton, ProfilePhoto, googleSignOut } from "./google";
+import { GoogleContinueButton, ProfilePhoto, googleSignOut, preloadPhoto } from "./google";
 
 interface AppContextValue {
   user: User | null;
@@ -218,7 +218,7 @@ export default function App() {
         writeCache(`meeting:${user?.id ?? "guest"}:${meeting.slug}`, meeting);
         void refreshMeetings(true);
       }} />}
-      {!location.pathname.startsWith("/room/") && <InstallPwaButton />}
+      {!location.pathname.startsWith("/room/") && !location.pathname.startsWith("/meeting/") && <InstallPwaButton />}
       <ToastHost />
     </AppContext.Provider>
   );
@@ -232,7 +232,7 @@ function ThemeToggle() {
 
 type PwaPromptEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: "accepted" | "dismissed" }> };
 
-function InstallPwaButton() {
+function InstallPwaButton({ inline = false }: { inline?: boolean }) {
   const isStandalone = () => window.matchMedia("(display-mode: standalone)").matches || (navigator as unknown as { standalone?: boolean }).standalone === true;
   const [deferred, setDeferred] = useState<PwaPromptEvent | null>(() => ((window as unknown as { __pwaPrompt?: PwaPromptEvent }).__pwaPrompt ?? null));
   const [installed, setInstalled] = useState(isStandalone);
@@ -264,6 +264,13 @@ function InstallPwaButton() {
     (window as unknown as { __pwaPrompt?: Event }).__pwaPrompt = undefined;
     setDeferred(null);
   };
+
+  if (inline) return (
+    <span className="pwa-install-inline">
+      <button type="button" className="button button-soft button-small pwa-install-inline-button" onClick={() => void install()} title="Install app" aria-label="Install MEET ENIHAKOLE app"><Download size={15}/> Install App</button>
+      {iosTip && <div className="pwa-install-tip pwa-install-tip-inline" role="status">To install, tap <b>Share</b> in Safari, then choose <b>Add to Home Screen</b>.<button type="button" onClick={() => setIosTip(false)} aria-label="Close"><X size={14}/></button></div>}
+    </span>
+  );
 
   return (
     <div className={`pwa-install ${hasBottomNav ? "" : "pwa-install-no-nav"}`}>
@@ -480,12 +487,22 @@ function MeetingsPage() {
   );
 }
 
+function MediaToggle({ on, onChange, onIcon, offIcon, onLabel, offLabel, onHint, offHint }: { on: boolean; onChange: (value: boolean) => void; onIcon: ReactNode; offIcon: ReactNode; onLabel: string; offLabel: string; onHint: string; offHint: string }) {
+  return (
+    <button type="button" role="switch" aria-checked={on} aria-label={on ? onLabel : offLabel} className={`toggle-row toggle-row-switch ${on ? "is-on" : "is-off"}`} onClick={() => onChange(!on)}>
+      <span className="toggle-icon"><span className="toggle-icon-swap" key={on ? "on" : "off"}>{on ? onIcon : offIcon}</span></span>
+      <span><b>{on ? onLabel : offLabel}</b><small>{on ? onHint : offHint}</small></span>
+      <span className="switch" aria-hidden="true"><span className="switch-knob"/></span>
+    </button>
+  );
+}
+
 function MeetingPage() {
   const { slug = "" } = useParams();
   const { user, meetings: knownMeetings, publicMeetings: knownPublic, openAuth, completeAuth, signOut } = useAppContext();
   const cacheKey = `meeting:${user?.id ?? "guest"}:${slug}`;
   const [meeting, setMeeting] = useState<Meeting | null>(() => readCache<Meeting>(cacheKey)?.value ?? [...knownMeetings, ...knownPublic].find((item) => item.slug === slug) ?? null);
-  const [cameraOn, setCameraOn] = useState(true);
+  const [cameraOn, setCameraOn] = useState(false);
   const [micOn, setMicOn] = useState(true);
   const [loading, setLoading] = useState(() => !readCache(cacheKey) && ![...knownMeetings, ...knownPublic].some((item) => item.slug === slug));
   const [joining, setJoining] = useState(false);
@@ -509,6 +526,8 @@ function MeetingPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug, cacheKey]);
 
+  useEffect(() => { if (user?.picture) void preloadPhoto(user.picture, 512); }, [user?.picture]);
+
   async function join(event: FormEvent) {
     event.preventDefault();
     if (!meeting) return;
@@ -518,6 +537,12 @@ function MeetingPage() {
       const result = await api.join(slug);
       const session: JoinSession = { ...result, audio: micOn, video: cameraOn };
       sessionStorage.setItem(`meet-session:${slug}`, JSON.stringify(session));
+      registerSession(session);
+      // Fetch our own photo and everyone already in the room before entering, so the room opens fully drawn (capped so a slow image never blocks joining).
+      await Promise.race([
+        Promise.all([preloadPhoto(user.picture, 512), ...(result.participants ?? []).map((person) => preloadPhoto(person.picture, 512))]),
+        new Promise<void>((resolve) => setTimeout(resolve, 2500)),
+      ]);
       navigate(`/room/${encodeURIComponent(slug)}`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not join this meeting.");
@@ -548,15 +573,15 @@ function MeetingPage() {
 
   return (
     <div className="meeting-landing">
-      <header className="landing-topbar"><Link className="brand-lockup" to="/"><span className="brand-mark"><AudioLines size={22}/></span><span className="brand-words"><strong>MEET</strong><b>ENIHAKOLE</b><small>GATHER IN FAITH</small></span></Link><div className="landing-topbar-actions"><ThemeToggle/><button className="button button-soft button-small" onClick={share}><Share2 size={15}/> Share invitation</button></div></header>
+      <header className="landing-topbar"><Link className="brand-lockup" to="/"><span className="brand-mark"><AudioLines size={22}/></span><span className="brand-words"><strong>MEET</strong><b>ENIHAKOLE</b><small>GATHER IN FAITH</small></span></Link><div className="landing-topbar-actions"><ThemeToggle/><InstallPwaButton inline/></div></header>
       <main className="landing-layout">
         <section className="join-panel">
-          <div className={`join-cover ${meeting.thumbnailUrl ? "" : "join-cover-plain"}`} role="img" aria-label={meeting.title} style={meeting.thumbnailUrl ? { backgroundImage: `url("${meeting.thumbnailUrl}")` } : undefined}>{!meeting.thumbnailUrl && <span className="join-cover-mark"><AudioLines size={44} strokeWidth={2}/></span>}</div>
+          <div className="join-cover join-cover-thumb"><img className="join-cover-img" src={meetingImage(meeting)} alt={meeting.title} decoding="async" fetchPriority="high" draggable={false}/><button type="button" className="thumb-share-button" onClick={share} aria-label="Share invitation"><Share2 size={15}/><span>Share invitation</span></button></div>
           <form className="join-form" onSubmit={join}>
             <div className="join-form-heading"><h2>{ended ? "This meeting has ended" : meeting.isOwner ? "Your meeting is ready" : meeting.status === "live" ? "Join the gathering" : "You're in the right place"}</h2><p>{ended ? "This invitation is no longer active." : meeting.isOwner ? "Start the room when you're ready. Your guests can join using the same link." : meeting.status === "live" ? "Enter your details and come on in." : "You can join as a guest when the host opens the room."}</p></div>
             {user && !ended && <div className="join-identity"><ProfilePhoto src={user.picture} name={user.displayName} className="join-identity-photo"/><span><b>{user.displayName}</b><small>{user.email}</small></span><button type="button" className="error-link" onClick={signOut}><LogOut size={12}/> Sign out</button></div>}
             {!user && !ended && <div className="join-google"><p>Continue with Google to join. We use your Google name and profile photo so everyone knows who you are.</p><GoogleContinueButton oneTap onCredential={(credential) => void googleCredential(credential)}/></div>}
-            {!ended && <div className="join-preferences"><label className="toggle-row"><span className="toggle-icon"><VideoIcon size={16}/></span><span><b>Camera</b><small>Join with video</small></span><input type="checkbox" checked={cameraOn} onChange={(event) => setCameraOn(event.target.checked)} /></label><label className="toggle-row"><span className="toggle-icon"><Mic size={16}/></span><span><b>Microphone</b><small>Join with audio</small></span><input type="checkbox" checked={micOn} onChange={(event) => setMicOn(event.target.checked)} /></label></div>}
+            {!ended && <div className="join-preferences"><MediaToggle on={cameraOn} onChange={setCameraOn} onIcon={<Video size={16}/>} offIcon={<VideoOff size={16}/>} onLabel="Camera is on" offLabel="Camera is off" onHint="Join with video" offHint="Join without video"/><MediaToggle on={micOn} onChange={setMicOn} onIcon={<Mic size={16}/>} offIcon={<MicOff size={16}/>} onLabel="Microphone is on" offLabel="Microphone is off" onHint="Join with audio" offHint="Join muted"/></div>}
             {error && <div className="inline-error" role="alert">{error}{error.includes("Sign in") && <button type="button" className="error-link" onClick={openAuth}>Sign in</button>}</div>}
             {ended ? <Link to="/" className="button button-soft button-full"><ArrowLeft size={16}/> Back to home</Link> : user && <button className="button button-primary button-full join-submit" type="submit" disabled={joining}>{joining ? <LoaderCircle size={17} className="spin"/> : meeting.isOwner ? <Video size={17}/> : <DoorOpen size={17}/>} {joining ? "Preparing your room…" : meeting.isOwner ? "Start meeting" : meeting.status === "live" ? "Join meeting" : "Check room availability"}<ArrowRight size={16}/></button>}
             <p className="join-footnote"><ShieldCheck size={13}/> Your camera and microphone are only requested when you enter the room.</p>
@@ -579,15 +604,15 @@ function MeetingPage() {
 function MeetingRoomPage() {
   const { slug = "" } = useParams();
   const navigate = useNavigate();
-  const [session, setSession] = useState<JoinSession | null>(null);
+  const [session, setSession] = useState<JoinSession | null>(() => readStoredSession(slug));
   const [ending, setEnding] = useState(false);
   const [endError, setEndError] = useState("");
   const [disconnected, setDisconnected] = useState(false);
 
   useEffect(() => {
     try {
-      const raw = sessionStorage.getItem(`meet-session:${slug}`);
-      if (raw) setSession(JSON.parse(raw) as JoinSession);
+      const stored = readStoredSession(slug);
+      if (stored) setSession(stored);
     } catch { setSession(null); }
   }, [slug]);
 
@@ -648,11 +673,39 @@ type FloatingReaction = { id: string; emoji: string; name: string };
 const INTERACTIVE_SELECTOR = "button, a, input, textarea, select, label, summary, [role='button'], [role='dialog'], [data-popover], .room-device-menu, .reaction-picker, .messages-modal-backdrop, .room-alert, .room-message-toast, .room-presence-stack";
 const REACTION_SET = ["🙏", "❤️", "👏", "🙌", "😊", "🎉", "✨", "💛", "🕊️", "👍"];
 
-function participantPicture(metadata?: string): string {
+// People we already know about before the room connects (from the join response and our own token), so names and photos are there from the first frame.
+const knownPeople = new Map<string, { name: string; picture: string }>();
+function registerSession(session: JoinSession) {
+  session.participants?.forEach((person) => knownPeople.set(person.identity, { name: person.name, picture: person.picture }));
+  try {
+    const payload = JSON.parse(atob(session.token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))) as { sub?: string; name?: string; metadata?: string };
+    if (payload.sub) {
+      let picture = ""; try { picture = JSON.parse(payload.metadata || "{}").picture || ""; } catch { /* No photo. */ }
+      knownPeople.set(payload.sub, { name: payload.name || "", picture });
+    }
+  } catch { /* Token is still used as-is by LiveKit. */ }
+}
+function readStoredSession(slug: string): JoinSession | null {
+  try {
+    const raw = sessionStorage.getItem(`meet-session:${slug}`);
+    if (!raw) return null;
+    const stored = JSON.parse(raw) as JoinSession;
+    registerSession(stored);
+    return stored;
+  } catch { return null; }
+}
+function participantName(participant: Participant): string {
+  if (participant.name) return participant.name;
+  try { const fromMeta = JSON.parse(participant.metadata || "{}").displayName; if (typeof fromMeta === "string" && fromMeta) return fromMeta; } catch { /* Fall through. */ }
+  return knownPeople.get(participant.identity)?.name || "";
+}
+
+function participantPicture(metadata?: string, identity?: string): string {
   try {
     const picture = JSON.parse(metadata || "{}").picture;
-    return typeof picture === "string" && picture.startsWith("https://") ? picture : "";
-  } catch { return ""; }
+    if (typeof picture === "string" && picture.startsWith("https://")) return picture;
+  } catch { /* Fall back to what we knew before connecting. */ }
+  return (identity && knownPeople.get(identity)?.picture) || "";
 }
 
 function ParticipantAvatar({ trackRef, participant }: { trackRef: Parameters<typeof useIsMuted>[0]; participant: Participant }) {
@@ -660,7 +713,7 @@ function ParticipantAvatar({ trackRef, participant }: { trackRef: Parameters<typ
   const videoOn = isTrackReference(trackRef) && Boolean(trackRef.publication?.track) && !muted;
   // Camera on: the video is the picture, so the waveform runs around the card edges instead of a profile circle.
   if (videoOn) return participant.isSpeaking ? <SpeakingWave participant={participant}/> : null;
-  return <div className="participant-avatar" aria-hidden="true"><div className="participant-avatar-stack"><VoiceRing participant={participant} speaking={participant.isSpeaking}/><ProfilePhoto src={participantPicture(participant.metadata)} name={participant.name || participant.identity} className="participant-avatar-photo" size={512}/></div></div>;
+  return <div className="participant-avatar" aria-hidden="true"><div className="participant-avatar-stack"><VoiceRing participant={participant} speaking={participant.isSpeaking}/><ProfilePhoto src={participantPicture(participant.metadata, participant.identity)} name={participantName(participant)} className="participant-avatar-photo" size={512}/></div></div>;
 }
 
 let toneContext: AudioContext | null = null;
@@ -979,7 +1032,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
     const onReconnecting = () => { armed = false; };
     const announce = (kind: "joined" | "left", participant: RemoteParticipant) => {
       const id = Date.now() + Math.random();
-      const name = participant.name || "A participant";
+      const name = participantName(participant) || "A participant";
       playPresenceTone(kind);
       setPresenceToasts((current) => [...current.slice(-2), { id, kind, name }]);
       const timer = window.setTimeout(() => setPresenceToasts((current) => current.filter((toast) => toast.id !== id)), 3600);
@@ -1149,7 +1202,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
       <RoomAudioRenderer />
       <div className="room-top-stack">
         <div className="active-count-pill" role="status" aria-live="polite" title="People currently in this meeting"><Users size={14}/><b>{participants.length}</b><span>{participants.length === 1 ? "person" : "people"} in the meeting</span></div>
-        {participants.filter((participant) => raisedHands[participant.identity]).map((participant) => <div className="raised-hand-chip" key={participant.identity} title={`${participant.name || participant.identity} raised a hand`}><Hand size={13}/><span>{participant.name || participant.identity}{participant.identity === localIdentity ? " (You)" : ""}</span></div>)}
+        {participants.filter((participant) => raisedHands[participant.identity]).map((participant) => <div className="raised-hand-chip" key={participant.identity} title={`${participantName(participant) || "Participant"} raised a hand`}><Hand size={13}/><span>{participantName(participant) || "Participant"}{participant.identity === localIdentity ? " (You)" : ""}</span></div>)}
       </div>
       <div className="participant-grid-wrap">
         <div className={`participant-grid participant-grid-count-${visibleParticipants.length || 1}`}>
@@ -1160,7 +1213,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
               <ParticipantTile trackRef={trackRef!} />
               <ParticipantAvatar trackRef={trackRef!} participant={participant} />
               <span className="participant-role-label">{isHost ? "HOST" : "PARTICIPANT"}</span>
-              <div className="participant-name-overlay"><span className="participant-name-copy" title={participant.name || participant.identity}><b>{participant.name || participant.identity}{participant.identity === localIdentity ? " · You" : ""}</b></span><span className="participant-badges"><MicOffBadge participant={participant}/>{hand && <span className="raised-hand-badge" title="Raised hand"><Hand size={15}/></span>}{participant.isSpeaking && <span className="speaker-mic" title="Speaking" aria-label="Speaking"><Mic size={14}/></span>}</span></div>
+              <div className="participant-name-overlay"><span className="participant-name-copy" title={participantName(participant) || "Participant"}><b>{participantName(participant) || "Participant"}{participant.identity === localIdentity ? " · You" : ""}</b></span><span className="participant-badges"><MicOffBadge participant={participant}/>{hand && <span className="raised-hand-badge" title="Raised hand"><Hand size={15}/></span>}{participant.isSpeaking && <span className="speaker-mic" title="Speaking" aria-label="Speaking"><Mic size={14}/></span>}</span></div>
             </div>;
           })}
         </div>
