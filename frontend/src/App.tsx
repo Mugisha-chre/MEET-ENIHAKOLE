@@ -12,7 +12,7 @@ import {
 import { api, ApiError, clearAuthToken, getAuthToken, saveAuthToken } from "./api";
 import { clearCachePrefix, patchCache, readCache, removeCache, writeCache } from "./cache";
 import type { JoinSession, Meeting, User } from "./types";
-import { GoogleContinueButton, ProfilePhoto, googleSignOut, preloadPhoto } from "./google";
+import { GoogleContinueButton, ProfilePhoto, googleSignOut, preloadPhoto, preloadPhotoBriefly } from "./google";
 
 interface AppContextValue {
   user: User | null;
@@ -29,11 +29,19 @@ interface AppContextValue {
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
-const THEME_STORAGE_KEY = "meet-enihakole-theme";
+// Only an explicit choice (the sun/moon button) is remembered; otherwise the app follows the browser or device light/dark setting.
+const THEME_STORAGE_KEY = "meet-enihakole-theme-choice";
 
-function getInitialTheme(): "light" | "dark" {
-  try { return localStorage.getItem(THEME_STORAGE_KEY) === "dark" ? "dark" : "light"; }
+function systemTheme(): "light" | "dark" {
+  try { return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"; }
   catch { return "light"; }
+}
+function storedThemeChoice(): "light" | "dark" | null {
+  try { const choice = localStorage.getItem(THEME_STORAGE_KEY); return choice === "dark" || choice === "light" ? choice : null; }
+  catch { return null; }
+}
+function getInitialTheme(): "light" | "dark" {
+  return storedThemeChoice() ?? systemTheme();
 }
 function useAppContext(): AppContextValue {
   const value = useContext(AppContext);
@@ -85,7 +93,20 @@ export default function App() {
   const location = useLocation();
 
   const toggleTheme = useCallback(() => {
-    setTheme((current) => current === "light" ? "dark" : "light");
+    setTheme((current) => {
+      const next = current === "light" ? "dark" : "light";
+      try { localStorage.setItem(THEME_STORAGE_KEY, next); } catch { /* Theme still applies for this session. */ }
+      return next;
+    });
+  }, []);
+
+  // Without a saved choice, follow the browser/device theme live (including when it switches while the app is open).
+  useEffect(() => {
+    let media: MediaQueryList;
+    try { media = window.matchMedia("(prefers-color-scheme: dark)"); } catch { return; }
+    const onChange = () => { if (!storedThemeChoice()) setTheme(media.matches ? "dark" : "light"); };
+    media.addEventListener("change", onChange);
+    return () => media.removeEventListener("change", onChange);
   }, []);
 
   useEffect(() => {
@@ -101,7 +122,6 @@ export default function App() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    try { localStorage.setItem(THEME_STORAGE_KEY, theme); } catch { /* Theme still applies for this session. */ }
     const themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
     if (themeColor) themeColor.content = theme === "light" ? "#fbf7f2" : "#130d10";
   }, [theme]);
@@ -318,6 +338,12 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
     return () => { document.removeEventListener("touchstart", onStart); document.removeEventListener("touchend", onEnd); };
   }, [mobileNavOpen, setMobileNavOpen]);
   useEffect(() => {
+    // Lets floating buttons (like Install app) tuck away underneath the open sidebar, then come back with the bottom nav.
+    const root = document.documentElement;
+    root.classList.toggle("mobile-nav-open", mobileNavOpen);
+    return () => root.classList.remove("mobile-nav-open");
+  }, [mobileNavOpen]);
+  useEffect(() => {
     if (!mobileNavOpen) return;
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setMobileNavOpen(false); };
     document.addEventListener("keydown", onKey);
@@ -335,11 +361,6 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
           <Link to="/" className={`side-link ${active === "home" ? "side-link-active" : ""}`}><Home size={18} /><span>Home</span></Link>
           <Link to="/meetings" className={`side-link ${active === "meetings" ? "side-link-active" : ""}`}><CalendarDays size={18} /><span>My meetings</span></Link>
         </nav>
-        <div className="sidebar-guidance">
-          <div className="guidance-icon"><HeartHandshake size={18} /></div>
-          <strong>A space to connect</strong>
-          <p>Pray together, rehearse, and stay close — wherever life takes you.</p>
-        </div>
         <div className="sidebar-bottom">
           {user && <div className="sidebar-account"><ProfilePhoto className="sidebar-account-photo" src={user.picture} name={user.displayName} size={160}/><span><b title={user.displayName}>{user.displayName}</b><small title={user.email}>{user.email}</small></span><button type="button" className="sidebar-signout" onClick={() => { setMobileNavOpen(false); signOut(); }} title="Sign out" aria-label="Sign out"><LogOut size={16}/><span>Sign out</span></button></div>}
           <button className="side-link quiet-link" onClick={() => window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Help centre will be added in a future release." } }))}><CircleHelp size={18} /><span>Help & support</span></button>
@@ -507,13 +528,16 @@ function MeetingPage() {
   const [loading, setLoading] = useState(() => !readCache(cacheKey) && ![...knownMeetings, ...knownPublic].some((item) => item.slug === slug));
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState("");
+  const [micPrompt, setMicPrompt] = useState<MicPromptState | null>(null);
+  const micRetryRef = useRef(0);
   const navigate = useNavigate();
 
   useEffect(() => {
     let cancelled = false;
     // Show what we already know instantly; the fresh copy swaps in quietly when it arrives.
     const known = readCache<Meeting>(cacheKey)?.value ?? [...knownMeetings, ...knownPublic].find((item) => item.slug === slug) ?? null;
-    if (known) { setMeeting(known); setLoading(false); } else setLoading(true);
+    // After signing in the cache key changes; keep showing the invitation we already have (no loading screen, no flash) and refresh it quietly.
+    if (known) { setMeeting(known); setLoading(false); } else if (!meeting) setLoading(true);
     api.meeting(slug).then(({ meeting: result }) => {
       if (cancelled) return;
       setMeeting(result);
@@ -528,14 +552,35 @@ function MeetingPage() {
 
   useEffect(() => { if (user?.picture) void preloadPhoto(user.picture, 512); }, [user?.picture]);
 
+  // Asks the browser for the microphone (the real permission prompt) and reports what happened.
+  async function askBrowserForMic(): Promise<MicPromptState> {
+    const attempt = ++micRetryRef.current;
+    setMicPrompt({ phase: "waiting" });
+    const result = await requestMicrophoneAccess();
+    if (attempt !== micRetryRef.current) return { phase: "waiting" };
+    setMicPrompt(result);
+    return result;
+  }
+
   async function join(event: FormEvent) {
     event.preventDefault();
     if (!meeting) return;
     if (!user) { setError("Sign in with Google to join this meeting."); return; }
+    if (micOn) {
+      // Called straight from the tap so every browser (Chrome, Firefox, Safari, Opera, Edge...) treats it as a user gesture and shows its own prompt.
+      const result = await askBrowserForMic();
+      if (result.phase !== "granted") return;
+      setMicPrompt(null);
+    }
+    await enterRoom(micOn);
+  }
+
+  async function enterRoom(audio: boolean) {
+    if (!meeting || !user) return;
     setJoining(true); setError("");
     try {
       const result = await api.join(slug);
-      const session: JoinSession = { ...result, audio: micOn, video: cameraOn };
+      const session: JoinSession = { ...result, audio, video: cameraOn };
       sessionStorage.setItem(`meet-session:${slug}`, JSON.stringify(session));
       registerSession(session);
       // Fetch our own photo and everyone already in the room before entering, so the room opens fully drawn (capped so a slow image never blocks joining).
@@ -553,6 +598,8 @@ function MeetingPage() {
     setError("");
     try {
       const result = await api.googleSignIn(credential);
+      // Have the profile photo ready first so the signed-in state appears instantly, with no spinner and no page reload.
+      await preloadPhotoBriefly(result.user.picture, 512, 1200);
       completeAuth(result.user, result.token);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not sign in with Google.");
@@ -597,6 +644,85 @@ function MeetingPage() {
         </section>
       </main>
       <footer className="landing-footer"><span>© {new Date().getFullYear()} MEET ENIHAKOLE</span><span>Built for togetherness.</span></footer>
+      {micPrompt && <MicPermissionModal
+        state={micPrompt}
+        onRetry={() => { void askBrowserForMic().then((result) => { if (result.phase === "granted") { setMicPrompt(null); void enterRoom(true); } }); }}
+        onGranted={() => { setMicPrompt(null); void enterRoom(true); }}
+        onSkip={() => { micRetryRef.current++; setMicPrompt(null); setMicOn(false); void enterRoom(false); }}
+        onClose={() => { micRetryRef.current++; setMicPrompt(null); }}
+      />}
+    </div>
+  );
+}
+
+type MicPromptState = { phase: "waiting" } | { phase: "granted" } | { phase: "blocked" | "unavailable" | "busy" | "unsupported"; message: string };
+
+// Opens the microphone once so the browser shows its permission prompt, then releases it immediately (LiveKit opens it again inside the room).
+async function requestMicrophoneAccess(): Promise<MicPromptState> {
+  const media = navigator.mediaDevices;
+  if (!media?.getUserMedia) {
+    return { phase: "unsupported", message: window.isSecureContext ? "This browser cannot use a microphone here. Try Chrome, Edge, Firefox or Safari." : "The microphone needs a secure (https) connection. Open the link with https." };
+  }
+  try {
+    const stream = await media.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    stream.getTracks().forEach((track) => track.stop());
+    return { phase: "granted" };
+  } catch (cause) {
+    const name = cause instanceof DOMException ? cause.name : "";
+    if (name === "NotFoundError" || name === "DevicesNotFoundError" || name === "OverconstrainedError") return { phase: "unavailable", message: "No microphone was found. Plug one in or check your device, then try again." };
+    if (name === "NotReadableError" || name === "TrackStartError" || name === "AbortError") return { phase: "busy", message: "Your microphone is being used by another app. Close it and try again." };
+    return { phase: "blocked", message: "Microphone access is blocked for this site. Tap the lock or settings icon next to the address bar, set Microphone to Allow, then press Try again." };
+  }
+}
+
+function MicPermissionModal({ state, onRetry, onGranted, onSkip, onClose }: { state: MicPromptState; onRetry: () => void; onGranted: () => void; onSkip: () => void; onClose: () => void }) {
+  const waiting = state.phase === "waiting";
+  const failed = state.phase !== "waiting" && state.phase !== "granted";
+  const retryRef = useRef(onRetry);
+  const grantedRef = useRef(onGranted);
+  retryRef.current = onRetry;
+  grantedRef.current = onGranted;
+
+  // While access is blocked, keep watching: the moment the person allows it (in the address bar or settings) we continue on our own, and we keep asking the browser again in the background.
+  useEffect(() => {
+    if (!failed) return;
+    let stopped = false;
+    let status: PermissionStatus | null = null;
+    const onChange = () => { if (!stopped && status?.state === "granted") grantedRef.current(); };
+    navigator.permissions?.query({ name: "microphone" as PermissionName }).then((result) => { if (stopped) { return; } status = result; if (result.state === "granted") grantedRef.current(); else result.addEventListener("change", onChange); }).catch(() => { /* Permissions API is not available in every browser. */ });
+    const timer = window.setInterval(() => {
+      if (stopped || document.hidden) return;
+      void requestMicrophoneAccess().then((result) => { if (!stopped && result.phase === "granted") grantedRef.current(); });
+    }, 3500);
+    return () => { stopped = true; window.clearInterval(timer); status?.removeEventListener("change", onChange); };
+  }, [failed]);
+
+  useEffect(() => {
+    document.body.classList.add("modal-open");
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => { document.body.classList.remove("modal-open"); document.removeEventListener("keydown", onKey); };
+  }, [onClose]);
+
+  return (
+    <div className="modal-backdrop mic-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section className="modal-panel modal-panel-narrow mic-modal" role="dialog" aria-modal="true" aria-labelledby="mic-modal-title">
+        <button type="button" className="icon-button modal-close mic-modal-close" onClick={onClose} aria-label="Close"><X size={17}/></button>
+        <div className="mic-modal-body">
+          <div className={`mic-orb ${failed ? "mic-orb-off" : ""}`} aria-hidden="true">
+            <span className="mic-orb-glow"/><span className="mic-orb-ring"/><span className="mic-orb-core">{failed ? <MicOff size={34} strokeWidth={1.9}/> : <Mic size={34} strokeWidth={1.9}/>}</span>
+          </div>
+          <p className="section-overline">ONE QUICK STEP</p>
+          <h2 id="mic-modal-title">{failed ? "We can't hear you yet" : "Allow your microphone"}</h2>
+          <p className="mic-modal-text">{failed ? (state as { message: string }).message : "When your browser asks, choose Allow so your choir can hear you. We only use it while you are in the room."}</p>
+          {waiting && <p className="mic-modal-status" role="status"><LoaderCircle size={14} className="spin"/> Waiting for your browser…</p>}
+          {failed && <p className="mic-modal-status mic-modal-status-soft" role="status"><LoaderCircle size={14} className="spin"/> We'll keep checking and continue as soon as it's allowed.</p>}
+        </div>
+        <div className="mic-modal-actions modal-footer-fixed">
+          <button type="button" className="button button-primary button-full" onClick={onRetry} disabled={waiting}>{waiting ? <LoaderCircle size={16} className="spin"/> : <Mic size={16}/>} {failed ? "Try again" : "Allow microphone"}</button>
+          <button type="button" className="button button-soft button-full" onClick={onSkip}>Join without microphone</button>
+        </div>
+      </section>
     </div>
   );
 }
@@ -659,6 +785,7 @@ function MeetingRoomPage() {
             onDisconnected={() => setDisconnected(true)}
           >
             <ConferenceWorkspace meeting={session.meeting} role={session.role} onLeave={() => navigate(`/meeting/${slug}`)} onEndForEveryone={() => void endForEveryone()} ending={ending}/>
+            <RoomReadyOverlay expected={(session.participants ?? []).map((person) => person.identity)} title={session.meeting.title}/>
           </LiveKitRoom>
         </div>
         <div className="conference-bottom-note"><span><ShieldCheck size={15}/> {session.meeting.visibility === "public" ? "This gathering is publicly listed." : "This meeting uses an unlisted invitation link."}</span><span>For the clearest call, use headphones and a stable connection.</span></div>
@@ -667,10 +794,82 @@ function MeetingRoomPage() {
   );
 }
 
+/** Covers the room until everyone who was already here is shown with their photo and voice, so you arrive in a fully drawn room. */
+function RoomReadyOverlay({ expected, title }: { expected: string[]; title: string }) {
+  const room = useRoomContext();
+  const [ready, setReady] = useState(false);
+  const [gone, setGone] = useState(false);
+  const expectedKey = expected.join("|");
+
+  useEffect(() => {
+    let finished = false;
+    const startedAt = Date.now();
+    let connectedAt = 0;
+    const photoTasks = new Map<string, Promise<void>>();
+    const photoDone = new Set<string>();
+    const wantPhoto = (identity: string, metadata?: string) => {
+      const picture = participantPicture(metadata, identity);
+      const key = `${identity}|${picture}`;
+      if (!picture || photoTasks.has(key)) return;
+      photoTasks.set(key, preloadPhoto(picture, 512).then(() => { photoDone.add(key); }));
+    };
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      window.clearInterval(timer);
+      // One more frame so the cards are painted underneath before the cover fades away.
+      requestAnimationFrame(() => requestAnimationFrame(() => setReady(true)));
+    };
+    const evaluate = () => {
+      if (finished) return;
+      const elapsed = Date.now() - startedAt;
+      if (room.state !== ConnectionState.Connected) { if (elapsed > 15000 || (room.state === ConnectionState.Disconnected && elapsed > 6000)) finish(); return; }
+      if (!connectedAt) connectedAt = Date.now();
+      const sinceConnected = Date.now() - connectedAt;
+      const local = room.localParticipant;
+      wantPhoto(local.identity, local.metadata);
+      const remotes = Array.from(room.remoteParticipants.values());
+      remotes.forEach((participant) => wantPhoto(participant.identity, participant.metadata));
+      const everyoneHere = expected.filter((identity) => identity !== local.identity).every((identity) => room.remoteParticipants.has(identity));
+      const photosReady = photoTasks.size === photoDone.size;
+      const voicesReady = remotes.every((participant) => {
+        const mic = participant.getTrackPublication(Track.Source.Microphone);
+        const cam = participant.getTrackPublication(Track.Source.Camera);
+        const micOk = !mic || mic.isMuted || (mic.isSubscribed && Boolean(mic.track));
+        const camOk = !cam || cam.isMuted || (cam.isSubscribed && Boolean(cam.track));
+        return micOk && camOk;
+      });
+      if ((everyoneHere || sinceConnected > 5000) && photosReady && (voicesReady || sinceConnected > 6500)) finish();
+      else if (sinceConnected > 9000) finish();
+    };
+    const timer = window.setInterval(evaluate, 120);
+    evaluate();
+    return () => { finished = true; window.clearInterval(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [room, expectedKey]);
+
+  useEffect(() => {
+    if (!ready) return;
+    const timer = window.setTimeout(() => setGone(true), 400);
+    return () => window.clearTimeout(timer);
+  }, [ready]);
+
+  if (gone) return null;
+  return <div className={`room-ready-overlay ${ready ? "room-ready-overlay-out" : ""}`} role="status" aria-live="polite" aria-hidden={ready}>
+    <div className="room-ready-card">
+      <span className="room-ready-mark"><AudioLines size={26}/></span>
+      <b>Getting your room ready…</b>
+      <small>{title}</small>
+      <LoaderCircle size={20} className="spin"/>
+    </div>
+  </div>;
+}
+
 type RoomSignal = { kind: "hand"; raised: boolean } | { kind: "reaction"; emoji: string; id: string };
 type FloatingReaction = { id: string; emoji: string; name: string };
 // Anything a person can press: a tap on these must keep doing its own job and never toggle fullscreen.
 const INTERACTIVE_SELECTOR = "button, a, input, textarea, select, label, summary, [role='button'], [role='dialog'], [data-popover], .room-device-menu, .reaction-picker, .messages-modal-backdrop, .room-alert, .room-message-toast, .room-presence-stack";
+const PARTICIPANTS_PER_SCREEN = 8;
 const REACTION_SET = ["🙏", "❤️", "👏", "🙌", "😊", "🎉", "✨", "💛", "🕊️", "👍"];
 
 // People we already know about before the room connects (from the join response and our own token), so names and photos are there from the first frame.
@@ -915,6 +1114,88 @@ function ShareRedirect() {
   return <Navigate to={`/meeting/${encodeURIComponent(slug)}`} replace />;
 }
 
+// A tiny silent WAV (one second, mono). Looping it keeps the page counted as "playing audio", so the browser keeps the call running while you use other apps.
+let silentWavUrl = "";
+function getSilentWavUrl(): string {
+  if (silentWavUrl) return silentWavUrl;
+  const sampleRate = 8000; const samples = sampleRate; const buffer = new ArrayBuffer(44 + samples * 2); const view = new DataView(buffer);
+  const text = (offset: number, value: string) => { for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i)); };
+  text(0, "RIFF"); view.setUint32(4, 36 + samples * 2, true); text(8, "WAVE"); text(12, "fmt "); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true); text(36, "data"); view.setUint32(40, samples * 2, true);
+  silentWavUrl = URL.createObjectURL(new Blob([buffer], { type: "audio/wav" }));
+  return silentWavUrl;
+}
+
+/** Keeps a call alive like a normal phone call: you can switch to other apps or tabs and still hear (and be heard by) everyone. */
+function useBackgroundCall(room: ReturnType<typeof useRoomContext>, title: string, onLeave: () => void) {
+  const leaveRef = useRef(onLeave);
+  leaveRef.current = onLeave;
+  useEffect(() => {
+    const cleanups: Array<() => void> = [];
+    const nav = navigator as Navigator & { audioSession?: { type: string }; wakeLock?: { request: (type: "screen") => Promise<{ release: () => Promise<void>; addEventListener: (name: string, cb: () => void) => void }> }; locks?: { request: (name: string, cb: () => Promise<void>) => Promise<unknown> } };
+
+    // 1) Tell iOS/Safari this is a two-way call so audio is not ducked or stopped when the screen locks or another app opens.
+    try { if (nav.audioSession) nav.audioSession.type = "play-and-record"; } catch { /* Not supported here. */ }
+
+    // 2) Silent audio loop: keeps the page "audible" so timers and the connection are not throttled or frozen in the background.
+    let silent: HTMLAudioElement | null = null;
+    try {
+      silent = new Audio(getSilentWavUrl());
+      silent.loop = true; silent.setAttribute("playsinline", ""); silent.preload = "auto";
+      const start = () => { void silent?.play().catch(() => { /* Waits for the next tap. */ }); };
+      start();
+      const retry = () => { if (silent?.paused) start(); };
+      document.addEventListener("pointerdown", retry, true);
+      document.addEventListener("keydown", retry, true);
+      cleanups.push(() => { document.removeEventListener("pointerdown", retry, true); document.removeEventListener("keydown", retry, true); silent?.pause(); silent = null; });
+    } catch { /* Background audio helper is optional. */ }
+
+    // 3) Media session: the phone shows MEET ENIHAKOLE as an ongoing call (lock screen / notification) with hang-up and mute controls.
+    const session = navigator.mediaSession;
+    if (session) {
+      const setHandler = (action: string, handler: (() => void) | null) => { try { (session.setActionHandler as (name: string, cb: (() => void) | null) => void).call(session, action, handler); } catch { /* Action not supported in this browser. */ } };
+      try {
+        session.metadata = new MediaMetadata({ title, artist: "MEET ENIHAKOLE", album: "Live gathering", artwork: [{ src: "/icon-512.png", sizes: "512x512", type: "image/png" }, { src: "/icon-192.png", sizes: "192x192", type: "image/png" }] });
+        session.playbackState = "playing";
+      } catch { /* Metadata is cosmetic. */ }
+      setHandler("play", () => { void silent?.play().catch(() => undefined); });
+      setHandler("pause", () => { void silent?.play().catch(() => undefined); });
+      setHandler("hangup", () => leaveRef.current());
+      setHandler("togglemicrophone", () => { void room.localParticipant.setMicrophoneEnabled(!room.localParticipant.isMicrophoneEnabled); });
+      cleanups.push(() => { ["play", "pause", "hangup", "togglemicrophone"].forEach((action) => setHandler(action, null)); try { session.metadata = null; session.playbackState = "none"; } catch { /* Ignore. */ } });
+    }
+
+    // 4) A held Web Lock stops Chromium from freezing the page while it is in the background.
+    let releaseLock: (() => void) | null = null;
+    try { void nav.locks?.request("meet-enihakole-live-call", () => new Promise<void>((resolve) => { releaseLock = resolve; })).catch(() => undefined); } catch { /* Not supported. */ }
+    cleanups.push(() => { releaseLock?.(); });
+
+    // 5) Keep the screen awake while the call is on screen, and re-acquire it when you come back.
+    let sentinel: { release: () => Promise<void> } | null = null;
+    const takeWakeLock = async () => {
+      if (document.visibilityState !== "visible" || sentinel || !nav.wakeLock) return;
+      try { const lock = await nav.wakeLock.request("screen"); sentinel = lock; lock.addEventListener("release", () => { if (sentinel === lock) sentinel = null; }); } catch { /* Battery saver or unsupported. */ }
+    };
+    void takeWakeLock();
+    cleanups.push(() => { void sentinel?.release().catch(() => undefined); sentinel = null; });
+
+    // 6) Coming back from another app: make sure the sound and the connection are running again straight away.
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      void takeWakeLock();
+      void room.startAudio().catch(() => undefined);
+      if (silent?.paused) void silent.play().catch(() => undefined);
+      try { if (session) session.playbackState = "playing"; } catch { /* Ignore. */ }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("pageshow", onVisible);
+    window.addEventListener("focus", onVisible);
+    cleanups.push(() => { document.removeEventListener("visibilitychange", onVisible); window.removeEventListener("pageshow", onVisible); window.removeEventListener("focus", onVisible); });
+
+    return () => { cleanups.forEach((cleanup) => cleanup()); };
+  }, [room, title]);
+}
+
 function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending }: { meeting: Meeting; role: "host" | "participant"; onLeave: () => void; onEndForEveryone: () => void; ending: boolean }) {
   const room = useRoomContext();
   const { localParticipant, isMicrophoneEnabled, isCameraEnabled, isScreenShareEnabled } = useLocalParticipant();
@@ -945,6 +1226,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
   const autoFullscreenDone = useRef(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const localIdentity = localParticipant.identity;
+  useBackgroundCall(room, meeting.title, onLeave);
   const [deviceMenu, setDeviceMenu] = useState<"audioinput" | "videoinput" | null>(null);
   const [inputDevices, setInputDevices] = useState<MediaDeviceInfo[]>([]);
 
@@ -1187,15 +1469,20 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
     if (aTop !== bTop) return aTop ? -1 : 1;
     const aHost = getParticipantRole(a) === "host"; const bHost = getParticipantRole(b) === "host";
     if (aHost !== bHost) return aHost ? -1 : 1;
-    if (a.identity === localIdentity) return -1;
-    if (b.identity === localIdentity) return 1;
+    if (a.isLocal !== b.isLocal) return a.isLocal ? -1 : 1;
     return (a.name || a.identity).localeCompare(b.name || b.identity);
   });
+  // Your own card always lives on the first screen (right after the current speaker and the host), so you never have to page to find yourself.
+  const localSlot = orderedParticipants.findIndex((participant) => participant.isLocal);
+  if (localSlot >= PARTICIPANTS_PER_SCREEN) {
+    const [self] = orderedParticipants.splice(localSlot, 1);
+    orderedParticipants.splice(PARTICIPANTS_PER_SCREEN - 1, 0, self);
+  }
   const tracksByIdentity = new Map(trackRefs.map((trackRef) => [trackRef.participant.identity, trackRef]));
   const visualParticipants = orderedParticipants.map((participant) => ({ participant, trackRef: tracksByIdentity.get(participant.identity) })).filter((item) => item.trackRef);
-  const pages = Math.max(1, Math.ceil(visualParticipants.length / 8));
+  const pages = Math.max(1, Math.ceil(visualParticipants.length / PARTICIPANTS_PER_SCREEN));
   const currentPage = Math.min(page, pages - 1);
-  const visibleParticipants = visualParticipants.slice(currentPage * 8, currentPage * 8 + 8);
+  const visibleParticipants = visualParticipants.slice(currentPage * PARTICIPANTS_PER_SCREEN, currentPage * PARTICIPANTS_PER_SCREEN + PARTICIPANTS_PER_SCREEN);
 
   return <div className={`conference-fullscreen-target ${fullScreen ? "is-fullscreen" : ""} ${pseudoFull ? "is-pseudo-fullscreen" : ""}`} ref={fullScreenRef}>
     <div className="conference-media-area">
@@ -1248,6 +1535,7 @@ function AuthModal({ onClose, onAuthenticated }: { onClose: () => void; onAuthen
     setBusy(true); setError("");
     try {
       const result = await api.googleSignIn(credential);
+      await preloadPhotoBriefly(result.user.picture, 512, 1200);
       onAuthenticated(result.user, result.token);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not sign in with Google.");

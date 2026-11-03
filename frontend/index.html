@@ -5,12 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#fbf7f2" />
     <script>
-      try {
-        document.documentElement.dataset.theme = localStorage.getItem("meet-enihakole-theme") === "dark" ? "dark" : "light";
-      } catch {
-        document.documentElement.dataset.theme = "light";
-      }
+      (function () {
+        var theme = "light";
+        try {
+          var choice = localStorage.getItem("meet-enihakole-theme-choice");
+          if (choice === "dark" || choice === "light") theme = choice;
+          else if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) theme = "dark";
+        } catch (e) {}
+        document.documentElement.dataset.theme = theme;
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute("content", theme === "dark" ? "#130d10" : "#fbf7f2");
+      })();
     </script>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
     <meta name="description" content="A peaceful place for ENIHAKOLE CHOIR to meet, pray, and rehearse online." />
     <meta property="og:site_name" content="MEET ENIHAKOLE" />
     <meta property="og:type" content="website" />

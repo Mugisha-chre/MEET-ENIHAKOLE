@@ -43,10 +43,22 @@ export function hiResPhoto(src: string | undefined, size = 400): string {
 function loadGoogle(): Promise<void> {
   if (window.google?.accounts?.id) return Promise.resolve();
   scriptPromise ??= new Promise<void>((resolve, reject) => {
+    // index.html already starts downloading the script before the app code runs; reuse that tag instead of fetching twice.
+    const existing = document.querySelector<HTMLScriptElement>(`script[src="${SCRIPT_SRC}"]`);
+    const fail = () => { scriptPromise = null; existing?.remove(); reject(new Error("Google sign-in could not be loaded. Check your connection.")); };
+    if (existing) {
+      if (window.google?.accounts?.id) { resolve(); return; }
+      existing.addEventListener("load", () => resolve(), { once: true });
+      existing.addEventListener("error", () => { fail(); }, { once: true });
+      // Safety net: the tag may have finished loading before we attached listeners.
+      const poll = window.setInterval(() => { if (window.google?.accounts?.id) { window.clearInterval(poll); resolve(); } }, 50);
+      window.setTimeout(() => window.clearInterval(poll), 15000);
+      return;
+    }
     const script = document.createElement("script");
     script.src = SCRIPT_SRC; script.async = true; script.defer = true;
     script.onload = () => resolve();
-    script.onerror = () => { scriptPromise = null; reject(new Error("Google sign-in could not be loaded. Check your connection.")); };
+    script.onerror = fail;
     document.head.appendChild(script);
   });
   return scriptPromise;
@@ -134,6 +146,11 @@ export function preloadPhoto(src: string | undefined, size = 512): Promise<void>
     pendingPhotos.set(url, task);
   }
   return task;
+}
+
+/** Waits (briefly) for a person's photo to be ready, so the interface shows it the moment they appear. Never blocks for long. */
+export function preloadPhotoBriefly(src: string | undefined, size = 512, maxMs = 1500): Promise<void> {
+  return Promise.race([preloadPhoto(src, size), new Promise<void>((resolve) => setTimeout(resolve, maxMs))]);
 }
 
 /** Profile photo in a circle. While it downloads a small spinner shows (never a "?"); initials appear only if there is no photo or it fails. */

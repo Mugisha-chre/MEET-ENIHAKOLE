@@ -721,9 +721,9 @@ h1, h2, h3, p { overflow-wrap: anywhere; }
 /* Navigation and scroll surfaces are bounded so the top bar and mobile nav remain fixed. */
 :root { scrollbar-color: #8f2141 transparent; scrollbar-width: thin; }
 * { scrollbar-width: thin; scrollbar-color: #8f2141 transparent; }
-*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar { width: 14px; height: 14px; }
 *::-webkit-scrollbar-track { background: transparent; }
-*::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 9px; background: #8f2141; background-clip: padding-box; }
+*::-webkit-scrollbar-thumb { border: 4px solid transparent; border-radius: 9px; background: #8f2141; background-clip: padding-box; }
 *::-webkit-scrollbar-thumb:hover { background: #a92b4e; background-clip: padding-box; }
 .app-shell { height: 100dvh; min-height: 0; overflow: hidden; }
 .main-shell { height: 100dvh; min-height: 0; overflow: hidden; }
@@ -935,7 +935,8 @@ h1, h2, h3, p { overflow-wrap: anywhere; }
   .participant-name-copy b { max-width: 115px; }
 }
 @media (max-width: 720px) {
-  *::-webkit-scrollbar { width: 3px; height: 3px; }
+  *::-webkit-scrollbar { width: 7px; height: 7px; }
+  *::-webkit-scrollbar-thumb { border-width: 2px; }
   *::-webkit-scrollbar-thumb { background: transparent; border-color: transparent; }
   html.is-scrolling *::-webkit-scrollbar-thumb { background: #8f2141; background-clip: padding-box; }
   * { scrollbar-color: transparent transparent; }
@@ -1451,3 +1452,76 @@ html.is-scrolling .meeting-card:hover { transform: translateZ(0); box-shadow: no
 .profile-photo.profile-photo-loading img { position: absolute; inset: 0; opacity: 0; }
 .profile-photo-spinner { position: absolute; inset: 0; display: grid; place-items: center; color: rgba(249,233,227,.85); }
 .profile-photo-spinner svg { width: 42%; height: 42%; }
+
+
+/* ===== Update round 5: sidebar card removed, scrollbar margin, install button, smooth sidebar, share button, microphone permission ===== */
+
+/* 1) With the "A space to connect" card gone, the account block stays pinned to the bottom of the sidebar. */
+.sidebar .sidebar-bottom { margin-top: auto; }
+
+/* 2) Scrollbars keep a clear margin from the screen edge (thumb is inset by a transparent border) and still stop at the top bar, footer and modal header/footer. */
+.main-content { scrollbar-gutter: stable; }
+@media (max-width: 720px) { .main-content { scrollbar-gutter: auto; } }
+
+/* 3) Install button sits above the footer text instead of covering it; on phones it tucks under the open sidebar. */
+.pwa-install { bottom: 76px; transition: opacity .2s ease, visibility 0s; }
+@media (min-width: 721px) and (max-width: 980px) { .pwa-install { bottom: 88px; } }
+@media (max-width: 720px) {
+  html.mobile-nav-open .pwa-install { opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .2s ease, visibility 0s linear .2s; }
+}
+
+/* 4) Sidebar on phones: a pure slide from/to the left. No opacity fade, no item animations, no shadow bleeding onto the screen while closed. */
+@media (max-width: 720px) {
+  .sidebar, .sidebar.sidebar-open, .sidebar:not(.sidebar-open) { opacity: 1 !important; }
+  .sidebar { transform: translate3d(-100%, 0, 0); box-shadow: none; will-change: transform; backface-visibility: hidden; }
+  .sidebar.sidebar-open { transform: translate3d(0, 0, 0); box-shadow: 22px 0 60px rgba(0,0,0,.36); transition: transform .26s cubic-bezier(.22, 1, .36, 1), box-shadow .26s ease; }
+  .sidebar:not(.sidebar-open) { visibility: hidden; box-shadow: none; transition: transform .22s cubic-bezier(.4, 0, .2, 1), box-shadow .22s ease, visibility 0s linear .22s; }
+  :root[data-theme="light"] .sidebar:not(.sidebar-open) { box-shadow: none; }
+  .sidebar.sidebar-open > * { animation: none !important; }
+  .mobile-scrim { transition-duration: .22s; }
+}
+
+/* 5) Share invitation sits at the bottom-right of the thumbnail card. */
+.thumb-share-button { top: auto; bottom: 12px; right: 12px; }
+@media (max-width: 720px) { .thumb-share-button { top: auto; bottom: 9px; right: 9px; } }
+
+/* 6) Microphone permission modal (desktop dialog, phone bottom sheet) with the glowing, spinning mic ring. */
+.mic-modal { display: flex; flex-direction: column; overflow: hidden; }
+.mic-modal-close { position: absolute; top: 12px; right: 12px; z-index: 2; }
+.mic-modal-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 38px clamp(22px, 4vw, 34px) 22px; text-align: center; }
+.mic-modal-body h2 { margin: 6px 0 0; font-family: Manrope, sans-serif; font-size: clamp(22px, 5vw, 27px); line-height: 1.2; letter-spacing: -.04em; }
+.mic-modal-body .section-overline { margin: 0; }
+.mic-modal-text { margin: 12px auto 0; max-width: 340px; color: #a89299; font-size: 13px; line-height: 1.65; }
+:root[data-theme="light"] .mic-modal-text { color: #7a666d; }
+.mic-modal-status { display: inline-flex; align-items: center; gap: 8px; margin: 16px 0 0; color: #e8ca91; font-size: 12px; font-weight: 700; }
+.mic-modal-status-soft { color: #a89299; font-weight: 600; }
+:root[data-theme="light"] .mic-modal-status { color: #986b2d; }
+:root[data-theme="light"] .mic-modal-status-soft { color: #7a666d; }
+.mic-modal-actions { flex: 0 0 auto; display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 14px clamp(22px, 4vw, 34px) calc(22px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: #1c1318; }
+:root[data-theme="light"] .mic-modal-actions { background: #fffdfa; }
+@media (max-width: 720px) { .mic-modal-body { padding: 34px 19px 18px; } .mic-modal-actions { padding: 14px 19px calc(16px + env(safe-area-inset-bottom)); } }
+
+.mic-orb { position: relative; width: 148px; height: 148px; margin: 0 auto 18px; display: grid; place-items: center; contain: layout style; }
+.mic-orb > span { position: absolute; border-radius: 50%; }
+.mic-orb-glow, .mic-orb-ring { inset: 14px; background: conic-gradient(from 0deg, #a92b4e 0%, #f0c9d2 14%, #e8ca91 30%, #7a1a37 48%, #d6567b 64%, #f3dcb0 82%, #a92b4e 100%); will-change: transform; }
+.mic-orb-glow { filter: blur(13px); opacity: 1; animation: mic-orb-spin 3.2s linear infinite reverse; }
+.mic-orb-ring { -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 4px)); mask: radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 4px)); animation: mic-orb-spin 2.4s linear infinite; }
+.mic-orb-core { inset: 21px; display: grid; place-items: center; color: #fff; background: radial-gradient(circle at 50% 32%, #4a1c2c, #25121b 72%); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08), 0 0 26px rgba(143,33,65,.35); animation: mic-orb-breathe 2.4s ease-in-out infinite; will-change: transform; }
+.mic-orb-core svg { filter: drop-shadow(0 0 6px rgba(240,201,210,.55)); }
+.mic-orb-off .mic-orb-glow { opacity: .35; animation-duration: 9s; }
+.mic-orb-off .mic-orb-ring { opacity: .7; animation-duration: 7s; }
+.mic-orb-off .mic-orb-core { animation: none; color: #f0c9d2; }
+@keyframes mic-orb-spin { to { transform: rotate(360deg); } }
+@keyframes mic-orb-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.045); } }
+@media (prefers-reduced-motion: reduce) { .mic-orb-glow, .mic-orb-ring, .mic-orb-core { animation: none; } }
+
+
+/* ===== Update round 6: room-ready cover ===== */
+.room-ready-overlay { position: absolute; inset: 0; z-index: 80; display: grid; place-items: center; padding: 24px; background: radial-gradient(ellipse at 50% 30%, rgba(143,33,65,.35), transparent 60%), #171015; transition: opacity .35s ease; }
+.room-ready-overlay-out { opacity: 0; pointer-events: none; }
+.room-ready-card { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; color: #f7ebe8; }
+.room-ready-card b { font-size: 15px; letter-spacing: -.01em; }
+.room-ready-card small { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #b9a2aa; font-size: 12px; }
+.room-ready-card > svg { color: #e8ca91; margin-top: 4px; }
+.room-ready-mark { width: 58px; height: 58px; display: grid; place-items: center; border-radius: 18px; color: #fff; background: linear-gradient(145deg, #a92b4e, #7a1a37); box-shadow: 0 14px 36px rgba(0,0,0,.35), inset 0 0 0 1px rgba(255,255,255,.14); animation: mic-orb-breathe 2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .room-ready-overlay { transition: none; } .room-ready-mark { animation: none; } }
