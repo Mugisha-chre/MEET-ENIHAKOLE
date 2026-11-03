@@ -1,5 +1,5 @@
 import { createPortal } from "react-dom";
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject, type FormEvent, type ReactNode, type TouchEvent as ReactTouchEvent } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type RefObject, type FormEvent, type ReactNode, type TouchEvent as ReactTouchEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { LiveKitRoom, ParticipantTile, RoomAudioRenderer, isTrackReference, useChat, useIsMuted, useLocalParticipant, useParticipants, useRoomContext, useTracks, VideoTrack, type TrackReference } from "@livekit/components-react";
 import { ConnectionState, DisconnectReason, MediaDeviceFailure, ParticipantEvent, Room, RoomEvent, Track, VideoPreset, type Participant, type RemoteParticipant, type RoomOptions } from "livekit-client";
@@ -9,6 +9,7 @@ import {
   Link2, LoaderCircle, LogIn, LogOut, Menu, Mic, Plus, Share2, ShieldCheck,
   Sparkles, Users, Video, VideoIcon, VideoOff, X, Sun, Moon, MessageCircle,
   Hand, Send, MonitorUp, MicOff, Maximize2, Minimize2, ChevronLeft, ChevronRight, Smile, ChevronDown, Download,
+  MousePointer2, MoveUpRight, Eraser, Eye, EyeOff, PenLine,
 } from "lucide-react";
 import { api, ApiError, clearAuthToken, getAuthToken, saveAuthToken } from "./api";
 import { clearCachePrefix, patchCache, readCache, removeCache, writeCache } from "./cache";
@@ -137,6 +138,18 @@ export default function App() {
     const themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
     if (themeColor) themeColor.content = theme === "light" ? "#fbf7f2" : "#130d10";
   }, [theme]);
+
+  // Returning to the page (from another app, a closed call, or a focused field) must never leave it zoomed in.
+  useEffect(() => {
+    const settle = () => { window.requestAnimationFrame(resetViewportZoom); window.setTimeout(resetViewportZoom, 250); };
+    const onVisible = () => { if (document.visibilityState === "visible") settle(); };
+    const onFocusOut = (event: FocusEvent) => { if (event.target instanceof HTMLElement && /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName)) settle(); };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("pageshow", settle);
+    window.addEventListener("orientationchange", settle);
+    document.addEventListener("focusout", onFocusOut);
+    return () => { document.removeEventListener("visibilitychange", onVisible); window.removeEventListener("pageshow", settle); window.removeEventListener("orientationchange", settle); document.removeEventListener("focusout", onFocusOut); };
+  }, []);
 
   // Cache-first: cached lists render instantly, then refresh quietly in the background (skipped if fetched moments ago).
   const refreshMeetings = useCallback(async (force = false) => {
@@ -865,7 +878,7 @@ function MeetingRoomPage() {
 
   return (
     <div className="conference-page">
-      <header className="conference-topbar"><Link to={`/meeting/${slug}`} className="conference-brand"><span className="brand-mark"><AudioLines size={19}/></span><span><b>MEET ENIHAKOLE</b><small>{session.meeting.title}</small></span></Link><div className="conference-room-status">IN THE ROOM <span className="conference-divider"/> {session.role === "host" ? "HOST" : "PARTICIPANT"}</div><div className="conference-header-actions"><ThemeToggle/><button className="button button-soft button-small" onClick={() => navigate(`/meeting/${slug}`)}><ArrowLeft size={15}/> Leave room</button></div></header>
+      <header className="conference-topbar"><Link to={`/meeting/${slug}`} className="conference-brand"><span className="brand-mark"><AudioLines size={19}/></span><span><b>MEET ENIHAKOLE</b><small>{session.meeting.title}</small></span></Link><div className="conference-room-status">IN THE ROOM{session.role === "host" && <><span className="conference-divider"/> HOST</>}</div><div className="conference-header-actions"><ThemeToggle/><button className="button button-soft button-small" onClick={() => navigate(`/meeting/${slug}`)}><ArrowLeft size={15}/> Leave room</button></div></header>
       {endError && <div className="room-alert" role="alert">{endError}</div>}
       {disconnected && <div className="room-alert" role="status">You have disconnected from the call. <button onClick={() => navigate(`/meeting/${slug}`)}>Return to meeting</button></div>}
       <main className="conference-main">
@@ -935,7 +948,12 @@ const ROOM_OPTIONS: RoomOptions = {
   adaptiveStream: true,
   dynacast: true,
   videoCaptureDefaults: { resolution: { width: 1280, height: 720, frameRate: 30 } },
+  // Voice path tuned for minimum delay: mono capture with the lowest capture latency hint, no pre-processing buffering beyond the browser's own echo/noise handling.
+  audioCaptureDefaults: { channelCount: 1, latency: 0, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
   publishDefaults: {
+    // DTX pauses sending during silence and costs the first syllable a restart delay; keeping the stream continuous makes speech start instantly. RED adds redundancy so a lost packet never needs a resend wait.
+    dtx: false, red: true, forceStereo: false,
+    audioPreset: { maxBitrate: 32_000, priority: "high" },
     videoEncoding: { maxBitrate: 1_500_000, maxFramerate: 30 },
     screenShareEncoding: { maxBitrate: 3_000_000, maxFramerate: 15 },
     videoSimulcastLayers: [new VideoPreset(640, 360, 500_000, 20), new VideoPreset(320, 180, 150_000, 15)],
@@ -1060,7 +1078,22 @@ function reactionKind(emoji: string): string {
   return "float";
 }
 // Anything a person can press: a tap on these must keep doing its own job and never toggle fullscreen.
-const INTERACTIVE_SELECTOR = "button, a, input, textarea, select, label, summary, [role='button'], [role='dialog'], [data-popover], .room-device-menu, .reaction-picker, .messages-modal-backdrop, .room-alert, .room-message-toast, .room-presence-stack, .modal-backdrop";
+const INTERACTIVE_SELECTOR = ".screen-annotate-layer.is-drawing, .screen-annotate-toolbar, button, a, input, textarea, select, label, summary, [role='button'], [role='dialog'], [data-popover], .room-device-menu, .reaction-picker, .messages-modal-backdrop, .room-alert, .room-message-toast, .room-presence-stack, .modal-backdrop";
+const VIEWPORT_CONTENT = "width=device-width, initial-scale=1.0";
+/** Phones can come back to the page pinch-zoomed or focus-zoomed (after an input was focused, or after leaving a call). Briefly pin the scale to 1, then give the viewport back exactly as designed so people can still pinch-zoom normally. */
+let viewportResetTimer = 0;
+function resetViewportZoom() {
+  try {
+    const meta = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
+    if (!meta) return;
+    const scale = window.visualViewport?.scale ?? 1;
+    if (Math.abs(scale - 1) < 0.02) return;
+    window.clearTimeout(viewportResetTimer);
+    meta.setAttribute("content", `${VIEWPORT_CONTENT}, maximum-scale=1`);
+    viewportResetTimer = window.setTimeout(() => meta.setAttribute("content", VIEWPORT_CONTENT), 400);
+  } catch { /* Zoom reset is a best-effort nicety. */ }
+}
+
 const PARTICIPANTS_PER_SCREEN = 8;
 const REACTION_SET = ["🙏", "❤️", "👏", "🙌", "😊", "🎉", "✨", "💛", "🕊️", "👍"];
 
@@ -1101,10 +1134,11 @@ function participantPicture(metadata?: string, identity?: string): string {
 
 function ParticipantAvatar({ trackRef, participant }: { trackRef: Parameters<typeof useIsMuted>[0]; participant: Participant }) {
   const muted = useIsMuted(trackRef);
+  const { speaking } = useVoiceActivity(participant);
   const videoOn = isTrackReference(trackRef) && Boolean(trackRef.publication?.track) && !muted;
   // Camera on: the video is the picture, so the waveform runs around the card edges instead of a profile circle.
-  if (videoOn) return participant.isSpeaking ? <SpeakingWave participant={participant}/> : null;
-  return <div className="participant-avatar" aria-hidden="true"><div className="participant-avatar-stack"><VoiceRing participant={participant} speaking={participant.isSpeaking}/><ProfilePhoto src={participantPicture(participant.metadata, participant.identity)} name={participantName(participant)} className="participant-avatar-photo" size={512}/></div></div>;
+  if (videoOn) return speaking ? <SpeakingWave participant={participant}/> : null;
+  return <div className="participant-avatar" aria-hidden="true"><div className="participant-avatar-stack"><VoiceRing participant={participant} speaking={speaking}/><ProfilePhoto src={participantPicture(participant.metadata, participant.identity)} name={participantName(participant)} className="participant-avatar-photo" size={512}/></div></div>;
 }
 
 let toneContext: AudioContext | null = null;
@@ -1152,6 +1186,97 @@ function playPresenceTone(kind: "joined" | "left") {
 }
 
 let ringContext: AudioContext | null = null;
+/** Local voice meter: reads the host's own microphone directly (Web Audio) so their waveform reacts instantly instead of waiting for LiveKit's audio-level round trip. Remote participants are untouched. */
+const localVoice = {
+  level: 0, speaking: false, active: false, analyser: null as AnalyserNode | null,
+  listeners: new Set<() => void>(), refs: 0, stop: null as null | (() => void),
+};
+const emitLocalVoice = () => localVoice.listeners.forEach((listener) => listener());
+const localVoiceSnapshot = () => (localVoice.active ? (localVoice.speaking ? 2 : 1) : 0);
+const subscribeLocalVoice = (listener: () => void) => { localVoice.listeners.add(listener); return () => { localVoice.listeners.delete(listener); }; };
+
+function startLocalVoice(participant: Participant): () => void {
+  let source: MediaStreamAudioSourceNode | null = null;
+  let trackId = ""; let frame = 0; let alive = true; let lastCheck = 0; let lastLoud = 0; let floor = 0.004;
+  let buf = new Uint8Array(256);
+  const setState = (active: boolean, speaking: boolean) => {
+    if (localVoice.active === active && localVoice.speaking === speaking) return;
+    localVoice.active = active; localVoice.speaking = speaking; emitLocalVoice();
+  };
+  const detach = () => {
+    try { source?.disconnect(); localVoice.analyser?.disconnect(); } catch { /* already disconnected */ }
+    source = null; trackId = ""; localVoice.analyser = null; localVoice.level = 0;
+  };
+  const attach = (): boolean => {
+    const publication = participant.getTrackPublication(Track.Source.Microphone);
+    const track = publication?.track?.mediaStreamTrack;
+    if (!publication || publication.isMuted || !track || track.readyState !== "live") { detach(); return false; }
+    if (track.id === trackId && localVoice.analyser) return true;
+    detach();
+    try {
+      const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!Ctx) return false;
+      ringContext ??= new Ctx();
+      if (ringContext.state === "suspended") void ringContext.resume();
+      source = ringContext.createMediaStreamSource(new MediaStream([track]));
+      const analyser = ringContext.createAnalyser();
+      analyser.fftSize = 256; analyser.smoothingTimeConstant = 0.5;
+      source.connect(analyser); // analysis only: never routed to the speakers
+      localVoice.analyser = analyser; trackId = track.id; buf = new Uint8Array(analyser.fftSize);
+      return true;
+    } catch { detach(); return false; }
+  };
+  const tick = (now: number) => {
+    if (!alive) return;
+    if (now - lastCheck > 500) { lastCheck = now; attach(); }
+    const analyser = localVoice.analyser;
+    if (!analyser || !ringContext || ringContext.state !== "running") {
+      if (ringContext?.state === "suspended") void ringContext.resume();
+      localVoice.level = 0; setState(false, false);
+      frame = window.requestAnimationFrame(tick); return;
+    }
+    analyser.getByteTimeDomainData(buf);
+    let sum = 0; for (let i = 0; i < buf.length; i++) { const v = (buf[i] - 128) / 128; sum += v * v; }
+    const raw = Math.sqrt(sum / buf.length);
+    localVoice.level += (raw - localVoice.level) * (raw > localVoice.level ? 0.7 : 0.15); // fast attack, gentle release
+    const threshold = Math.max(0.012, floor * 3.5);
+    let speaking = localVoice.speaking;
+    if (localVoice.level > threshold) { lastLoud = now; speaking = true; }
+    else if (now - lastLoud > 350) { speaking = false; floor += (raw - floor) * 0.02; } // adapt to room noise only while quiet
+    setState(true, speaking);
+    frame = window.requestAnimationFrame(tick);
+  };
+  const begin = () => { if (!alive || frame) return; frame = window.requestAnimationFrame(tick); };
+  const pause = () => { window.cancelAnimationFrame(frame); frame = 0; localVoice.level = 0; setState(false, false); }; // hidden tab: fall back to LiveKit
+  const onVisibility = () => { if (document.hidden) pause(); else { lastCheck = 0; begin(); } };
+  const onTracksChanged = () => { lastCheck = 0; attach(); };
+  const events = [ParticipantEvent.TrackMuted, ParticipantEvent.TrackUnmuted, ParticipantEvent.LocalTrackPublished, ParticipantEvent.LocalTrackUnpublished] as const;
+  events.forEach((event) => participant.on(event, onTracksChanged));
+  document.addEventListener("visibilitychange", onVisibility);
+  if (!document.hidden) begin();
+  return () => {
+    alive = false; window.cancelAnimationFrame(frame); frame = 0;
+    events.forEach((event) => participant.off(event, onTracksChanged));
+    document.removeEventListener("visibilitychange", onVisibility);
+    detach(); localVoice.speaking = false; localVoice.active = false; emitLocalVoice();
+  };
+}
+
+/** Speaking state for a participant. For the local participant it comes from the local microphone analyser (instant); for everyone else, and whenever the analyser is unavailable, it is LiveKit's value. */
+function useVoiceActivity(participant: Participant | undefined): { speaking: boolean; live: boolean } {
+  const isLocal = Boolean(participant?.isLocal);
+  useEffect(() => {
+    if (!participant || !participant.isLocal) return;
+    if (++localVoice.refs === 1) localVoice.stop = startLocalVoice(participant);
+    return () => { if (--localVoice.refs === 0) { localVoice.stop?.(); localVoice.stop = null; } };
+  }, [participant, isLocal]);
+  const snapshot = useSyncExternalStore(subscribeLocalVoice, localVoiceSnapshot, localVoiceSnapshot);
+  if (isLocal && snapshot > 0) return { speaking: snapshot === 2, live: true };
+  return { speaking: Boolean(participant?.isSpeaking), live: false };
+}
+/** Current voice level (0..1) driving the animations: local analyser for the host's own tile, LiveKit's audioLevel otherwise. */
+const voiceLevel = (participant: Participant) => (participant.isLocal && localVoice.active ? localVoice.level : participant.audioLevel);
+
 /** Real-time frequency analyser for a participant's microphone track (null until the track is available). */
 function createMicAnalyser(participant: Participant): { analyser: AnalyserNode; trackId: string; source: MediaStreamAudioSourceNode } | null {
   try {
@@ -1197,24 +1322,30 @@ function VoiceRing({ participant, speaking }: { participant: Participant; speaki
       if (size < 8) { frame = window.requestAnimationFrame(draw); return; }
       if (canvas.width !== Math.round(size * dpr)) { canvas.width = Math.round(size * dpr); canvas.height = Math.round(size * dpr); }
       const isSpeaking = speakingRef.current;
-      presence += ((isSpeaking ? 1 : 0) - presence) * (isSpeaking ? 0.22 : 0.12);
+      presence += ((isSpeaking ? 1 : 0) - presence) * (isSpeaking ? (participant.isLocal && localVoice.active ? 0.6 : 0.22) : 0.12);
       // (Re)connect to the live microphone track when it appears or changes.
+      const localLive = participant.isLocal && localVoice.active && Boolean(localVoice.analyser);
       const currentTrack = participant.getTrackPublication(Track.Source.Microphone)?.track?.mediaStreamTrack;
-      if (isSpeaking && now - lastMicCheck > 400) {
+      if (localLive) { if (mic) releaseMic(); } // the host's own analyser is shared and always ready: no connect delay
+      else if (isSpeaking && now - lastMicCheck > 400) {
         lastMicCheck = now;
         if (mic && (!currentTrack || mic.trackId !== currentTrack.id)) releaseMic();
         if (!mic) { mic = createMicAnalyser(participant); if (mic) data = new Uint8Array(mic.analyser.frequencyBinCount); }
       }
-      const level = isSpeaking ? Math.min(1, participant.audioLevel * 2.2) : 0;
+      const analyser = localLive ? localVoice.analyser : mic?.analyser ?? null;
+      const level = isSpeaking ? Math.min(1, voiceLevel(participant) * 2.2) : 0;
       let spectrumEnergy = 0;
-      if (mic && isSpeaking) { mic.analyser.getByteFrequencyData(data); for (let i = 2; i < 30; i++) spectrumEnergy += data[i]; spectrumEnergy /= 28 * 255; }
+      if (analyser && isSpeaking) {
+        if (data.length !== analyser.frequencyBinCount) data = new Uint8Array(analyser.frequencyBinCount);
+        analyser.getByteFrequencyData(data); for (let i = 2; i < 30; i++) spectrumEnergy += data[i]; spectrumEnergy /= 28 * 255;
+      }
       const half = RING_BARS / 2;
       for (let i = 0; i < RING_BARS; i++) {
         const k = i <= half ? i : RING_BARS - i; // mirrored: lows at the top, highs at the bottom
         const position = k / half;
         let target = 0;
         if (isSpeaking) {
-          if (mic && spectrumEnergy > 0.004) {
+          if (analyser && spectrumEnergy > 0.004) {
             const bin = 2 + Math.floor(position * 26);
             target = (data[bin] / 255) * (1 + position * 1.5) * 1.25;
           } else {
@@ -1227,7 +1358,7 @@ function VoiceRing({ participant, speaking }: { participant: Participant; speaki
       }
       for (let i = 0; i < RING_BARS; i++) {
         const smooth = (targets[(i + RING_BARS - 1) % RING_BARS] + targets[i] * 2 + targets[(i + 1) % RING_BARS]) / 4;
-        const rate = reduceMotion ? 1 : smooth > bars[i] ? 0.55 : 0.14;
+        const rate = reduceMotion ? 1 : smooth > bars[i] ? (localLive ? 0.85 : 0.55) : 0.14;
         bars[i] += (smooth - bars[i]) * rate;
       }
       const w = canvas.width; const c = w / 2;
@@ -1269,8 +1400,8 @@ function SpeakingWave({ participant }: { participant: Participant }) {
   useEffect(() => {
     let frame = 0; let level = 0.4;
     const tick = () => {
-      const target = Math.min(1, 0.35 + participant.audioLevel * 1.8);
-      level += (target - level) * 0.16;
+      const target = Math.min(1, 0.35 + voiceLevel(participant) * 1.8);
+      level += (target - level) * (participant.isLocal && localVoice.active ? 0.35 : 0.16);
       ref.current?.style.setProperty("--lvl", level.toFixed(3));
       frame = window.requestAnimationFrame(tick);
     };
@@ -1306,86 +1437,365 @@ function ShareRedirect() {
   return <Navigate to={`/meeting/${encodeURIComponent(slug)}`} replace />;
 }
 
-// A tiny silent WAV (one second, mono). Looping it keeps the page counted as "playing audio", so the browser keeps the call running while you use other apps.
-let silentWavUrl = "";
-function getSilentWavUrl(): string {
-  if (silentWavUrl) return silentWavUrl;
-  const sampleRate = 8000; const samples = sampleRate; const buffer = new ArrayBuffer(44 + samples * 2); const view = new DataView(buffer);
-  const text = (offset: number, value: string) => { for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i)); };
-  text(0, "RIFF"); view.setUint32(4, 36 + samples * 2, true); text(8, "WAVE"); text(12, "fmt "); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
-  view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true); text(36, "data"); view.setUint32(40, samples * 2, true);
-  silentWavUrl = URL.createObjectURL(new Blob([buffer], { type: "audio/wav" }));
-  return silentWavUrl;
-}
-
-/** Keeps a call alive like a normal phone call: you can switch to other apps or tabs and still hear (and be heard by) everyone. */
+/**
+ * Keeps an active LiveKit call usable when the browser backgrounds the page.
+ * WebRTC media capture and active real-time connections receive browser-managed
+ * treatment, but a page can still be suspended or terminated by the OS. We do
+ * not use silent audio or held locks as artificial keep-alives because neither
+ * can guarantee background execution and both waste device resources.
+ */
 function useBackgroundCall(room: ReturnType<typeof useRoomContext>, title: string, onLeave: () => void) {
   const leaveRef = useRef(onLeave);
   leaveRef.current = onLeave;
+
   useEffect(() => {
-    const cleanups: Array<() => void> = [];
-    const nav = navigator as Navigator & { audioSession?: { type: string }; wakeLock?: { request: (type: "screen") => Promise<{ release: () => Promise<void>; addEventListener: (name: string, cb: () => void) => void }> }; locks?: { request: (name: string, cb: () => Promise<void>) => Promise<unknown> } };
+    let active = true;
+    let audioResumeInFlight: Promise<void> | null = null;
+    let audioStartInFlight: Promise<void> | null = null;
+    let lastAudioStartAt = 0;
+    let lastMicTrack: MediaStreamTrack | null = null;
+    let micRecoveryAttemptedForTrack = false;
+    const nav = navigator as Navigator & {
+      audioSession?: {
+        type: string;
+        state?: string;
+        addEventListener?: (type: string, listener: () => void) => void;
+        removeEventListener?: (type: string, listener: () => void) => void;
+      };
+    };
+    const audioSession = nav.audioSession;
+    const previousAudioSessionType = audioSession?.type;
 
-    // 1) Tell iOS/Safari this is a two-way call so audio is not ducked or stopped when the screen locks or another app opens.
-    try { if (nav.audioSession) nav.audioSession.type = "play-and-record"; } catch { /* Not supported here. */ }
+    // Supported by some browsers (notably Safari versions); ignored elsewhere.
+    try { if (audioSession) audioSession.type = "play-and-record"; } catch { /* Optional platform integration. */ }
 
-    // 2) Silent audio loop: keeps the page "audible" so timers and the connection are not throttled or frozen in the background.
-    let silent: HTMLAudioElement | null = null;
-    try {
-      silent = new Audio(getSilentWavUrl());
-      silent.loop = true; silent.setAttribute("playsinline", ""); silent.preload = "auto";
-      const start = () => { void silent?.play().catch(() => { /* Waits for the next tap. */ }); };
-      start();
-      const retry = () => { if (silent?.paused) start(); };
-      document.addEventListener("pointerdown", retry, true);
-      document.addEventListener("keydown", retry, true);
-      cleanups.push(() => { document.removeEventListener("pointerdown", retry, true); document.removeEventListener("keydown", retry, true); silent?.pause(); silent = null; });
-    } catch { /* Background audio helper is optional. */ }
-
-    // 3) Media session: the phone shows MEET ENIHAKOLE as an ongoing call (lock screen / notification) with hang-up and mute controls.
+    // Media Session metadata/actions may be exposed on lock screens. They are
+    // an integration only, not a background-execution guarantee.
     const session = navigator.mediaSession;
     if (session) {
-      const setHandler = (action: string, handler: (() => void) | null) => { try { (session.setActionHandler as (name: string, cb: (() => void) | null) => void).call(session, action, handler); } catch { /* Action not supported in this browser. */ } };
+      const setHandler = (action: string, handler: (() => void) | null) => {
+        try { (session.setActionHandler as (name: string, callback: (() => void) | null) => void).call(session, action, handler); }
+        catch { /* This browser does not implement the optional action. */ }
+      };
       try {
-        session.metadata = new MediaMetadata({ title, artist: "MEET ENIHAKOLE", album: "Live gathering", artwork: [{ src: "/icon-512.png", sizes: "512x512", type: "image/png" }, { src: "/icon-192.png", sizes: "192x192", type: "image/png" }] });
-        session.playbackState = "playing";
-      } catch { /* Metadata is cosmetic. */ }
-      setHandler("play", () => { void silent?.play().catch(() => undefined); });
-      setHandler("pause", () => { void silent?.play().catch(() => undefined); });
+        if (typeof MediaMetadata !== "undefined") {
+          session.metadata = new MediaMetadata({
+            title,
+            artist: "MEET ENIHAKOLE",
+            album: "Live gathering",
+            artwork: [
+              { src: "/icon-512.png", sizes: "512x512", type: "image/png" },
+              { src: "/icon-192.png", sizes: "192x192", type: "image/png" },
+            ],
+          });
+        }
+        session.playbackState = room.state === ConnectionState.Connected ? "playing" : "none";
+      } catch { /* Metadata is cosmetic and not available in every browser. */ }
       setHandler("hangup", () => leaveRef.current());
-      setHandler("togglemicrophone", () => { void room.localParticipant.setMicrophoneEnabled(!room.localParticipant.isMicrophoneEnabled); });
-      cleanups.push(() => { ["play", "pause", "hangup", "togglemicrophone"].forEach((action) => setHandler(action, null)); try { session.metadata = null; session.playbackState = "none"; } catch { /* Ignore. */ } });
+      setHandler("togglemicrophone", () => {
+        void room.localParticipant.setMicrophoneEnabled(!room.localParticipant.isMicrophoneEnabled).catch(() => undefined);
+      });
     }
 
-    // 4) A held Web Lock stops Chromium from freezing the page while it is in the background.
-    let releaseLock: (() => void) | null = null;
-    try { void nav.locks?.request("meet-enihakole-live-call", () => new Promise<void>((resolve) => { releaseLock = resolve; })).catch(() => undefined); } catch { /* Not supported. */ }
-    cleanups.push(() => { releaseLock?.(); });
+    const resumeAudio = () => {
+      if (!active || document.visibilityState === "hidden" || audioResumeInFlight || audioSession?.state === "interrupted") return;
+      audioResumeInFlight = (async () => {
+        // Wait for the platform to release an active audio interruption, then
+        // reopen Web Audio contexts the browser suspended in the background.
+        // LiveKit owns its signaling/ICE reconnection and media retransmission.
+        if (toneContext?.state === "suspended") await toneContext.resume().catch(() => undefined);
+        if (!active) return;
+        if (ringContext?.state === "suspended") await ringContext.resume().catch(() => undefined);
+        if (!active) return;
 
-    // 5) Keep the screen awake while the call is on screen, and re-acquire it when you come back.
-    let sentinel: { release: () => Promise<void> } | null = null;
-    const takeWakeLock = async () => {
-      if (document.visibilityState !== "visible" || sentinel || !nav.wakeLock) return;
-      try { const lock = await nav.wakeLock.request("screen"); sentinel = lock; lock.addEventListener("release", () => { if (sentinel === lock) sentinel = null; }); } catch { /* Battery saver or unsupported. */ }
+        // Some mobile browsers end an active capture track during an OS audio
+        // interruption. Restart only an ended track that the user had left on;
+        // never toggle a muted microphone or silently override the user's choice.
+        const publication = room.localParticipant.getTrackPublication(Track.Source.Microphone);
+        const localTrack = publication?.track as {
+          mediaStreamTrack?: MediaStreamTrack;
+          restartTrack?: () => Promise<void>;
+        } | undefined;
+        const mediaTrack = localTrack?.mediaStreamTrack ?? null;
+        if (mediaTrack !== lastMicTrack) {
+          lastMicTrack = mediaTrack;
+          micRecoveryAttemptedForTrack = false;
+        }
+        if (
+          room.localParticipant.isMicrophoneEnabled &&
+          mediaTrack?.readyState === "ended" &&
+          typeof localTrack?.restartTrack === "function" &&
+          !micRecoveryAttemptedForTrack
+        ) {
+          // Avoid repeated permission/restart attempts for the same failed capture.
+          micRecoveryAttemptedForTrack = true;
+          await localTrack.restartTrack().catch(() => undefined);
+        }
+      })().finally(() => { audioResumeInFlight = null; });
     };
-    void takeWakeLock();
-    cleanups.push(() => { void sentinel?.release().catch(() => undefined); sentinel = null; });
 
-    // 6) Coming back from another app: make sure the sound and the connection are running again straight away.
     const onVisible = () => {
-      if (document.visibilityState !== "visible") return;
-      void takeWakeLock();
-      void room.startAudio().catch(() => undefined);
-      if (silent?.paused) void silent.play().catch(() => undefined);
-      try { if (session) session.playbackState = "playing"; } catch { /* Ignore. */ }
+      if (document.visibilityState === "visible") resumeAudio();
     };
+    const onRoomRestored = () => {
+      if (session) { try { session.playbackState = "playing"; } catch { /* Optional media integration. */ } }
+      resumeAudio();
+    };
+    const onRoomDisconnected = () => {
+      if (session) { try { session.playbackState = "none"; } catch { /* Optional media integration. */ } }
+    };
+    const onUserGesture = () => {
+      // LiveKit documents startAudio() as a user-gesture operation when the
+      // browser has blocked remote playback; do not call it from a timer.
+      // Coalesce rapid taps/keys instead of repeatedly restarting its audio sink.
+      if (!audioStartInFlight && Date.now() - lastAudioStartAt > 1000) {
+        lastAudioStartAt = Date.now();
+        audioStartInFlight = room.startAudio().catch(() => undefined).finally(() => { audioStartInFlight = null; });
+      }
+      resumeAudio();
+    };
+    const onAudioSessionStateChange = () => {
+      if (audioSession?.state === "active") resumeAudio();
+    };
+
     document.addEventListener("visibilitychange", onVisible);
+    // A real input gesture can unlock remote audio playback after an OS or
+    // browser interruption. The audio start call runs synchronously in-event.
+    document.addEventListener("pointerdown", onUserGesture, true);
+    document.addEventListener("keydown", onUserGesture, true);
+    audioSession?.addEventListener?.("statechange", onAudioSessionStateChange);
+    // `resume` is part of Chromium's Page Lifecycle API. The other events cover
+    // Safari/iOS and normal tab/window restoration without assuming support.
+    document.addEventListener("resume", onVisible);
     window.addEventListener("pageshow", onVisible);
     window.addEventListener("focus", onVisible);
-    cleanups.push(() => { document.removeEventListener("visibilitychange", onVisible); window.removeEventListener("pageshow", onVisible); window.removeEventListener("focus", onVisible); });
+    window.addEventListener("online", onVisible);
+    room.on(RoomEvent.Connected, onRoomRestored);
+    room.on(RoomEvent.Reconnected, onRoomRestored);
+    room.on(RoomEvent.Disconnected, onRoomDisconnected);
 
-    return () => { cleanups.forEach((cleanup) => cleanup()); };
+    if (document.visibilityState === "visible") resumeAudio();
+
+    return () => {
+      active = false;
+      document.removeEventListener("visibilitychange", onVisible);
+      document.removeEventListener("pointerdown", onUserGesture, true);
+      document.removeEventListener("keydown", onUserGesture, true);
+      audioSession?.removeEventListener?.("statechange", onAudioSessionStateChange);
+      document.removeEventListener("resume", onVisible);
+      window.removeEventListener("pageshow", onVisible);
+      window.removeEventListener("focus", onVisible);
+      window.removeEventListener("online", onVisible);
+      room.off(RoomEvent.Connected, onRoomRestored);
+      room.off(RoomEvent.Reconnected, onRoomRestored);
+      room.off(RoomEvent.Disconnected, onRoomDisconnected);
+      if (session) {
+        const clearHandler = (action: string) => {
+          try { (session.setActionHandler as (name: string, callback: null) => void).call(session, action, null); }
+          catch { /* Optional action. */ }
+        };
+        clearHandler("hangup");
+        clearHandler("togglemicrophone");
+        try { session.metadata = null; session.playbackState = "none"; } catch { /* Ignore unsupported cleanup. */ }
+      }
+      if (audioSession && previousAudioSessionType !== undefined) {
+        try { audioSession.type = previousAudioSessionType; } catch { /* Optional platform integration. */ }
+      }
+      window.setTimeout(resetViewportZoom, 150);
+    };
   }, [room, title]);
+}
+
+type AnnotationArrow = { id: string; x1: number; y1: number; x2: number; y2: number };
+type AnnotationMessage =
+  | { k: "arrow"; arrow: AnnotationArrow }
+  | { k: "pointer"; x: number; y: number; on: boolean }
+  | { k: "clear" }
+  | { k: "visible"; on: boolean }
+  | { k: "sync"; arrows: AnnotationArrow[]; visible: boolean }
+  | { k: "hello" };
+type AnnotationTool = "off" | "pointer" | "arrow";
+const ANNOTATION_TOPIC = "meet-enihakole-annotate";
+const MAX_ANNOTATION_ARROWS = 30;
+const unit = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0);
+function cleanArrow(raw: unknown): AnnotationArrow | null {
+  if (!raw || typeof raw !== "object") return null;
+  const a = raw as Record<string, unknown>;
+  if (typeof a.id !== "string" || a.id.length > 64) return null;
+  return { id: a.id, x1: unit(a.x1), y1: unit(a.y1), x2: unit(a.x2), y2: unit(a.y2) };
+}
+/** The arrow as drawing parts (shaft + head) in pixels, for a drawing area of width w and height h. */
+function arrowShape(a: AnnotationArrow, w: number, h: number) {
+  const x1 = a.x1 * w, y1 = a.y1 * h, x2 = a.x2 * w, y2 = a.y2 * h;
+  const angle = Math.atan2(y2 - y1, x2 - x1);
+  const head = Math.min(30, Math.max(14, Math.min(w, h) * 0.04));
+  const spread = Math.PI / 7;
+  const bx = x2 - Math.cos(angle) * head * 0.8, by = y2 - Math.sin(angle) * head * 0.8;
+  const left = `${x2 - Math.cos(angle - spread) * head},${y2 - Math.sin(angle - spread) * head}`;
+  const right = `${x2 - Math.cos(angle + spread) * head},${y2 - Math.sin(angle + spread) * head}`;
+  return { x1, y1, bx, by, points: `${x2},${y2} ${left} ${right}` };
+}
+function AnnotationArrowShape({ arrow, w, h, draft }: { arrow: AnnotationArrow; w: number; h: number; draft?: boolean }) {
+  const shape = arrowShape(arrow, w, h);
+  return <g className={draft ? "annotate-arrow annotate-arrow-draft" : "annotate-arrow"}>
+    <line x1={shape.x1} y1={shape.y1} x2={shape.bx} y2={shape.by} className="annotate-arrow-outline" strokeLinecap="round"/>
+    <polygon points={shape.points} className="annotate-arrow-outline" strokeLinejoin="round"/>
+    <line x1={shape.x1} y1={shape.y1} x2={shape.bx} y2={shape.by} className="annotate-arrow-line" strokeLinecap="round"/>
+    <polygon points={shape.points} className="annotate-arrow-head" strokeLinejoin="round"/>
+  </g>;
+}
+
+/** The big shared screen. The presenter gets pointer / arrow tools drawn over it; everyone else sees them live, exactly where the presenter put them. */
+function ScreenShareStage({ screenShare, onStop, onSwitch }: { screenShare: TrackReference; onStop: () => void; onSwitch: () => void }) {
+  const room = useRoomContext();
+  const isPresenter = screenShare.participant.isLocal;
+  const presenterId = screenShare.participant.identity;
+  const presenterName = participantName(screenShare.participant) || "Someone";
+  const [tool, setTool] = useState<AnnotationTool>("off");
+  const [arrows, setArrows] = useState<AnnotationArrow[]>([]);
+  const [visible, setVisible] = useState(true);
+  const [pointer, setPointer] = useState<{ x: number; y: number } | null>(null);
+  const [draft, setDraft] = useState<AnnotationArrow | null>(null);
+  const [box, setBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  const viewRef = useRef<HTMLDivElement>(null);
+  const layerRef = useRef<HTMLDivElement>(null);
+  const arrowsRef = useRef(arrows);
+  const visibleRef = useRef(visible);
+  const lastPointerSend = useRef(0);
+  const drawing = useRef(false);
+  arrowsRef.current = arrows;
+  visibleRef.current = visible;
+
+  const send = useCallback((message: AnnotationMessage, reliable = true, to?: string[]) => {
+    try {
+      void room.localParticipant.publishData(new TextEncoder().encode(JSON.stringify(message)), { reliable, topic: ANNOTATION_TOPIC, ...(to ? { destinationIdentities: to } : {}) }).catch(() => { /* A dropped pointer update is harmless. */ });
+    } catch { /* Room may be reconnecting. */ }
+  }, [room]);
+
+  // Where the shared picture really is inside the box (it is letterboxed), so a point means the same spot on every screen and device.
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    const measure = () => {
+      const video = view.querySelector("video");
+      const dims = screenShare.publication?.dimensions;
+      const vw = (video && video.videoWidth) || dims?.width || 0;
+      const vh = (video && video.videoHeight) || dims?.height || 0;
+      const w = view.clientWidth, h = view.clientHeight;
+      if (!vw || !vh || !w || !h) return;
+      const ratio = vw / vh;
+      const width = w / h > ratio ? h * ratio : w;
+      const height = w / h > ratio ? h : w / ratio;
+      const next = { left: Math.round((w - width) / 2), top: Math.round((h - height) / 2), width: Math.round(width), height: Math.round(height) };
+      setBox((current) => current && current.left === next.left && current.top === next.top && current.width === next.width && current.height === next.height ? current : next);
+    };
+    measure();
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    observer?.observe(view);
+    const timer = window.setInterval(measure, 700);
+    return () => { observer?.disconnect(); window.clearInterval(timer); };
+  }, [screenShare.publication, tool]);
+
+  useEffect(() => {
+    const onData = (payload: Uint8Array, participant?: { identity: string }, _kind?: unknown, topic?: string) => {
+      if (topic !== ANNOTATION_TOPIC || !participant) return;
+      let data: AnnotationMessage;
+      try { data = JSON.parse(new TextDecoder().decode(payload)) as AnnotationMessage; } catch { return; }
+      if (isPresenter) {
+        // A viewer who just arrived asks for what is already drawn.
+        if (data.k === "hello") send({ k: "sync", arrows: arrowsRef.current, visible: visibleRef.current }, true, [participant.identity]);
+        return;
+      }
+      if (participant.identity !== presenterId) return; // Only the person presenting can draw.
+      if (data.k === "arrow") { const arrow = cleanArrow(data.arrow); if (arrow) setArrows((current) => [...current.filter((item) => item.id !== arrow.id), arrow].slice(-MAX_ANNOTATION_ARROWS)); }
+      else if (data.k === "pointer") setPointer(data.on ? { x: unit(data.x), y: unit(data.y) } : null);
+      else if (data.k === "clear") setArrows([]);
+      else if (data.k === "visible") { setVisible(Boolean(data.on)); if (!data.on) setPointer(null); }
+      else if (data.k === "sync") { setArrows((Array.isArray(data.arrows) ? data.arrows : []).map(cleanArrow).filter((item): item is AnnotationArrow => Boolean(item)).slice(-MAX_ANNOTATION_ARROWS)); setVisible(data.visible !== false); }
+    };
+    room.on(RoomEvent.DataReceived, onData);
+    if (!isPresenter) send({ k: "hello" }, true, [presenterId]);
+    return () => { room.off(RoomEvent.DataReceived, onData); };
+  }, [room, isPresenter, presenterId, send]);
+
+  const point = (event: ReactPointerEvent) => {
+    const rect = layerRef.current?.getBoundingClientRect();
+    if (!rect || !rect.width || !rect.height) return null;
+    return { x: unit((event.clientX - rect.left) / rect.width), y: unit((event.clientY - rect.top) / rect.height) };
+  };
+  const sendPointer = (position: { x: number; y: number } | null, force = false) => {
+    if (position) {
+      const now = Date.now();
+      if (!force && now - lastPointerSend.current < 40) return;
+      lastPointerSend.current = now;
+      send({ k: "pointer", x: position.x, y: position.y, on: true }, false);
+    } else send({ k: "pointer", x: 0, y: 0, on: false }, true);
+  };
+  const choose = (next: AnnotationTool) => {
+    const value = tool === next ? "off" : next;
+    setTool(value); setPointer(null); setDraft(null); drawing.current = false;
+    sendPointer(null);
+    if (value !== "off" && !visible) { setVisible(true); send({ k: "visible", on: true }); }
+  };
+  const clearAll = () => { setArrows([]); setDraft(null); send({ k: "clear" }); };
+  const toggleVisible = () => {
+    const next = !visible;
+    setVisible(next); setPointer(null);
+    if (!next) { setTool("off"); setDraft(null); sendPointer(null); }
+    send({ k: "visible", on: next });
+  };
+  const onDown = (event: ReactPointerEvent) => {
+    if (!isPresenter || tool === "off") return;
+    const position = point(event); if (!position) return;
+    try { (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId); } catch { /* Capture is optional. */ }
+    drawing.current = true;
+    if (tool === "pointer") { setPointer(position); sendPointer(position, true); }
+    else setDraft({ id: `${presenterId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`, x1: position.x, y1: position.y, x2: position.x, y2: position.y });
+  };
+  const onMove = (event: ReactPointerEvent) => {
+    if (!isPresenter || tool === "off") return;
+    const position = point(event); if (!position) return;
+    if (tool === "pointer") { setPointer(position); sendPointer(position); }
+    else if (drawing.current) setDraft((current) => current ? { ...current, x2: position.x, y2: position.y } : current);
+  };
+  const onUp = (event: ReactPointerEvent) => {
+    if (!isPresenter || tool === "off") return;
+    const wasDrawing = drawing.current; drawing.current = false;
+    if (tool === "pointer") { if (event.pointerType !== "mouse") { setPointer(null); sendPointer(null); } return; }
+    if (!wasDrawing || !draft) return;
+    const length = Math.hypot((draft.x2 - draft.x1) * (box?.width ?? 1), (draft.y2 - draft.y1) * (box?.height ?? 1));
+    setDraft(null);
+    if (length < 18) return; // A tap is not an arrow.
+    setArrows((current) => [...current, draft].slice(-MAX_ANNOTATION_ARROWS));
+    send({ k: "arrow", arrow: draft });
+  };
+  const onLeave = () => { if (tool === "pointer" && !drawing.current) { setPointer(null); sendPointer(null); } };
+  const onCancel = () => { drawing.current = false; setDraft(null); if (tool === "pointer") { setPointer(null); sendPointer(null); } };
+
+  const shown = visible && box;
+  const drawingOn = isPresenter && tool !== "off";
+  return <div className="screen-share-view" ref={viewRef}>
+    {isPresenter && !drawingOn
+      ? <div className="screen-share-self"><MonitorUp size={34}/><b>You are presenting your screen</b><span>Everyone in the meeting can see it. Use the tools below to point things out.</span></div>
+      : isPresenter
+        ? (screenShare.publication?.track ? <VideoTrack trackRef={screenShare}/> : null)
+        : <VideoTrack trackRef={screenShare}/>}
+    {box && <div ref={layerRef} className={`screen-annotate-layer ${drawingOn ? "is-drawing" : ""} ${tool === "arrow" ? "tool-arrow" : tool === "pointer" ? "tool-pointer" : ""}`} style={{ left: box.left, top: box.top, width: box.width, height: box.height }} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onLeave} onPointerCancel={onCancel}>
+      {shown && <svg className="screen-annotate-svg" width={box.width} height={box.height} aria-hidden="true">
+        {arrows.map((arrow) => <AnnotationArrowShape key={arrow.id} arrow={arrow} w={box.width} h={box.height}/>)}
+        {draft && <AnnotationArrowShape arrow={draft} w={box.width} h={box.height} draft/>}
+      </svg>}
+      {shown && pointer && <span className="annotate-pointer" style={{ left: `${pointer.x * 100}%`, top: `${pointer.y * 100}%` }}><i/><b>{isPresenter ? "You" : presenterName}</b></span>}
+    </div>}
+    <div className="screen-share-label"><MonitorUp size={14}/><span>{isPresenter ? "You are presenting" : `${presenterName} is presenting`}</span>{isPresenter && <><button type="button" className="screen-share-switch" onClick={onSwitch}>Switch</button><button type="button" className="screen-share-stop" onClick={onStop}>Stop sharing</button></>}</div>
+    {isPresenter && <div className="screen-annotate-toolbar" role="toolbar" aria-label="Presenter annotation tools">
+      <button type="button" className={tool === "pointer" ? "is-active" : ""} aria-pressed={tool === "pointer"} onClick={() => choose("pointer")} title="Pointer: everyone sees where you point" aria-label="Pointer"><MousePointer2 size={16}/><span>Pointer</span></button>
+      <button type="button" className={tool === "arrow" ? "is-active" : ""} aria-pressed={tool === "arrow"} onClick={() => choose("arrow")} title="Arrow: drag to draw a directional arrow" aria-label="Arrow"><MoveUpRight size={16}/><span>Arrow</span></button>
+      <button type="button" onClick={clearAll} disabled={arrows.length === 0} title="Clear all arrows" aria-label="Clear arrows"><Eraser size={16}/><span>Clear</span></button>
+      <button type="button" className={!visible ? "is-active" : ""} aria-pressed={!visible} onClick={toggleVisible} title={visible ? "Hide annotations for everyone" : "Show annotations for everyone"} aria-label={visible ? "Hide annotations" : "Show annotations"}>{visible ? <EyeOff size={16}/> : <Eye size={16}/>}<span>{visible ? "Hide" : "Show"}</span></button>
+      {drawingOn && <span className="screen-annotate-hint"><PenLine size={12}/>{tool === "arrow" ? "Drag on the preview to draw" : "Move over the preview to point"}</span>}
+    </div>}
+  </div>;
 }
 
 function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending }: { meeting: Meeting; role: "host" | "participant"; onLeave: () => void; onEndForEveryone: () => void; ending: boolean }) {
@@ -1427,7 +1837,16 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
   const autoFullscreenDone = useRef(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const localIdentity = localParticipant.identity;
+  const localVoiceActivity = useVoiceActivity(localParticipant);
   useBackgroundCall(room, meeting.title, onLeave);
+  // Keep the receive-side jitter buffer as small as the browser safely allows so other people's voices play back with minimal delay.
+  useEffect(() => {
+    const tune = (track: { kind?: string; setPlayoutDelay?: (seconds: number) => void }) => { if (track.kind === Track.Kind.Audio) { try { track.setPlayoutDelay?.(0.02); } catch { /* unsupported browser: default buffering */ } } };
+    room.remoteParticipants.forEach((participant) => participant.audioTrackPublications.forEach((publication) => { if (publication.track) tune(publication.track); }));
+    const onSubscribed = (track: { kind?: string; setPlayoutDelay?: (seconds: number) => void }) => tune(track);
+    room.on(RoomEvent.TrackSubscribed, onSubscribed);
+    return () => { room.off(RoomEvent.TrackSubscribed, onSubscribed); };
+  }, [room]);
   const [deviceMenu, setDeviceMenu] = useState<"audioinput" | "videoinput" | null>(null);
   const [inputDevices, setInputDevices] = useState<MediaDeviceInfo[]>([]);
 
@@ -1463,7 +1882,19 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
   }, [room]);
 
   useEffect(() => {
-    const onFullscreen = () => { if (document.fullscreenElement || !pseudoFullRef.current) setFullScreen(document.fullscreenElement === fullScreenRef.current); };
+    const onFullscreen = () => {
+      if (document.fullscreenElement === fullScreenRef.current) {
+        autoFullscreenDone.current = true;
+        pseudoFullRef.current = false;
+        setPseudoFull(false);
+        setFullScreen(true);
+      } else if (!document.fullscreenElement && !pseudoFullRef.current) {
+        // Esc or the browser's own fullscreen-exit control is an explicit exit;
+        // do not surprise the participant by automatically re-entering.
+        autoFullscreenDone.current = true;
+        setFullScreen(false);
+      }
+    };
     document.addEventListener("fullscreenchange", onFullscreen);
     return () => document.removeEventListener("fullscreenchange", onFullscreen);
   }, []);
@@ -1548,35 +1979,86 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
   }, [room]);
   // Browsers keep audio locked until the first tap; unlock it early so the message tone can play.
   useEffect(() => {
-    const unlock = () => { try { const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext; if (!Ctx) return; toneContext ??= new Ctx(); if (toneContext.state === "suspended") void toneContext.resume(); } catch { /* ignore */ } };
+    const unlock = () => { try { const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext; if (!Ctx) return; toneContext ??= new Ctx(); if (toneContext.state === "suspended") void toneContext.resume(); if (ringContext && ringContext.state === "suspended") void ringContext.resume(); } catch { /* ignore */ } };
     document.addEventListener("pointerdown", unlock, { once: true, capture: true });
     return () => document.removeEventListener("pointerdown", unlock, true);
   }, []);
 
-  // Auto-enter fullscreen 15 seconds after arriving on the live page. Browsers only allow fullscreen from a user gesture,
-  // so if the direct attempt is blocked, the very next tap/click/key press enters fullscreen immediately.
+  // Attempt native fullscreen on entry and once more after 15 seconds. The
+  // Fullscreen API requires a recent user gesture. Blocked attempts wait for
+  // deliberate interaction; the one 15-second retry falls back to the existing
+  // CSS fullscreen mode if native fullscreen is still unavailable.
   useEffect(() => {
     const target = fullScreenRef.current;
-    if (!target || typeof target.requestFullscreen !== "function") return;
-    let cleanup = () => {};
-    const timer = window.setTimeout(() => {
-      if (autoFullscreenDone.current || document.fullscreenElement) return;
-      const enter = () => target.requestFullscreen({ navigationUI: "hide" });
-      enter().then(() => { autoFullscreenDone.current = true; }).catch(() => {
-        const events = ["pointerup", "click", "keydown", "touchend"] as const;
-        const retry = (event: Event) => {
-          if (event.target instanceof Element && event.target.closest(INTERACTIVE_SELECTOR)) return;
-          cleanup();
-          if (autoFullscreenDone.current || document.fullscreenElement) return;
-          autoFullscreenDone.current = true;
-          lastFullscreenAction.current = Date.now();
-          enter().catch(() => { /* Fullscreen unavailable; the manual button still works. */ });
-        };
-        cleanup = () => events.forEach((name) => document.removeEventListener(name, retry, true));
-        events.forEach((name) => document.addEventListener(name, retry, true));
+    if (!target) return;
+
+    let gestureCleanup = () => {};
+    let requestPending = false;
+    const enterPseudoFullscreen = () => {
+      if (autoFullscreenDone.current || document.fullscreenElement || pseudoFullRef.current) return;
+      autoFullscreenDone.current = true;
+      pseudoFullRef.current = true;
+      setPseudoFull(true);
+      setFullScreen(true);
+      lastFullscreenAction.current = Date.now();
+      gestureCleanup();
+    };
+    const requestNativeFullscreen = (fallbackToPseudo = false) => {
+      if (autoFullscreenDone.current || document.fullscreenElement || requestPending) return;
+      if (typeof target.requestFullscreen !== "function") {
+        enterPseudoFullscreen();
+        return;
+      }
+      requestPending = true;
+      lastFullscreenAction.current = Date.now();
+      let request: Promise<void>;
+      try { request = target.requestFullscreen({ navigationUI: "hide" }); }
+      catch {
+        requestPending = false;
+        if (fallbackToPseudo) enterPseudoFullscreen();
+        return;
+      }
+      void request.then(() => {
+        autoFullscreenDone.current = true;
+        setFullScreen(true);
+        setPseudoFull(false);
+        pseudoFullRef.current = false;
+        lastFullscreenAction.current = Date.now();
+        gestureCleanup();
+      }).catch(() => {
+        requestPending = false;
+        // A failed initial no-gesture request waits for real interaction. The
+        // one 15-second retry or a real gesture may use CSS fullscreen instead.
+        if (fallbackToPseudo) enterPseudoFullscreen();
       });
+    };
+
+    if (typeof target.requestFullscreen !== "function") {
+      // iPhone Safari and other browsers without the element Fullscreen API.
+      enterPseudoFullscreen();
+      return () => { gestureCleanup(); };
+    }
+
+    const events = ["pointerup", "click", "keydown"] as const;
+    const onUserGesture = (event: Event) => {
+      if (!event.isTrusted || autoFullscreenDone.current || document.fullscreenElement || pseudoFullRef.current) return;
+      if (event.target instanceof Element && event.target.closest(INTERACTIVE_SELECTOR)) return;
+      // Use this gesture exactly once; if a policy blocks it, the visible
+      // manual fullscreen button can still be used without repeated retries.
+      gestureCleanup();
+      requestNativeFullscreen(true);
+    };
+    gestureCleanup = () => events.forEach((name) => document.removeEventListener(name, onUserGesture, true));
+    events.forEach((name) => document.addEventListener(name, onUserGesture, true));
+
+    requestNativeFullscreen();
+    const retryTimer = window.setTimeout(() => {
+      if (!autoFullscreenDone.current && !document.fullscreenElement && !pseudoFullRef.current) requestNativeFullscreen(true);
     }, 15000);
-    return () => { window.clearTimeout(timer); cleanup(); };
+    return () => {
+      window.clearTimeout(retryTimer);
+      gestureCleanup();
+    };
   }, []);
 
   // Close the microphone / camera / reaction popovers as soon as the user presses anywhere outside them.
@@ -1643,24 +2125,48 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
       window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Could not switch that device. Check browser permissions and try again." } }));
     }
   }
-  async function toggleScreenShare() {
+  const screenBusy = useRef(false);
+  async function toggleScreenShare(switching = false) {
     const notify = (message: string) => window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message } }));
-    if (isScreenShareEnabled) {
+    if (screenBusy.current) return; // A start or stop is already in progress: ignore double taps.
+    if (isScreenShareEnabled && !switching) {
+      screenBusy.current = true;
       try { await localParticipant.setScreenShareEnabled(false); } catch { notify("Could not stop sharing. Please try again."); }
+      finally { screenBusy.current = false; }
       return;
     }
     if (!navigator.mediaDevices || typeof navigator.mediaDevices.getDisplayMedia !== "function") {
-      notify("Screen sharing is not supported on this device or browser. Try a computer with Chrome, Edge, Firefox or Safari.");
+      notify("Screen sharing is not available on this device or browser. Most phones and tablets cannot share their screen; use Chrome, Edge, Firefox or Safari on a computer.");
       return;
     }
-    try {
-      await localParticipant.setScreenShareEnabled(true, { audio: true, contentHint: "detail", resolution: { width: 1920, height: 1080, frameRate: 15 } });
-    } catch (cause) {
-      const name = cause instanceof Error ? cause.name : "";
-      if (name === "NotAllowedError" || name === "AbortError") return; // The person closed the picker or declined: nothing to report.
-      notify(name === "NotFoundError" ? "There is no screen or window available to share." : "Could not start screen sharing. Check your browser permissions and try again.");
+    if (!isScreenShareEnabled && screenShare && !screenShare.participant.isLocal) {
+      notify(`${participantName(screenShare.participant) || "Someone"} is presenting. Ask them to stop sharing first.`);
+      return;
     }
+    screenBusy.current = true;
+    try {
+      // Switching: end the current share first, then immediately open the picker again for the new window or screen.
+      if (isScreenShareEnabled) await localParticipant.setScreenShareEnabled(false);
+      // Some browsers refuse audio capture or the extra picker hints; fall back step by step so sharing still starts.
+      const attempts = [
+        { audio: true, contentHint: "detail" as const, resolution: { width: 1920, height: 1080, frameRate: 15 }, selfBrowserSurface: "exclude" as const, surfaceSwitching: "include" as const, systemAudio: "include" as const },
+        { audio: false, contentHint: "detail" as const, resolution: { width: 1920, height: 1080, frameRate: 15 } },
+        { audio: false },
+      ];
+      let lastName = "";
+      for (const options of attempts) {
+        try { await localParticipant.setScreenShareEnabled(true, options); return; }
+        catch (cause) {
+          lastName = cause instanceof Error ? cause.name : "";
+          if (lastName === "NotAllowedError" || lastName === "AbortError" || lastName === "NotFoundError") break;
+        }
+      }
+      if (lastName === "NotAllowedError" || lastName === "AbortError") return; // The person closed the picker or declined: nothing to report.
+      notify(lastName === "NotFoundError" ? "There is no screen or window available to share." : "Could not start screen sharing. Check your browser permissions and try again.");
+    } finally { screenBusy.current = false; }
   }
+  // Leaving the room always ends your share, so nobody is left looking at a frozen screen.
+  useEffect(() => () => { try { void room.localParticipant.setScreenShareEnabled(false).catch(() => undefined); } catch { /* Room already closed. */ } }, [room]);
   async function toggleHand() {
     const next = !handRaised;
     setHandRaised(next);
@@ -1683,17 +2189,32 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
   }
   async function toggleFullscreen(silent = false, enterOnly = false) {
     // Background taps may only ENTER fullscreen; leaving is reserved for the fullscreen button (or Esc).
-    if (enterOnly && (document.fullscreenElement || pseudoFull)) return;
+    if (enterOnly && (document.fullscreenElement || pseudoFullRef.current || pseudoFull)) return;
     autoFullscreenDone.current = true;
     lastFullscreenAction.current = Date.now();
     const target = fullScreenRef.current;
     try {
-      if (document.fullscreenElement) await document.exitFullscreen();
-      else if (pseudoFull) { setPseudoFull(false); setFullScreen(false); }
-      else if (target?.requestFullscreen) await target.requestFullscreen({ navigationUI: "hide" });
-      else { setPseudoFull(true); setFullScreen(true); } // iPhone Safari has no element fullscreen: fill the screen with CSS instead.
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else if (pseudoFullRef.current || pseudoFull) {
+        pseudoFullRef.current = false;
+        setPseudoFull(false);
+        setFullScreen(false);
+      } else if (target?.requestFullscreen) {
+        await target.requestFullscreen({ navigationUI: "hide" });
+        setFullScreen(true);
+      } else {
+        pseudoFullRef.current = true;
+        setPseudoFull(true);
+        setFullScreen(true);
+      }
     } catch {
-      if (!silent) window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Fullscreen is not available in this browser." } }));
+      // If native fullscreen is denied by browser policy, keep the manual
+      // control functional with the viewport-filling CSS fallback.
+      pseudoFullRef.current = true;
+      setPseudoFull(true);
+      setFullScreen(true);
+      if (!silent) window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Using in-page fullscreen mode in this browser." } }));
     }
   }
   // Tapping or clicking anywhere on the room page (outside fullscreen) enters fullscreen; it never exits it. Buttons, links, menus and the chat keep working normally.
@@ -1765,21 +2286,17 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending 
         {participants.filter((participant) => raisedHands[participant.identity]).map((participant) => <div className="raised-hand-chip" key={participant.identity} title={`${participantName(participant) || "Participant"} raised a hand`}><Hand size={13}/><span>{participantName(participant) || "Participant"}{participant.identity === localIdentity ? " (You)" : ""}</span></div>)}
       </div>
       <div className={`participant-grid-wrap ${screenShare ? "has-screen-share" : ""}`}>
-        {screenShare && <div className="screen-share-view">
-          {screenShare.participant.isLocal
-            ? <div className="screen-share-self"><MonitorUp size={34}/><b>You are presenting your screen</b><span>Everyone in the meeting can see it.</span></div>
-            : <VideoTrack trackRef={screenShare}/>}
-          <div className="screen-share-label"><MonitorUp size={14}/><span>{screenShare.participant.isLocal ? "You are presenting" : `${participantName(screenShare.participant) || "Someone"} is presenting`}</span>{screenShare.participant.isLocal && <button type="button" className="screen-share-stop" onClick={() => void toggleScreenShare()}>Stop sharing</button>}</div>
-        </div>}
+        {screenShare && <ScreenShareStage key={screenShare.participant.identity} screenShare={screenShare} onStop={() => void toggleScreenShare()} onSwitch={() => void toggleScreenShare(true)}/>}
         <div className={`participant-grid participant-grid-count-${visibleParticipants.length || 1}`}>
           {visibleParticipants.map(({ participant, trackRef }) => {
             const isHost = getParticipantRole(participant) === "host";
             const hand = Boolean(raisedHands[participant.identity]);
-            return <div className={`participant-card ${participant.isSpeaking ? "participant-speaking" : ""} ${isHost ? "participant-host" : ""} ${participant.identity === localIdentity ? "participant-local" : ""}`} key={participant.identity}>
+            const speaking = participant.identity === localIdentity ? localVoiceActivity.speaking : participant.isSpeaking;
+            return <div className={`participant-card ${speaking ? "participant-speaking" : ""} ${isHost ? "participant-host" : ""} ${participant.identity === localIdentity ? "participant-local" : ""}`} key={participant.identity}>
               <ParticipantTile trackRef={trackRef!} />
               <ParticipantAvatar trackRef={trackRef!} participant={participant} />
-              <span className="participant-role-label">{isHost ? "HOST" : "PARTICIPANT"}</span>
-              <div className="participant-name-overlay"><span className="participant-name-copy" title={participantName(participant) || "Participant"}><b>{participantName(participant) || "Participant"}{participant.identity === localIdentity ? " · You" : ""}</b></span><span className="participant-badges"><MicOffBadge participant={participant}/>{hand && <span className="raised-hand-badge" title="Raised hand"><Hand size={15}/></span>}{participant.isSpeaking && <span className="speaker-mic" title="Speaking" aria-label="Speaking"><Mic size={14}/></span>}</span></div>
+              {isHost && <span className="participant-role-label">HOST</span>}
+              <div className="participant-name-overlay"><span className="participant-name-copy" title={participantName(participant) || "Participant"}><b>{participantName(participant) || "Participant"}{participant.identity === localIdentity ? " · You" : ""}</b></span><span className="participant-badges"><MicOffBadge participant={participant}/>{hand && <span className="raised-hand-badge" title="Raised hand"><Hand size={15}/></span>}{speaking && <span className="speaker-mic" title="Speaking" aria-label="Speaking"><Mic size={14}/></span>}</span></div>
             </div>;
           })}
         </div>

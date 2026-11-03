@@ -1778,3 +1778,41 @@ html.is-scrolling .meeting-card:hover { transform: translateZ(0); box-shadow: no
 .participant-grid-wrap.has-screen-share .participant-name-copy b { font-size: 10px; max-width: 90px; }
 .participant-grid-wrap.has-screen-share .participant-role-label { display: none; }
 @media (max-width: 720px) { .participant-grid-wrap.has-screen-share .participant-grid { height: clamp(78px, 15vh, 110px); } .screen-share-label { font-size: 10px; } }
+
+/* Phones zoom into any field smaller than 16px and stay zoomed afterwards: keep fields at 16px on touch screens and stop text auto-inflating. */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+@media (hover: none) and (pointer: coarse) {
+  input, textarea, select { font-size: 16px !important; }
+}
+
+/* Presenter annotations: pointer and arrows drawn over the shared screen, visible to everyone in real time. */
+.screen-share-switch { flex: 0 0 auto; padding: 5px 11px; border: 1px solid rgba(255,255,255,.22); border-radius: 999px; color: #fff; background: rgba(255,255,255,.1); font-size: 10px; font-weight: 800; cursor: pointer; }
+.screen-share-switch:hover { background: rgba(255,255,255,.2); }
+.screen-annotate-layer { position: absolute; z-index: 2; pointer-events: none; touch-action: none; user-select: none; -webkit-user-select: none; }
+.screen-annotate-layer.is-drawing { pointer-events: auto; }
+.screen-annotate-layer.tool-arrow { cursor: crosshair; }
+.screen-annotate-layer.tool-pointer { cursor: none; }
+.screen-annotate-svg { position: absolute; inset: 0; display: block; overflow: visible; pointer-events: none; }
+.annotate-arrow-outline { fill: #2a0d17; stroke: #2a0d17; stroke-width: 8; stroke-opacity: .85; }
+.annotate-arrow-line { stroke: #ffd35c; stroke-width: 4.5; fill: none; }
+.annotate-arrow-head { fill: #ffd35c; stroke: #ffd35c; stroke-width: 1.5; }
+.annotate-arrow { animation: annotate-in .18s ease-out both; }
+.annotate-arrow-draft { opacity: .75; animation: none; }
+@keyframes annotate-in { from { opacity: 0; } to { opacity: 1; } }
+.annotate-pointer { position: absolute; width: 0; height: 0; pointer-events: none; }
+.annotate-pointer i { position: absolute; left: -11px; top: -11px; width: 22px; height: 22px; border-radius: 50%; background: radial-gradient(circle, #ff4d6d 0 38%, rgba(255,77,109,.35) 40% 100%); border: 2px solid #fff; box-shadow: 0 0 0 4px rgba(255,77,109,.28), 0 2px 10px rgba(0,0,0,.45); animation: annotate-pulse 1.2s ease-in-out infinite; }
+.annotate-pointer b { position: absolute; left: 14px; top: 12px; max-width: 140px; padding: 2px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #fff; border-radius: 999px; background: rgba(24,12,18,.85); font-size: 10px; font-weight: 700; }
+@keyframes annotate-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.18); } }
+.screen-annotate-toolbar { position: absolute; z-index: 4; left: 50%; bottom: 10px; transform: translateX(-50%); max-width: calc(100% - 16px); display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px; padding: 5px; border: 1px solid rgba(255,255,255,.16); border-radius: 14px; background: rgba(24,12,18,.9); backdrop-filter: blur(6px); box-shadow: 0 8px 24px rgba(0,0,0,.35); }
+.screen-annotate-toolbar button { min-height: 34px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid transparent; border-radius: 10px; color: #f5e9ec; background: transparent; font-size: 11px; font-weight: 700; cursor: pointer; }
+.screen-annotate-toolbar button:hover:not(:disabled) { background: rgba(255,255,255,.1); }
+.screen-annotate-toolbar button:disabled { opacity: .4; cursor: not-allowed; }
+.screen-annotate-toolbar button.is-active { color: #f7dca9; background: rgba(143,33,65,.55); border-color: rgba(217,183,123,.45); }
+.screen-annotate-hint { display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; color: #d9c3ca; font-size: 10px; font-weight: 600; }
+@media (hover: none) { .screen-annotate-toolbar button:hover:not(:disabled):not(.is-active) { background: transparent; } }
+@media (max-width: 720px) {
+  .screen-annotate-toolbar { bottom: 6px; gap: 2px; padding: 4px; }
+  .screen-annotate-toolbar button { min-height: 36px; padding: 0 8px; }
+  .screen-annotate-toolbar button span { display: none; }
+  .screen-annotate-hint { display: none; }
+}
