@@ -4,6 +4,7 @@ export interface User {
   email: string;
   picture?: string;
   isAdmin?: boolean;
+  canCreateMeetings?: boolean;
 }
 
 export interface Meeting {
@@ -18,12 +19,15 @@ export interface Meeting {
   startsAt: string;
   durationMinutes: number;
   timezone: string;
+  meetingType: "meeting" | "prayer";
   visibility: "link" | "public";
   thumbnailUrl: string;
   status: "scheduled" | "live" | "ended" | "cancelled";
   startedAt: string | null;
   endedAt: string | null;
   createdAt: string;
+  /** Trusted server timestamp, supplied by the invitation endpoint for start-time UI. */
+  serverNow?: string;
 }
 
 export interface JoinSession {

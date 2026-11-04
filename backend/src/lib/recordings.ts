@@ -59,7 +59,7 @@ export async function startRoomRecording(recordingId: string): Promise<void> {
     const info = await egressClient().startRoomCompositeEgress(
       `eni-${recording.meetingSlug}`,
       { file },
-      { layout: "grid", encodingOptions: EncodingOptionsPreset.H264_720P_30, webhooks: [new WebhookConfig({ url: callback, signingKey: apiKey })] },
+      { audioOnly: true, webhooks: [new WebhookConfig({ url: callback, signingKey: apiKey })] },
     );
     recording.egressId = info.egressId;
     recording.stagedKey = key;
@@ -167,8 +167,9 @@ export async function uploadCompletedRecording(recordingId: string): Promise<voi
         meeting_title: recording.meetingTitle.slice(0, 100),
         host_user_id: recording.hostUserId,
         recorded_at: (recording.startedAt || recording.createdAt).toISOString(),
+        recording_mode: "audio_only",
       },
-      tags: ["meet-enihakole", "meeting-recording"],
+      tags: ["meet-enihakole", "audio-recording"],
     };
 
     // Stream directly from B2 into Cloudinary; renew the lease as bytes arrive.

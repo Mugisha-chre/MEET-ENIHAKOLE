@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
-import { api } from "./api";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { AudioLines, Pause, Play, Volume2 } from "lucide-react";
+import { api, getAuthToken } from "./api";
 import { ProfilePhoto } from "./google";
 
 function messageOf(error: unknown, fallback: string) {
@@ -28,6 +29,48 @@ function formatBytes(bytes: number) {
   return `${value.toFixed(index ? 1 : 0)} ${units[index]}`;
 }
 
+function formatAudioTime(seconds: number) {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+  const whole = Math.floor(seconds);
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
+}
+
+export function AudioRecordingPlayer({ src, title }: { src: string; title: string }) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [playing, setPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [durationValue, setDurationValue] = useState(0);
+  const [volume, setVolume] = useState(0.9);
+  const [playError, setPlayError] = useState("");
+  async function toggle() {
+    const audio = audioRef.current;
+    if (!audio) return;
+    setPlayError("");
+    if (audio.paused) {
+      try { await audio.play(); setPlaying(true); }
+      catch { setPlayError("Playback was blocked. Tap play again or check your device audio settings."); }
+    } else { audio.pause(); setPlaying(false); }
+  }
+  function seek(value: number) {
+    const audio = audioRef.current;
+    if (!audio || !Number.isFinite(value)) return;
+    audio.currentTime = value;
+    setCurrentTime(value);
+  }
+  function setAudioVolume(value: number) {
+    const next = Math.max(0, Math.min(1, value));
+    setVolume(next);
+    if (audioRef.current) audioRef.current.volume = next;
+  }
+  return <section className="audio-recording-player" aria-label={`Audio player for ${title}`}>
+    <audio ref={audioRef} src={src} preload="metadata" onLoadedMetadata={(event) => setDurationValue(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)} onDurationChange={(event) => setDurationValue(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)} onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} onError={() => { setPlaying(false); setPlayError("This audio file could not be loaded. Close the player and try again."); }}/>
+    <button type="button" className="audio-player-play" onClick={() => void toggle()} aria-label={playing ? "Pause recording" : "Play recording"}>{playing ? <Pause size={19} fill="currentColor"/> : <Play size={19} fill="currentColor"/>}</button>
+    <div className="audio-player-timeline"><div className="audio-player-title"><b>{title}</b><span>{formatAudioTime(currentTime)} / {formatAudioTime(durationValue)}</span></div><input aria-label="Recording timeline" type="range" min={0} max={Math.max(1, durationValue)} step={0.1} value={Math.min(currentTime, durationValue || 0)} onChange={(event) => seek(Number(event.target.value))} style={{ "--audio-progress": `${durationValue > 0 ? currentTime / durationValue * 100 : 0}%` } as CSSProperties}/></div>
+    <label className="audio-player-volume" title="Volume"><Volume2 size={17}/><input aria-label="Playback volume" type="range" min={0} max={1} step={0.05} value={volume} onChange={(event) => setAudioVolume(Number(event.target.value))}/></label>
+    {playError && <span className="audio-player-error" role="alert">{playError}</span>}
+  </section>;
+}
+
 export function RecordingsPage() {
   const [recordings, setRecordings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -37,30 +80,42 @@ export function RecordingsPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    try { const result = await api.myRecordings(); setRecordings(result.recordings); setError(""); }
-    catch (cause) { setError(messageOf(cause, "Could not load your recordings.")); }
+    setLoading(true);
+    try {
+      const [publicResult, privateResult] = await Promise.all([
+        api.publicPrayerRecordings(),
+        getAuthToken() ? api.myRecordings().catch(() => ({ recordings: [] })) : Promise.resolve({ recordings: [] }),
+      ]);
+      const combined = [...privateResult.recordings.map((item) => ({ ...item, public: Boolean((item as any).public), meetingType: (item as any).meetingType || "meeting" })), ...publicResult.recordings];
+      const unique = combined.filter((item, index, list) => list.findIndex((other) => other.id === item.id) === index);
+      unique.sort((a, b) => new Date(b.endedAt || b.startedAt || 0).getTime() - new Date(a.endedAt || a.startedAt || 0).getTime());
+      setRecordings(unique);
+      setError("");
+    } catch (cause) { setError(messageOf(cause, "Could not load audio recordings.")); }
     finally { setLoading(false); }
   }, []);
   useEffect(() => { void load(); }, [load]);
 
-  async function play(id: string) {
-    setBusyId(id); setError("");
-    try { const result = await api.recordingPlayback(id); setPlayingId(id); setPlaybackUrl(result.playbackUrl); }
-    catch (cause) { setError(messageOf(cause, "This recording could not be opened.")); }
+  async function play(item: any) {
+    setBusyId(item.id); setError("");
+    try {
+      const result = await api.recordingPlayback(item.id, item.public ? undefined : item.meetingSlug);
+      setPlayingId(item.id); setPlaybackUrl(result.playbackUrl);
+    } catch (cause) { setError(messageOf(cause, "This audio recording could not be opened.")); }
     finally { setBusyId(null); }
   }
 
   return <div className="management-page page-enter">
-    <div className="management-heading"><div><p className="section-overline">YOUR MEETING LIBRARY</p><h1>Recordings</h1><p>Private recordings from meetings you hosted or attended.</p></div><button className="button button-soft" onClick={() => void load()}>Refresh</button></div>
+    <div className="management-heading"><div><p className="section-overline">LISTEN BACK TO YOUR GATHERINGS</p><h1>Recorded Meetings</h1><p>Public online prayer recordings and private recordings from meetings you hosted or attended.</p></div><button className="button button-soft" onClick={() => void load()}>Refresh</button></div>
     {error && <div className="inline-error" role="alert">{error}</div>}
-    {playingId && playbackUrl && <section className="recording-player-panel"><div className="recording-player-heading"><div><b>{recordings.find((item) => item.id === playingId)?.meetingTitle || "Meeting recording"}</b><small>Secure playback link expires automatically.</small></div><button className="button button-soft button-small" onClick={() => { setPlayingId(null); setPlaybackUrl(""); }}>Close player</button></div><video key={playbackUrl} className="recording-player" controls playsInline preload="metadata" src={playbackUrl} onError={() => { setPlaybackUrl(""); setPlayingId(null); setError("The temporary playback link expired. Select Play again to generate a fresh secure link."); }}/></section>}
-    {loading ? <div className="management-empty">Loading recordings…</div> : recordings.length === 0 ? <div className="management-empty"><b>No saved recordings yet</b><span>When a meeting you join is recorded and the upload finishes, it will appear here.</span></div> : <div className="management-recording-grid">{recordings.map((item) => <article className="management-recording-card" key={item.id}><div className="management-recording-art"><span>▶</span><small>{duration(item.durationSeconds)}</small></div><div className="management-recording-copy"><b>{item.meetingTitle}</b><span>Hosted by {item.hostName}</span><small>{formatDate(item.startedAt)} · {formatBytes(item.fileSize)}</small><small>{item.participants?.length || 0} participants</small></div><button className="button button-primary button-small" onClick={() => void play(item.id)} disabled={busyId === item.id}>{busyId === item.id ? "Opening…" : "Play recording"}</button></article>)}</div>}
+    {playingId && playbackUrl && <AudioRecordingPlayer key={playbackUrl} src={playbackUrl} title={recordings.find((item) => item.id === playingId)?.meetingTitle || "Meeting audio"}/>}
+    {loading ? <div className="management-empty">Loading audio recordings…</div> : recordings.length === 0 ? <div className="management-empty"><b>No completed audio recordings yet</b><span>Finished public online prayers and recordings from gatherings you attended will appear here.</span></div> : <div className="management-recording-grid">{recordings.map((item) => <article className="management-recording-card audio-recording-card" key={item.id}><div className="management-recording-art audio-recording-art"><span className="audio-art-glow"/><AudioLines size={36}/><small>{duration(item.durationSeconds)}</small><i>{item.public ? "PUBLIC PRAYER" : "PRIVATE AUDIO"}</i></div><div className="management-recording-copy"><b>{item.meetingTitle}</b><span>Hosted by {item.hostName}</span><small>{formatDate(item.startedAt)} · {formatBytes(item.fileSize)}</small><small>{item.participants?.length || 0} participants · Expires {formatDate(item.expiresAt)}</small></div><button className="button button-primary button-small" onClick={() => void play(item)} disabled={busyId === item.id}>{busyId === item.id ? "Opening…" : "Listen"}</button></article>)}</div>}
   </div>;
 }
 
 const ADMIN_TABS = ["Overview", "Meetings", "Users", "Recordings", "Activity"] as const;
-// Recording tools and inventory remain in source for a later release, but are hidden from users for now.
-const RECORDING_UI_ENABLED = false;
+// Audio-only recording inventory is available to authorized viewers.
+const RECORDING_UI_ENABLED = true;
 type AdminTab = typeof ADMIN_TABS[number];
 type PageInfo = { page: number; limit: number; total: number; totalPages: number };
 const EMPTY_PAGE: PageInfo = { page: 1, limit: 20, total: 0, totalPages: 1 };
@@ -262,6 +317,15 @@ export function AdminCenterPage() {
     catch (cause) { setError(messageOf(cause, "Could not update account status.")); }
     finally { setBusy(""); }
   }
+  async function setMeetingPermission(user: any, allowed: boolean) {
+    const verb = allowed ? "grant" : "revoke";
+    if (!window.confirm(`${allowed ? "Allow" : "Prevent"} ${user.displayName} (${user.email}) from creating and scheduling meetings? This permission takes effect on their next authorization check.`)) return;
+    setBusy(`meeting-permission:${user.id}`); setError("");
+    try { await api.adminSetMeetingPermission(user.id, allowed); await Promise.all([loadUsers(), loadEvents()]); }
+    catch (cause) { setError(messageOf(cause, `Could not ${verb} meeting creation permission.`)); }
+    finally { setBusy(""); }
+  }
+
   async function deleteUser(user: any) {
     if (!window.confirm(`Permanently delete ${user.displayName} (${user.email})? This also deletes meetings they host, their meeting recordings, attendance data, private messages, and active sessions. This cannot be undone.`)) return;
     setBusy(`delete-user:${user.id}`); setError("");
@@ -302,7 +366,7 @@ export function AdminCenterPage() {
 
     {tab === "Meetings" && <section className="admin-panel"><div className="admin-panel-heading"><div><h2>Meeting management</h2><p>Paginated meeting records with hosts, attendance, schedules and administrative controls.</p></div><div className="admin-filters"><input className="admin-search" value={meetingSearch} onChange={(event) => { setMeetingSearch(event.target.value); setMeetingPage(1); }} placeholder="Search title, slug or host" aria-label="Search meetings"/><select className="admin-filter-select" value={meetingStatus} onChange={(event) => { setMeetingStatus(event.target.value); setMeetingPage(1); }}><option value="">All statuses</option><option value="scheduled">Scheduled</option><option value="live">Live</option><option value="ended">Ended</option><option value="cancelled">Cancelled</option></select><select className="admin-filter-select" aria-label="Sort meetings" value={meetingSort} onChange={(event) => { setMeetingSort(event.target.value); setMeetingPage(1); }}><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></div></div>{loading.meetings ? <AdminPanelSkeleton rows={6}/> : sectionErrors.meetings ? <AdminRetry message={sectionErrors.meetings} onRetry={() => void loadMeetings()}/> : meetings.length === 0 ? <div className="admin-inline-empty">No matching meetings.</div> : <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Meeting</th><th>Status</th><th>Schedule / duration</th><th>People</th>{RECORDING_UI_ENABLED && <th>Recording</th>}<th>Actions</th></tr></thead><tbody>{meetings.map((meeting) => <tr key={meeting.slug}><td><b>{meeting.title}</b><small>{meeting.ownerName} · {meeting.slug}</small></td><td><span className={`admin-status admin-status-${meeting.status}`}>{meeting.status}</span></td><td>{formatDate(meeting.startedAt || meeting.startsAt)}<small>{meeting.durationMinutes} min planned</small></td><td>{meeting.onlineNow} online<small>{meeting.attendanceCount} attendance records</small></td>{RECORDING_UI_ENABLED && <td>{meeting.recordingStatus || "idle"}<small>{meeting.recordingCount} recordings</small></td>}<td><div className="admin-row-actions"><button onClick={() => void openAttendance(meeting)}>Attendance</button>{meeting.status === "live" && <button className="admin-danger-link" disabled={busy === `terminate:${meeting.slug}`} onClick={() => void terminate(meeting)}>{busy === `terminate:${meeting.slug}` ? "Ending…" : "Terminate"}</button>}<button className="admin-danger-link" disabled={busy === `delete-meeting:${meeting.slug}`} onClick={() => void deleteMeeting(meeting)}>{busy === `delete-meeting:${meeting.slug}` ? "Deleting…" : "Delete"}</button></div></td></tr>)}</tbody></table></div>}<AdminPagination value={meetingPagination} onChange={setMeetingPage}/></section>}
 
-    {tab === "Users" && <section className="admin-panel"><div className="admin-panel-heading"><div><h2>Platform accounts and sessions</h2><p>Only public account fields and session activity are shown.</p></div><div className="admin-filters"><input className="admin-search" value={search} onChange={(event) => { setSearch(event.target.value); setUserPage(1); }} placeholder="Search name or email" aria-label="Search accounts"/><select className="admin-filter-select" aria-label="Filter account status" value={userStatus} onChange={(event) => { setUserStatusFilter(event.target.value); setUserPage(1); }}><option value="">All account statuses</option><option value="active">Active</option><option value="suspended">Suspended</option></select><select className="admin-filter-select" aria-label="Sort accounts" value={userSort} onChange={(event) => { setUserSort(event.target.value); setUserPage(1); }}><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></div></div>{loading.users ? <AdminPanelSkeleton rows={6}/> : sectionErrors.users ? <AdminRetry message={sectionErrors.users} onRetry={() => void loadUsers()}/> : users.length === 0 ? <div className="admin-inline-empty">No matching user accounts.</div> : <div className="admin-user-list">{users.map((user) => <article className="admin-user-row" key={user.id}><ProfilePhoto name={user.displayName} src={user.picture} className="admin-user-photo" size={96}/><div className="admin-user-main"><b>{user.displayName}</b><span>{user.email}</span><small>{user.platformRole === "system_admin" ? "System administrator" : "Registered account"} · Created {formatDate(user.createdAt)}</small><small>{user.sessions?.length || 0} valid session(s) {user.sessions?.length ? `· Last active ${formatDate(user.sessions[0].lastSeenAt)}` : ""}</small>{user.sessions?.slice(0, 2).map((session: any, index: number) => <small key={`${session.createdAt}-${index}`} title={session.userAgent || "Browser session"}>{session.userAgent || "Browser session"}</small>)}</div><span className={`admin-status admin-status-${user.accountStatus}`}>{user.accountStatus}</span>{user.platformRole !== "system_admin" && <><button className={user.accountStatus === "suspended" ? "admin-action-button" : "admin-danger-button"} disabled={busy === `user:${user.id}`} onClick={() => void setUserStatus(user, user.accountStatus === "suspended" ? "active" : "suspended")}>{user.accountStatus === "suspended" ? "Reactivate" : "Suspend"}</button><button className="admin-danger-button" disabled={busy === `delete-user:${user.id}`} onClick={() => void deleteUser(user)}>{busy === `delete-user:${user.id}` ? "Deleting…" : "Delete account"}</button></>}</article>)}</div>}<AdminPagination value={userPagination} onChange={setUserPage}/></section>}
+    {tab === "Users" && <section className="admin-panel"><div className="admin-panel-heading"><div><h2>Platform accounts and sessions</h2><p>Only public account fields and session activity are shown.</p></div><div className="admin-filters"><input className="admin-search" value={search} onChange={(event) => { setSearch(event.target.value); setUserPage(1); }} placeholder="Search name or email" aria-label="Search accounts"/><select className="admin-filter-select" aria-label="Filter account status" value={userStatus} onChange={(event) => { setUserStatusFilter(event.target.value); setUserPage(1); }}><option value="">All account statuses</option><option value="active">Active</option><option value="suspended">Suspended</option></select><select className="admin-filter-select" aria-label="Sort accounts" value={userSort} onChange={(event) => { setUserSort(event.target.value); setUserPage(1); }}><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></div></div>{loading.users ? <AdminPanelSkeleton rows={6}/> : sectionErrors.users ? <AdminRetry message={sectionErrors.users} onRetry={() => void loadUsers()}/> : users.length === 0 ? <div className="admin-inline-empty">No matching user accounts.</div> : <div className="admin-user-list">{users.map((user) => <article className="admin-user-row" key={user.id}><ProfilePhoto name={user.displayName} src={user.picture} className="admin-user-photo" size={96}/><div className="admin-user-main"><b>{user.displayName}</b><span>{user.email}</span><small>{user.platformRole === "system_admin" ? "System administrator" : "Registered account"} · Created {formatDate(user.createdAt)}</small><small>{user.sessions?.length || 0} valid session(s) {user.sessions?.length ? `· Last active ${formatDate(user.sessions[0].lastSeenAt)}` : ""}</small>{user.sessions?.slice(0, 2).map((session: any, index: number) => <small key={`${session.createdAt}-${index}`} title={session.userAgent || "Browser session"}>{session.userAgent || "Browser session"}</small>)}</div><span className={`admin-status admin-status-${user.accountStatus}`}>{user.accountStatus}</span>{user.platformRole !== "system_admin" && <button type="button" role="switch" aria-checked={Boolean(user.canCreateMeetings)} className={`admin-permission-toggle ${user.canCreateMeetings ? "is-enabled" : ""}`} disabled={busy === `meeting-permission:${user.id}`} onClick={() => void setMeetingPermission(user, !user.canCreateMeetings)}><span className="admin-permission-toggle-indicator"/><span>{user.canCreateMeetings ? "Can create meetings" : "Meeting creation off"}</span></button>}{user.platformRole !== "system_admin" && <><button className={user.accountStatus === "suspended" ? "admin-action-button" : "admin-danger-button"} disabled={busy === `user:${user.id}`} onClick={() => void setUserStatus(user, user.accountStatus === "suspended" ? "active" : "suspended")}>{user.accountStatus === "suspended" ? "Reactivate" : "Suspend"}</button><button className="admin-danger-button" disabled={busy === `delete-user:${user.id}`} onClick={() => void deleteUser(user)}>{busy === `delete-user:${user.id}` ? "Deleting…" : "Delete account"}</button></>}</article>)}</div>}<AdminPagination value={userPagination} onChange={setUserPage}/></section>}
 
     {tab === "Recordings" && <section className="admin-panel"><div className="admin-panel-heading"><div><h2>Recording inventory</h2><p>Consent, egress, upload, 30-day retention and deletion states from the database.</p></div><div className="admin-filters"><input className="admin-search" value={recordingSearch} onChange={(event) => { setRecordingSearch(event.target.value); setRecordingPage(1); }} placeholder="Search meeting or host" aria-label="Search recordings"/><select className="admin-filter-select" value={recordingStatus} onChange={(event) => { setRecordingStatus(event.target.value); setRecordingPage(1); }}><option value="">All statuses</option>{["consent_pending", "recording", "uploading", "ready", "failed", "declined"].map((value) => <option key={value} value={value}>{value.replaceAll("_", " ")}</option>)}</select><select className="admin-filter-select" aria-label="Sort recordings" value={recordingSort} onChange={(event) => { setRecordingSort(event.target.value); setRecordingPage(1); }}><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></div></div>{loading.recordings ? <AdminPanelSkeleton rows={6}/> : sectionErrors.recordings ? <AdminRetry message={sectionErrors.recordings} onRetry={() => void loadRecordings()}/> : recordings.length === 0 ? <div className="admin-inline-empty">No matching recording requests.</div> : <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Meeting / host</th><th>Status</th><th>Participants</th><th>Started / ended</th><th>Expires</th><th>Duration / size</th><th>Actions</th></tr></thead><tbody>{recordings.map((item) => <tr key={String(item._id)}><td><b>{item.meetingTitle}</b><small>{item.hostName} · {item.meetingSlug}</small></td><td><span className={`admin-status admin-status-${item.status}`}>{item.status}</span>{item.status === "uploading" && <small>{item.uploadProgressPercent || 0}% uploaded</small>}{item.lastError && <small title={item.lastError}>Upload issue</small>}{item.lastDeletionError && <small title={item.lastDeletionError}>Cleanup retry scheduled</small>}</td><td>{item.participants?.length || 0}</td><td>{formatDate(item.startedAt)}<small>{formatDate(item.endedAt)}</small></td><td>{formatDate(item.expiresAt)}</td><td>{duration(item.durationSeconds)}<small>{formatBytes(item.fileSize)} · {item.uploadAttempts || 0} upload attempts</small></td><td><button className="admin-danger-link" disabled={busy === `delete-recording:${String(item._id)}`} onClick={() => void deleteRecording(item)}>{busy === `delete-recording:${String(item._id)}` ? "Deleting…" : "Delete"}</button></td></tr>)}</tbody></table></div>}<AdminPagination value={recordingPagination} onChange={setRecordingPage}/></section>}
 

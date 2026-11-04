@@ -9,6 +9,7 @@ export interface AuthPayload {
   displayName: string;
   picture?: string;
   platformRole?: "member" | "system_admin";
+  canCreateMeetings?: boolean;
   isGuest?: boolean;
   guestId?: string;
   meetingSlug?: string;
@@ -62,14 +63,15 @@ export async function optionalAuth(req: Request, _res: Response, next: NextFunct
       const session = await UserSession.findOne({ sessionId: claims.sid, revokedAt: null, expiresAt: { $gt: new Date() } }).select("sessionId").lean();
       if (!session) return next();
     }
-    const user = await User.findById(decoded.sub).select("displayName email picture platformRole accountStatus").lean();
+    const user = await User.findById(decoded.sub).select("displayName email picture platformRole accountStatus canCreateMeetings").lean();
     if (user && user.accountStatus !== "suspended") {
       req.auth = {
         userId: String(user._id),
         email: user.email,
         displayName: user.displayName,
         picture: user.picture || "",
-        platformRole: user.platformRole === "system_admin" ? "system_admin" : "member",
+        platformRole: user.platformRole === "system_admin" && isAllowlistedSystemAdminEmail(user.email) ? "system_admin" : "member",
+        canCreateMeetings: Boolean(user.canCreateMeetings),
         sessionId: typeof claims.sid === "string" ? claims.sid : undefined,
       };
     }
@@ -89,16 +91,20 @@ export function requireRegisteredAuth(req: Request, res: Response, next: NextFun
   next();
 }
 
+export function isAllowlistedSystemAdminEmail(email: string): boolean {
+  const normalized = email.trim().toLowerCase();
+  if (!normalized) return false;
+  return (process.env.SYSTEM_ADMIN_EMAILS || "")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean)
+    .includes(normalized);
+}
+
 export function requireSystemAdmin(req: Request, res: Response, next: NextFunction): void {
-  const allowlistedEmails = new Set(
-    (process.env.SYSTEM_ADMIN_EMAILS || "")
-      .split(",")
-      .map((email) => email.trim().toLowerCase())
-      .filter(Boolean),
-  );
   if (
     !req.auth || req.auth.isGuest || req.auth.platformRole !== "system_admin" ||
-    !req.auth.email || !allowlistedEmails.has(req.auth.email.trim().toLowerCase())
+    !req.auth.email || !isAllowlistedSystemAdminEmail(req.auth.email)
   ) {
     res.status(403).json({ error: "System administrator access is required." });
     return;

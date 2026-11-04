@@ -2,7 +2,7 @@ import { Router } from "express";
 import { OAuth2Client } from "google-auth-library";
 import { z } from "zod";
 import { User } from "../models/User.js";
-import { optionalAuth, requireAuth, requireRegisteredAuth, signAccessToken } from "../middleware/auth.js";
+import { isAllowlistedSystemAdminEmail, optionalAuth, requireAuth, requireRegisteredAuth, signAccessToken } from "../middleware/auth.js";
 import { UserSession } from "../models/UserSession.js";
 import { PlatformEvent } from "../models/PlatformEvent.js";
 import crypto from "node:crypto";
@@ -11,8 +11,9 @@ const router = Router();
 const googleSchema = z.object({ credential: z.string().min(20).max(4096) });
 let googleClient: OAuth2Client | null = null;
 
-function publicUser(user: { _id: unknown; displayName: string; email: string; picture?: string | null; platformRole?: string }) {
-  return { id: String(user._id), displayName: user.displayName, email: user.email, picture: user.picture || "", isAdmin: user.platformRole === "system_admin" };
+function publicUser(user: { _id: unknown; displayName: string; email: string; picture?: string | null; platformRole?: string; canCreateMeetings?: boolean }) {
+  const isAdmin = user.platformRole === "system_admin" && isAllowlistedSystemAdminEmail(user.email);
+  return { id: String(user._id), displayName: user.displayName, email: user.email, picture: user.picture || "", isAdmin, canCreateMeetings: Boolean(user.canCreateMeetings || isAdmin) };
 }
 
 function systemAdminEmails(): Set<string> { return new Set((process.env.SYSTEM_ADMIN_EMAILS || "").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean)); }
@@ -75,7 +76,10 @@ router.post("/google", async (req, res) => {
 });
 
 router.get("/me", optionalAuth, requireRegisteredAuth, requireAuth, async (req, res) => {
-  return res.json({ user: { id: req.auth!.userId, displayName: req.auth!.displayName, email: req.auth!.email, picture: req.auth!.picture || "", isAdmin: req.auth!.platformRole === "system_admin" } });
+  const user = await User.findById(req.auth!.userId).select("displayName email picture platformRole canCreateMeetings").lean();
+  if (!user) return res.status(401).json({ error: "Your account is no longer available." });
+  const isAdmin = user.platformRole === "system_admin" && isAllowlistedSystemAdminEmail(user.email);
+  return res.json({ user: { id: String(user._id), displayName: user.displayName, email: user.email, picture: user.picture || "", isAdmin, canCreateMeetings: Boolean(user.canCreateMeetings || isAdmin) } });
 });
 
 router.post("/session-heartbeat", optionalAuth, requireRegisteredAuth, requireAuth, async (req, res) => {

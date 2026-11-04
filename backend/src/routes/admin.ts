@@ -15,6 +15,7 @@ import { permanentlyDeleteRecording, RECORDING_RETENTION_MS } from "../lib/recor
 const router = Router();
 router.use(optionalAuth, requireAuth, requireRegisteredAuth, requireSystemAdmin);
 const userStatusSchema = z.object({ status: z.enum(["active", "suspended"]) });
+const meetingPermissionSchema = z.object({ allowed: z.boolean() });
 const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const pageParams = (req: any) => ({
   page: Math.max(1, Math.min(100_000, Number(req.query.page) || 1)),
@@ -205,7 +206,7 @@ router.get("/users", async (req, res) => {
     if (["active", "suspended"].includes(status)) filter.accountStatus = status;
     const total = await User.countDocuments(filter);
     const currentPage = Math.min(page, Math.max(1, Math.ceil(total / limit)));
-    const users = await User.find(filter).sort({ createdAt: sortOrder(req), _id: sortOrder(req) }).skip((currentPage - 1) * limit).limit(limit).select("displayName email picture platformRole accountStatus createdAt").lean();
+    const users = await User.find(filter).sort({ createdAt: sortOrder(req), _id: sortOrder(req) }).skip((currentPage - 1) * limit).limit(limit).select("displayName email picture platformRole accountStatus canCreateMeetings createdAt").lean();
     const generatedAt = new Date();
     const sessionActiveSince = new Date(generatedAt.getTime() - 3 * 60_000);
     const sessions = await UserSession.find({ user: { $in: users.map((user) => user._id) }, revokedAt: null, expiresAt: { $gt: generatedAt }, lastSeenAt: { $gte: sessionActiveSince } }).sort({ lastSeenAt: -1 }).select("user createdAt lastSeenAt expiresAt userAgent").lean();
@@ -216,7 +217,7 @@ router.get("/users", async (req, res) => {
     }
     return res.json({ users: users.map((user) => ({
       id: String(user._id), displayName: user.displayName, email: user.email, picture: user.picture || "",
-      platformRole: user.platformRole || "member", accountStatus: user.accountStatus || "active", createdAt: user.createdAt,
+      platformRole: user.platformRole || "member", accountStatus: user.accountStatus || "active", canCreateMeetings: Boolean(user.canCreateMeetings), createdAt: user.createdAt,
       sessions: (sessionsByUser.get(String(user._id)) || []).map((item) => ({ createdAt: item.createdAt, lastSeenAt: item.lastSeenAt, expiresAt: item.expiresAt, userAgent: item.userAgent })),
     })), pagination: pageResult(currentPage, limit, total) });
   } catch (error) {
@@ -241,6 +242,23 @@ router.patch("/users/:id/status", async (req, res) => {
   } catch (error) {
     console.error("[admin/user-status] failed", error);
     return res.status(500).json({ error: "Could not update the account status." });
+  }
+});
+
+router.patch("/users/:id/meeting-permission", async (req, res) => {
+  const parsed = meetingPermissionSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ error: "Choose whether this account may create meetings." });
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ error: "Account not found." });
+    if (user.platformRole === "system_admin") return res.status(400).json({ error: "System administrators already have meeting creation access." });
+    user.canCreateMeetings = parsed.data.allowed;
+    await user.save();
+    await audit(req.auth!.userId, req.auth!.displayName, parsed.data.allowed ? "meeting_creation_permission_granted" : "meeting_creation_permission_revoked", { targetUserId: String(user._id), targetEmail: user.email });
+    return res.json({ success: true, user: { id: String(user._id), canCreateMeetings: user.canCreateMeetings } });
+  } catch (error) {
+    console.error("[admin/user-meeting-permission] failed", error);
+    return res.status(500).json({ error: "Could not update meeting creation permission." });
   }
 });
 

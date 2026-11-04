@@ -2,15 +2,16 @@ import crypto from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
 import { Meeting } from "../models/Meeting.js";
+import { User } from "../models/User.js";
 import { PrivateMessage } from "../models/PrivateMessage.js";
 import { Recording } from "../models/Recording.js";
 import { Attendance } from "../models/Attendance.js";
 import { MeetingNote } from "../models/MeetingNote.js";
 import { PlatformEvent } from "../models/PlatformEvent.js";
-import { optionalAuth, requireAuth, requireRegisteredAuth, signGuestAccessToken } from "../middleware/auth.js";
+import { isAllowlistedSystemAdminEmail, optionalAuth, requireAuth, requireRegisteredAuth, signGuestAccessToken } from "../middleware/auth.js";
 import { expireStaleMeetingsThrottled } from "../lib/expiry.js";
 import { closeLiveKitRoom, createJoinToken, getLiveKitUrl, isLiveKitConfigured, listRoomPeople, moderateLiveKitParticipant } from "../lib/livekit.js";
-import { isRecordingConfigured, startRoomRecording, stopRoomRecording, uploadCompletedRecording } from "../lib/recordings.js";
+import { createAuthorizedPlaybackUrl, isRecordingConfigured, startRoomRecording, stopRoomRecording, uploadCompletedRecording } from "../lib/recordings.js";
 
 const router = Router();
 router.use(optionalAuth);
@@ -19,11 +20,14 @@ router.use(async (_req, _res, next) => { await expireStaleMeetingsThrottled(); n
 
 const createMeetingSchema = z.object({
   title: z.string().trim().min(3, "Give your meeting a title of at least 3 characters.").max(120),
-  description: z.string().trim().max(1000).optional().default(""),
+  description: z.string().trim().min(3, "Enter a short description of at least 3 characters.").max(1000),
   startsAt: z.string().datetime({ offset: true }),
   durationMinutes: z.coerce.number().int().min(15).max(240).default(60),
-  timezone: z.string().trim().min(1).max(80).default("Africa/Kigali"),
-  visibility: z.enum(["link", "public"]).default("link"),
+  timezone: z.string().trim().min(1).max(80).refine((value) => {
+    try { new Intl.DateTimeFormat("en-US", { timeZone: value }); return true; }
+    catch { return false; }
+  }, "Choose a valid IANA time zone.").default("Africa/Kigali"),
+  meetingType: z.enum(["meeting", "prayer"]),
   thumbnailUrl: z.string().trim().max(2000).optional().default(""),
 });
 const joinSchema = z.object({ displayName: z.string().trim().min(2).max(80).optional() });
@@ -67,10 +71,25 @@ function slugFromTitle(title: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 48) || "choir-meeting";
-  return `${prefix}-${crypto.randomBytes(8).toString("hex")}`;
+  return `${prefix}-${crypto.randomBytes(16).toString("hex")}`;
 }
 
+function isPublicPrayer(meeting: any): boolean {
+  // Preserve explicitly public prayer listings created before meetingType was added.
+  // Legacy unlisted meetings remain private because their visibility is "link".
+  return meeting.meetingType === "prayer" || (!meeting.meetingType && meeting.visibility === "public");
+}
+
+const publicPrayerFilter = {
+  $or: [
+    { meetingType: "prayer" },
+    { meetingType: { $exists: false }, visibility: "public" },
+    { meetingType: null, visibility: "public" },
+  ],
+};
+
 function publicMeeting(meeting: any, currentUserId?: string) {
+  const prayer = isPublicPrayer(meeting);
   return {
     id: String(meeting._id),
     slug: meeting.slug,
@@ -83,7 +102,8 @@ function publicMeeting(meeting: any, currentUserId?: string) {
     startsAt: new Date(meeting.startsAt).toISOString(),
     durationMinutes: meeting.durationMinutes,
     timezone: meeting.timezone,
-    visibility: meeting.visibility,
+    meetingType: prayer ? "prayer" : "meeting",
+    visibility: prayer ? "public" : "link",
     thumbnailUrl: meeting.thumbnailUrl || "",
     status: meeting.status,
     startedAt: meeting.startedAt ? new Date(meeting.startedAt).toISOString() : null,
@@ -110,7 +130,7 @@ function shareUrl(slug: string): string {
 
 router.get("/mine", requireRegisteredAuth, requireAuth, async (req, res) => {
   try {
-    const meetings = await Meeting.find({ owner: req.auth!.userId })
+    const meetings = await Meeting.find({ owner: req.auth!.userId, ...publicPrayerFilter })
       .sort({ startsAt: -1 })
       .limit(200)
       .lean();
@@ -121,13 +141,13 @@ router.get("/mine", requireRegisteredAuth, requireAuth, async (req, res) => {
   }
 });
 
-router.get("/public", async (_req, res) => {
+router.get("/public", async (req, res) => {
   try {
-    const meetings = await Meeting.find({ visibility: "public", status: { $in: ["scheduled", "live"] } })
-      .sort({ startsAt: 1 })
+    const meetings = await Meeting.find({ ...publicPrayerFilter, status: { $in: ["scheduled", "live", "ended"] } })
+      .sort({ startsAt: -1 })
       .limit(200)
       .lean();
-    return res.json({ meetings: meetings.map((meeting) => publicMeeting(meeting)) });
+    return res.json({ meetings: meetings.map((meeting) => publicMeeting(meeting, req.auth?.userId)) });
   } catch (error) {
     console.error("[meetings/public] failed", error);
     return res.status(500).json({ error: "Could not load public meetings." });
@@ -135,6 +155,19 @@ router.get("/public", async (_req, res) => {
 });
 
 router.post("/thumbnail-upload", requireRegisteredAuth, requireAuth, async (req, res) => {
+  // A thumbnail is part of the meeting-creation workflow; do not let accounts
+  // without the Super Admin grant upload assets even if they call this endpoint directly.
+  try {
+    const creator = await User.findById(req.auth!.userId).select("email platformRole canCreateMeetings accountStatus").lean();
+    const isCurrentSystemAdmin = Boolean(creator?.platformRole === "system_admin" && creator.email && isAllowlistedSystemAdminEmail(creator.email));
+    if (!creator || creator.accountStatus === "suspended" || (!isCurrentSystemAdmin && creator.canCreateMeetings !== true)) {
+      return res.status(403).json({ error: "Meeting creation is disabled for your account. Ask a system administrator for permission." });
+    }
+  } catch (error) {
+    console.error("[meetings/thumbnail-upload] could not verify meeting permission", error instanceof Error ? error.message : error);
+    return res.status(503).json({ error: "Meeting permissions could not be verified. Please try again." });
+  }
+
   const cloudName = process.env.CLOUDINARY_CLOUD_NAME?.trim();
   const apiKey = process.env.CLOUDINARY_API_KEY?.trim();
   const apiSecret = process.env.CLOUDINARY_API_SECRET?.trim();
@@ -201,8 +234,24 @@ router.post("/", requireRegisteredAuth, requireAuth, async (req, res) => {
   const parsed = createMeetingSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Check the meeting details." });
 
+  // Read this permission from MongoDB for every create request. A cached JWT or
+  // manipulated frontend control can never preserve access after an admin revokes it.
+  let creator: { email?: string; platformRole?: string; canCreateMeetings?: boolean; accountStatus?: string } | null;
+  try {
+    creator = await User.findById(req.auth!.userId).select("email platformRole canCreateMeetings accountStatus").lean();
+  } catch (error) {
+    console.error("[meetings/create] could not verify meeting permission", error instanceof Error ? error.message : error);
+    return res.status(503).json({ error: "Meeting permissions could not be verified. Please try again." });
+  }
+  const isCurrentSystemAdmin = Boolean(creator?.platformRole === "system_admin" && creator.email && isAllowlistedSystemAdminEmail(creator.email));
+  if (!creator || creator.accountStatus === "suspended") return res.status(403).json({ error: "Your account cannot create meetings." });
+  if (!isCurrentSystemAdmin && creator.canCreateMeetings !== true) {
+    return res.status(403).json({ error: "Meeting creation is disabled for your account. Ask a system administrator for permission." });
+  }
+
   const startsAt = new Date(parsed.data.startsAt);
   if (!Number.isFinite(startsAt.getTime())) return res.status(400).json({ error: "Choose a valid start date and time." });
+  if (startsAt.getTime() <= Date.now() + 30_000) return res.status(400).json({ error: "Schedule the gathering at least 30 seconds in the future." });
   const maxDuration = Number(process.env.MEETING_MAX_DURATION_MINUTES || 240);
   if (parsed.data.durationMinutes > maxDuration) {
     return res.status(400).json({ error: `Meetings can be up to ${maxDuration} minutes long.` });
@@ -221,8 +270,11 @@ router.post("/", requireRegisteredAuth, requireAuth, async (req, res) => {
   }
 
   try {
+    const meetingType = parsed.data.meetingType;
     const meeting = await Meeting.create({
       ...parsed.data,
+      meetingType,
+      visibility: meetingType === "prayer" ? "public" : "link",
       startsAt,
       thumbnailUrl: normalizedThumbnail,
       slug: slugFromTitle(parsed.data.title),
@@ -230,7 +282,7 @@ router.post("/", requireRegisteredAuth, requireAuth, async (req, res) => {
       ownerName: req.auth!.displayName,
       status: "scheduled",
     });
-    void PlatformEvent.create({ category: "meeting", action: "meeting_created", actorId: req.auth!.userId, actorName: req.auth!.displayName, meetingSlug: meeting.slug, detail: { visibility: meeting.visibility, durationMinutes: meeting.durationMinutes } }).catch(() => undefined);
+    void PlatformEvent.create({ category: "meeting", action: "meeting_created", actorId: req.auth!.userId, actorName: req.auth!.displayName, meetingSlug: meeting.slug, detail: { meetingType: meeting.meetingType, visibility: meeting.visibility, durationMinutes: meeting.durationMinutes } }).catch(() => undefined);
     return res.status(201).json({ meeting: publicMeeting(meeting, req.auth!.userId), shareUrl: shareUrl(meeting.slug) });
   } catch (error) {
     console.error("[meetings/create] failed", error);
@@ -305,11 +357,48 @@ router.put("/:slug/notes", requireAuth, async (req, res) => {
   }
 });
 
+router.get("/:slug/recording", async (req, res) => {
+  try {
+    const meeting = await Meeting.findOne({ slug: req.params.slug }).select("_id slug meetingType visibility status title activeRecordingId recordingStatus").lean();
+    if (!meeting) return res.status(404).json({ error: "Meeting not found." });
+    if (meeting.status !== "ended") return res.status(409).json({ error: "Audio recordings become available after the gathering ends." });
+    const active = meeting.activeRecordingId
+      ? await Recording.findById(meeting.activeRecordingId).select("status stagedAvailable lastError").lean()
+      : null;
+    if (active && ["consent_pending", "recording", "uploading"].includes(active.status)) {
+      return res.json({ pending: true, status: active.status });
+    }
+    if (active?.status === "failed" && active.stagedAvailable) {
+      return res.status(409).json({ error: "The audio is saved in temporary storage, but its cloud upload needs the host to retry it." });
+    }
+    const recording = await Recording.findOne({
+      meeting: meeting._id,
+      status: "ready",
+      $or: [{ deletionStatus: "active" }, { deletionStatus: { $exists: false } }, { deletionStatus: null }],
+    }).sort({ endedAt: -1, createdAt: -1 }).lean();
+    if (!recording || !recording.cloudinaryPublicId) {
+      return res.status(404).json({ error: "No completed audio recording is available for this gathering." });
+    }
+    const expiry = recording.expiresAt || new Date((recording.endedAt || recording.createdAt).getTime() + 30 * 24 * 60 * 60 * 1000);
+    if (expiry.getTime() <= Date.now()) return res.status(410).json({ error: "This recording has reached the end of its 30-day retention period." });
+    // The meeting slug is a high-entropy bearer invitation. Opening this exact
+    // route is the existing share-link permission for private meeting playback.
+    const playbackUrl = await createAuthorizedPlaybackUrl(recording.cloudinaryPublicId, expiry);
+    return res.json({ recording: { id: String(recording._id), meetingTitle: recording.meetingTitle, meetingType: isPublicPrayer(meeting) ? "prayer" : "meeting", hostName: recording.hostName, startedAt: recording.startedAt, endedAt: recording.endedAt, durationSeconds: recording.durationSeconds }, playbackUrl, expiresAt: expiry.toISOString() });
+  } catch (error) {
+    console.error("[meetings/recording] failed", error);
+    return res.status(500).json({ error: "Could not prepare the audio recording." });
+  }
+});
+
 router.get("/:slug", async (req, res) => {
   try {
     const meeting = await Meeting.findOne({ slug: req.params.slug }).lean();
     if (!meeting) return res.status(404).json({ error: "We could not find this meeting. Check the shared link." });
-    return res.json({ meeting: publicMeeting(meeting, req.auth?.userId) });
+    // Give the client a trusted time sample so the pre-start UI is not held
+    // hostage by an inaccurate phone or desktop system clock. The join API
+    // still validates against the server clock independently.
+    return res.json({ meeting: { ...publicMeeting(meeting, req.auth?.userId), serverNow: new Date().toISOString() } });
   } catch (error) {
     console.error("[meetings/get] failed", error);
     return res.status(500).json({ error: "Could not load this meeting." });
@@ -380,17 +469,18 @@ router.post("/:slug/token", async (req, res) => {
       return res.status(410).json({ error: "This meeting has reached its scheduled end time." });
     }
 
-    if (!isHost) {
-      if (meeting.status !== "live") {
-        const openAt = new Date(meeting.startsAt.getTime() - 15 * 60_000);
-        if (now < openAt) return res.status(409).json({ error: "This meeting has not opened yet. You can join 15 minutes before it starts." });
-        return res.status(409).json({ error: "The host has not started this meeting yet. Keep this page open and try again shortly." });
-      }
-    } else if (meeting.status === "scheduled") {
+    // Both meeting types are closed until their scheduled start instant. The
+    // server clock is authoritative even if a client enables the Join button.
+    if (meeting.status === "scheduled" && now.getTime() < meeting.startsAt.getTime()) {
+      return res.status(409).json({ error: "Not Yet Open. This gathering becomes available at its scheduled start time.", code: "NOT_YET_OPEN", opensAt: meeting.startsAt.toISOString() });
+    }
+    // Once the scheduled start arrives the room becomes joinable automatically.
+    // The first attendee may initialize the room; only the owner receives host role.
+    if (meeting.status === "scheduled") {
       meeting.status = "live";
       meeting.startedAt = now;
       await meeting.save();
-      void PlatformEvent.create({ category: "meeting", action: "meeting_started", actorId: req.auth!.userId, actorName: req.auth!.displayName, meetingSlug: meeting.slug }).catch(() => undefined);
+      void PlatformEvent.create({ category: "meeting", action: "meeting_started", actorId: req.auth!.userId, actorName: req.auth!.displayName, meetingSlug: meeting.slug, detail: { startedByHost: isHost } }).catch(() => undefined);
     }
 
     const displayName = (req.auth.displayName || "Choir guest").replace(/[<>\u0000-\u001f]/g, "").trim().slice(0, 80);

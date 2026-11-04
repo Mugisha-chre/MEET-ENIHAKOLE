@@ -9,6 +9,7 @@ const userSchema = new mongoose.Schema(
     picture: { type: String, trim: true, maxlength: 600, default: "" },
     platformRole: { type: String, enum: ["member", "system_admin"], default: "member", index: true },
     accountStatus: { type: String, enum: ["active", "suspended"], default: "active", index: true },
+    canCreateMeetings: { type: Boolean, default: false, index: true },
   },
   { timestamps: true, versionKey: false },
 );

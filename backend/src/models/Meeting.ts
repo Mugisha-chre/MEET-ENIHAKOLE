@@ -10,6 +10,7 @@ const meetingSchema = new mongoose.Schema(
     startsAt: { type: Date, required: true, index: true },
     durationMinutes: { type: Number, required: true, min: 15, max: 240, default: 60 },
     timezone: { type: String, trim: true, maxlength: 80, default: "Africa/Kigali" },
+    meetingType: { type: String, enum: ["meeting", "prayer"], default: "meeting", index: true },
     visibility: { type: String, enum: ["link", "public"], default: "link" },
     thumbnailUrl: { type: String, trim: true, maxlength: 2000, default: "" },
     status: { type: String, enum: ["scheduled", "live", "ended", "cancelled"], default: "scheduled", index: true },
@@ -28,6 +29,7 @@ const meetingSchema = new mongoose.Schema(
 );
 
 meetingSchema.index({ owner: 1, startsAt: -1 });
+meetingSchema.index({ meetingType: 1, status: 1, startsAt: 1 });
 meetingSchema.index({ visibility: 1, status: 1, startsAt: 1 });
 
 export type MeetingDocument = InferSchemaType<typeof meetingSchema> & mongoose.Document;

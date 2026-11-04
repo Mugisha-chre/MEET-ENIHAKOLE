@@ -27,6 +27,13 @@ export function recordingExpirationDate(recording: {
 }
 
 async function backfillLegacyExpirationDates(): Promise<void> {
+  // Legacy rows predate deletionStatus. Keep unexpired completed recordings
+  // available until their calculated 30-day expiry; the normal sweep will
+  // permanently delete them once that date arrives.
+  await Recording.updateMany(
+    { $or: [{ deletionStatus: null }, { deletionStatus: { $exists: false } }] },
+    { $set: { deletionStatus: "active" } },
+  );
   // Existing records did not have expiresAt. Anchor them to endedAt first,
   // then startedAt, then createdAt. MongoDB dates are absolute UTC instants.
   await Recording.updateMany(
