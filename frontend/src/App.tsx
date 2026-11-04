@@ -12,7 +12,7 @@ import {
   MousePointer2, MoveUpRight, Eraser, Eye, EyeOff, PenLine, Undo2,
   FileText, Bold, Italic, Underline, List, ListOrdered, Heading1, Heading2, IndentIncrease, IndentDecrease,
 } from "lucide-react";
-import { api, ApiError, clearAuthToken, getAuthToken, getRegisteredAuthToken, getGuestProfile, saveAuthToken, saveGuestAuthToken, type MeetingNotesPayload } from "./api";
+import { api, ApiError, clearAuthToken, getRegisteredAuthToken, getGuestProfile, saveAuthToken, saveGuestAuthToken, type MeetingNotesPayload } from "./api";
 import { AdminCenterPage, AudioRecordingPlayer, RecordingsPage } from "./ManagementPages";
 import { clearCachePrefix, patchCache, readCache, removeCache, writeCache } from "./cache";
 import type { JoinSession, Meeting, PrivateConversationSummary, PrivateMessage, User } from "./types";
