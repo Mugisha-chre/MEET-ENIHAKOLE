@@ -2170,7 +2170,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
       }
     };
     room.on(RoomEvent.DataReceived, onPrivateData);
-    return () => room.off(RoomEvent.DataReceived, onPrivateData);
+    return () => { room.off(RoomEvent.DataReceived, onPrivateData); };
   }, [room, localUserId, localParticipant, meeting.ownerId]);
 
   useEffect(() => () => window.clearTimeout(privateNoticeTimer.current), []);
@@ -2238,7 +2238,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
       })).catch(() => undefined);
     };
     room.on(RoomEvent.Reconnected, reload);
-    return () => room.off(RoomEvent.Reconnected, reload);
+    return () => { room.off(RoomEvent.Reconnected, reload); };
   }, [room, meeting.slug]);
 
   useEffect(() => {
@@ -2256,7 +2256,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
       void api.privateConversations(meeting.slug).then((result) => setRecentConversations(result.conversations)).catch(() => undefined);
     };
     room.on(RoomEvent.Reconnected, reloadConversations);
-    return () => room.off(RoomEvent.Reconnected, reloadConversations);
+    return () => { room.off(RoomEvent.Reconnected, reloadConversations); };
   }, [room, meeting.slug, peopleOpen]);
 
   useEffect(() => {

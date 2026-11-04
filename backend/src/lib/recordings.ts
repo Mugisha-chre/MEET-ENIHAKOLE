@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { pipeline } from "node:stream/promises";
-import { EgressClient, EncodedFileOutput, EncodedFileType, EncodingOptionsPreset, S3Upload } from "livekit-server-sdk";
+import { EgressClient, EncodedFileOutput, EncodedFileType, EncodingOptionsPreset, S3Upload, WebhookConfig } from "livekit-server-sdk";
 import { S3Client, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { v2 as cloudinary } from "cloudinary";
 import { Recording } from "../models/Recording.js";
@@ -59,7 +59,7 @@ export async function startRoomRecording(recordingId: string): Promise<void> {
     const info = await egressClient().startRoomCompositeEgress(
       `eni-${recording.meetingSlug}`,
       { file },
-      { layout: "grid", encodingOptions: EncodingOptionsPreset.H264_720P_30, webhooks: [{ url: callback, signingKey: apiKey }] },
+      { layout: "grid", encodingOptions: EncodingOptionsPreset.H264_720P_30, webhooks: [new WebhookConfig({ url: callback, signingKey: apiKey })] },
     );
     recording.egressId = info.egressId;
     recording.stagedKey = key;

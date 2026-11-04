@@ -111,7 +111,8 @@ export function createApp(): Express {
     const started = Date.now();
     res.on("finish", () => {
       if (req.path === "/webhooks/livekit") return;
-      void PlatformEvent.create({ category: "traffic", action: "api_request", path: req.path.split("?")[0].slice(0, 300), method: req.method, statusCode: res.statusCode, durationMs: Date.now() - started }).catch(() => undefined);
+      const requestPath = (req.path || "/").split("?")[0] ?? "/";
+      void PlatformEvent.create({ category: "traffic", action: "api_request", path: requestPath.slice(0, 300), method: req.method, statusCode: res.statusCode, durationMs: Date.now() - started }).catch(() => undefined);
     });
     next();
   });
