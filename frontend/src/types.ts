@@ -14,6 +14,7 @@ export interface Meeting {
   ownerName: string;
   ownerId: string;
   isOwner: boolean;
+  isParticipant?: boolean;
   startsAt: string;
   durationMinutes: number;
   timezone: string;

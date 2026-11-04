@@ -10,8 +10,9 @@ import {
   Sparkles, Users, Video, VideoIcon, VideoOff, X, Sun, Moon, MessageCircle,
   Hand, Send, MonitorUp, MicOff, Maximize2, Minimize2, ChevronLeft, ChevronRight, Smile, ChevronDown, Download,
   MousePointer2, MoveUpRight, Eraser, Eye, EyeOff, PenLine, Undo2,
+  FileText, Bold, Italic, Underline, List, ListOrdered, Heading1, Heading2, IndentIncrease, IndentDecrease,
 } from "lucide-react";
-import { api, ApiError, clearAuthToken, getAuthToken, getRegisteredAuthToken, getGuestProfile, saveAuthToken, saveGuestAuthToken } from "./api";
+import { api, ApiError, clearAuthToken, getAuthToken, getRegisteredAuthToken, getGuestProfile, saveAuthToken, saveGuestAuthToken, type MeetingNotesPayload } from "./api";
 import { AdminCenterPage, RecordingsPage } from "./ManagementPages";
 import { clearCachePrefix, patchCache, readCache, removeCache, writeCache } from "./cache";
 import type { JoinSession, Meeting, PrivateConversationSummary, PrivateMessage, User } from "./types";
@@ -34,6 +35,8 @@ interface AppContextValue {
 const AppContext = createContext<AppContextValue | null>(null);
 // Only an explicit choice (the sun/moon button) is remembered; otherwise the app follows the browser or device light/dark setting.
 const THEME_STORAGE_KEY = "meet-enihakole-theme-choice";
+// Meeting recording remains implemented for a future release but is intentionally hidden from every user-facing surface for now.
+const RECORDING_UI_ENABLED = false;
 
 function systemTheme(): "light" | "dark" {
   try { return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"; }
@@ -69,6 +72,120 @@ function formatTime(dateString: string, timeZone?: string) {
   return new Intl.DateTimeFormat(undefined, {
     hour: "numeric", minute: "2-digit", ...(timeZone ? { timeZone } : {}),
   }).format(new Date(dateString));
+}
+
+
+/** Builds a small dependency-free, multi-page PDF for meeting notes. */
+function downloadMeetingNotesPdf(meetingTitle: string, meetingDate: string, noteTitle: string, html: string) {
+  const parser = new DOMParser();
+  const parsed = parser.parseFromString(`<div>${html || ""}</div>`, "text/html");
+  const root = parsed.body.firstElementChild;
+  const blocks: Array<{ text: string; bold: boolean; size: number; gap: number }> = [];
+  const nodeText = (node: Node): string => {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent || "";
+    if (node instanceof Element && node.tagName === "BR") return "\n";
+    return Array.from(node.childNodes).map(nodeText).join("");
+  };
+  const walk = (node: Node) => {
+    if (node instanceof Element && ["H1", "H2", "H3", "P", "LI", "BLOCKQUOTE", "PRE"].includes(node.tagName)) {
+      const text = nodeText(node).replace(/\s+/g, " ").trim();
+      if (text) {
+        const tag = node.tagName;
+        const parentList = node instanceof Element ? node.parentElement : null;
+        const ordered = tag === "LI" && parentList?.tagName === "OL";
+        const listPosition = ordered && parentList ? Array.from(parentList.children).filter((child) => child.tagName === "LI").indexOf(node as Element) + 1 : 0;
+        blocks.push({
+          text: `${tag === "LI" ? (ordered ? `${listPosition}. ` : "• ") : tag === "BLOCKQUOTE" ? "> " : ""}${text}`,
+          bold: tag === "H1" || tag === "H2" || tag === "H3",
+          size: tag === "H1" ? 15 : tag === "H2" ? 13 : tag === "H3" ? 11 : 10,
+          gap: tag === "H1" || tag === "H2" ? 9 : 4,
+        });
+      }
+      return;
+    }
+    for (const child of Array.from(node.childNodes)) walk(child);
+  };
+    if (root) walk(root);
+  if (blocks.length === 0 && root?.textContent?.trim()) {
+    blocks.push({ text: root.textContent.trim(), bold: false, size: 10, gap: 4 });
+  }
+  const toAscii = (value: string) => value.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/•/g, "*").replace(/[^\x20-\x7e]/g, "?");
+  const escapePdf = (value: string) => toAscii(value).replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+  const wrap = (value: string, limit = 88) => {
+    const words = value.split(/\s+/).filter(Boolean);
+    const lines: string[] = [];
+    let line = "";
+    for (const word of words) {
+      if (!line) line = word;
+      else if (`${line} ${word}`.length <= limit) line += ` ${word}`;
+      else { lines.push(line); line = word; }
+    }
+    if (line) lines.push(line);
+    return lines.length ? lines : [""];
+  };
+  const dateLabel = Number.isFinite(new Date(meetingDate).getTime())
+    ? new Date(meetingDate).toLocaleString([], { dateStyle: "long", timeStyle: "short" })
+    : "Date unavailable";
+  const content: Array<{ text: string; bold: boolean; size: number; gap: number }> = [
+    { text: meetingTitle || "Meeting", bold: true, size: 18, gap: 0 },
+    { text: `Meeting date: ${dateLabel}`, bold: false, size: 9, gap: 10 },
+    { text: noteTitle || "Meeting notes", bold: true, size: 14, gap: 14 },
+    ...blocks,
+  ];
+  if (blocks.length === 0) content.push({ text: "No notes have been added yet.", bold: false, size: 10, gap: 5 });
+
+  const pages: string[][] = [];
+  let page: string[] = [];
+  let y = 790;
+  const lineHeightFor = (size: number) => Math.max(13, size + 4);
+  const addText = (text: string, bold: boolean, size: number, gap: number) => {
+    const safeLines = wrap(text, size >= 14 ? 66 : 88);
+    if (y - gap < 52) { pages.push(page); page = []; y = 790; }
+    y -= gap;
+    for (const line of safeLines) {
+      const lineHeight = lineHeightFor(size);
+      if (y < 48) { pages.push(page); page = []; y = 790; }
+      page.push(`/${bold ? "F2" : "F1"} ${size} Tf 1 0 0 1 48 ${y} Tm (${escapePdf(line)}) Tj`);
+      y -= lineHeight;
+    }
+    y -= 2;
+  };
+  for (const item of content) addText(item.text, item.bold, item.size, item.gap);
+  if (page.length || pages.length === 0) pages.push(page);
+
+  const objects: string[] = [];
+  objects[1] = "<< /Type /Catalog /Pages 2 0 R >>";
+  const pageIds = pages.map((_, index) => 5 + index * 2);
+  objects[2] = `<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${pages.length} >>`;
+  objects[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
+  objects[4] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>";
+  pages.forEach((commands, index) => {
+    const pageId = 5 + index * 2;
+    const contentId = pageId + 1;
+    const heading = index === 0 ? "" : `BT /F2 9 Tf 48 812 Td (Meeting notes - continued) Tj ET\n`;
+    const stream = `${heading}BT\n${commands.join("\n")}\nET`;
+    objects[pageId] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${contentId} 0 R >>`;
+    objects[contentId] = `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`;
+  });
+  let pdf = "%PDF-1.4\n%ENIHAKOLE\n";
+  const offsets: number[] = [0];
+  for (let index = 1; index < objects.length; index += 1) {
+    offsets[index] = pdf.length;
+    pdf += `${index} 0 obj\n${objects[index]}\nendobj\n`;
+  }
+  const xrefOffset = pdf.length;
+  pdf += `xref\n0 ${objects.length}\n0000000000 65535 f \n`;
+  for (let index = 1; index < objects.length; index += 1) pdf += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`;
+  pdf += `trailer\n<< /Size ${objects.length} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+  const blob = new Blob([pdf], { type: "application/pdf" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `${(noteTitle || "meeting-notes").trim().replace(/[^a-z0-9-_]+/gi, "-").replace(/^-|-$/g, "") || "meeting-notes"}.pdf`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
 
 function localDateTimeValue(date: Date) {
@@ -319,7 +436,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<AppShell mobileNavOpen={mobileNavOpen} setMobileNavOpen={setMobileNavOpen}><Dashboard /></AppShell>} />
         <Route path="/meetings" element={<AppShell mobileNavOpen={mobileNavOpen} setMobileNavOpen={setMobileNavOpen}><MeetingsPage /></AppShell>} />
-        <Route path="/recordings" element={<AppShell mobileNavOpen={mobileNavOpen} setMobileNavOpen={setMobileNavOpen}>{getAuthToken() ? <RecordingsPage /> : <Navigate to="/" replace />}</AppShell>} />
+        <Route path="/recordings" element={RECORDING_UI_ENABLED && getAuthToken() ? <AppShell mobileNavOpen={mobileNavOpen} setMobileNavOpen={setMobileNavOpen}><RecordingsPage /></AppShell> : <Navigate to="/" replace />} />
         <Route path="/admin" element={<AppShell mobileNavOpen={mobileNavOpen} setMobileNavOpen={setMobileNavOpen}>{user?.isAdmin ? <AdminCenterPage /> : <Navigate to="/" replace />}</AppShell>} />
         <Route path="/share/:slug" element={<ShareRedirect />} />
         <Route path="/meeting/:slug" element={<MeetingPage />} />
@@ -478,7 +595,7 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
         <nav className="side-navigation" aria-label="Main navigation">
           <Link to="/" className={`side-link ${active === "home" ? "side-link-active" : ""}`}><Home size={18} /><span>Home</span></Link>
           <Link to="/meetings" className={`side-link ${active === "meetings" ? "side-link-active" : ""}`}><CalendarDays size={18} /><span>My meetings</span></Link>
-          {getAuthToken() && <Link to="/recordings" className={`side-link ${active === "recordings" ? "side-link-active" : ""}`}><Video size={18} /><span>Recordings</span></Link>}
+          {RECORDING_UI_ENABLED && getAuthToken() && <Link to="/recordings" className={`side-link ${active === "recordings" ? "side-link-active" : ""}`}><Video size={18} /><span>Recordings</span></Link>}
           {user?.isAdmin && <Link to="/admin" className={`side-link ${active === "admin" ? "side-link-active" : ""}`}><ShieldCheck size={18} /><span>Admin center</span></Link>}
         </nav>
         <div className="sidebar-bottom">
@@ -651,6 +768,10 @@ function MeetingPage() {
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState("");
   const [mediaPrompt, setMediaPrompt] = useState<{ kind: MediaKind; state: MicPromptState } | null>(null);
+  const [pastNotesOpen, setPastNotesOpen] = useState(false);
+  const [pastNotes, setPastNotes] = useState<MeetingNotesPayload | null>(null);
+  const [pastNotesLoading, setPastNotesLoading] = useState(false);
+  const [pastNotesError, setPastNotesError] = useState("");
   const mediaRetryRef = useRef(0);
   const enteringRef = useRef(false);
   const aliveRef = useRef(true);
@@ -676,6 +797,20 @@ function MeetingPage() {
   }, [slug, cacheKey]);
 
   useEffect(() => { if (user?.picture) void preloadPhoto(user.picture, 512); }, [user?.picture]);
+
+  // Ended meetings keep their shared notes available to their recorded members.
+  useEffect(() => {
+    if (!pastNotesOpen || !meeting || (meeting.status !== "ended" && meeting.status !== "cancelled")) return;
+    let cancelled = false;
+    setPastNotesLoading(true);
+    setPastNotesError("");
+    api.meetingNotes(slug).then(({ note }) => {
+      if (!cancelled) setPastNotes(note);
+    }).catch((cause) => {
+      if (!cancelled) setPastNotesError(cause instanceof Error ? cause.message : "Could not load meeting notes.");
+    }).finally(() => { if (!cancelled) setPastNotesLoading(false); });
+    return () => { cancelled = true; };
+  }, [pastNotesOpen, slug, meeting?.status]);
 
   // The browser is only asked after the person pressed Allow in our own dialog.
   async function askBrowser(kind: MediaKind) {
@@ -794,7 +929,7 @@ function MeetingPage() {
             {!user && !ended && <div className="join-google"><p>Continue with Google (recommended) or join with your name as a temporary guest. Guest access is limited to this meeting.</p><GoogleContinueButton oneTap onCredential={(credential) => void googleCredential(credential)}/>{!getGuestProfile(slug) ? <div className="guest-access-form"><div className="guest-access-divider"><span>OR</span></div><label htmlFor="guest-full-name">Continue as Guest</label><input id="guest-full-name" value={guestName} onChange={(event) => setGuestName(event.target.value)} placeholder="First and last name" autoComplete="name" maxLength={80}/><small>Use your full name. No account or email is required.</small><button type="button" className="button button-soft button-full" onClick={() => void continueAsGuest()} disabled={joining || guestName.trim().split(/\s+/).filter(Boolean).length < 2}>{joining ? "Preparing guest access…" : "Continue as Guest"}</button></div> : <div className="join-identity guest-identity"><ProfilePhoto name={getGuestProfile(slug)?.displayName || guestName} className="join-identity-photo"/><span><b>{getGuestProfile(slug)?.displayName}</b><small>Temporary guest · this meeting only</small></span></div>}</div>}
             {!ended && <div className="join-preferences"><MediaToggle on={cameraOn} onChange={setCameraOn} onIcon={<Video size={16}/>} offIcon={<VideoOff size={16}/>} onLabel="Camera is on" offLabel="Camera is off" onHint="Join with video" offHint="Join without video"/><MediaToggle on={micOn} onChange={setMicOn} onIcon={<Mic size={16}/>} offIcon={<MicOff size={16}/>} onLabel="Microphone is on" offLabel="Microphone is off" onHint="Join with audio" offHint="Join muted"/></div>}
             {error && <div className="inline-error" role="alert">{error}{error.includes("Sign in") && <button type="button" className="error-link" onClick={openAuth}>Sign in</button>}</div>}
-            {ended ? <Link to="/meetings" className="button button-soft button-full"><ArrowLeft size={16}/> Back to meetings</Link> : (user || getGuestProfile(slug)) && <button className="button button-primary button-full join-submit" type="submit" disabled={joining}>{joining ? <LoaderCircle size={17} className="spin"/> : meeting.isOwner ? <Video size={17}/> : <DoorOpen size={17}/>} {joining ? "Joining…" : meeting.isOwner ? "Start meeting" : meeting.status === "live" ? "Join meeting" : "Check room availability"}<ArrowRight size={16}/></button>}
+            {ended ? <div className="meeting-ended-actions"><Link to="/meetings" className="button button-soft button-full"><ArrowLeft size={16}/> Back to meetings</Link>{(meeting.isOwner || meeting.isParticipant) && <button type="button" className="button button-primary button-full" onClick={() => setPastNotesOpen(true)}><FileText size={16}/> View meeting notes</button>}</div> : (user || getGuestProfile(slug)) && <button className="button button-primary button-full join-submit" type="submit" disabled={joining}>{joining ? <LoaderCircle size={17} className="spin"/> : meeting.isOwner ? <Video size={17}/> : <DoorOpen size={17}/>} {joining ? "Joining…" : meeting.isOwner ? "Start meeting" : meeting.status === "live" ? "Join meeting" : "Check room availability"}<ArrowRight size={16}/></button>}
             <p className="join-footnote"><ShieldCheck size={13}/> Your camera and microphone are only requested when you enter the room.</p>
           </form>
         </section>
@@ -814,10 +949,11 @@ function MeetingPage() {
         skipLabel={mediaPrompt.kind === "camera" ? "Join without camera" : "Join without microphone"}
         grantedLabel="Joining…"
         onRetry={() => { void askBrowser(mediaPrompt.kind); }}
-        onGranted={() => { const kind = mediaPrompt.kind; mediaAllowed[kind] = true; mediaRetryRef.current++; setMediaPrompt({ kind, state: { phase: "granted" } }); void continueJoin(micOn, cameraOn); }}
+        onGranted={() => { const kind = mediaPrompt.kind as MediaKind; mediaAllowed[kind] = true; mediaRetryRef.current++; setMediaPrompt({ kind, state: { phase: "granted" } }); void continueJoin(micOn, cameraOn); }}
         onSkip={() => { mediaRetryRef.current++; if (mediaPrompt.kind === "camera") { setCameraOn(false); void continueJoin(micOn, false); } else { setMicOn(false); void continueJoin(false, cameraOn); } }}
         onClose={() => { mediaRetryRef.current++; setMediaPrompt(null); }}
       />}
+      {pastNotesOpen && <div className="meeting-notes-archive-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setPastNotesOpen(false); }}><section className="meeting-notes-archive" role="dialog" aria-modal="true" aria-labelledby="past-meeting-notes-title"><header><div><span className="section-overline">MEETING ARCHIVE</span><h2 id="past-meeting-notes-title">{pastNotes?.title || "Meeting notes"}</h2><p>{meeting.title} · {formatDate(meeting.startedAt || meeting.startsAt)}</p></div><button type="button" className="room-icon-button" onClick={() => setPastNotesOpen(false)} aria-label="Close meeting notes"><X size={18}/></button></header>{pastNotesLoading ? <div className="meeting-notes-archive-state"><LoaderCircle size={22} className="spin"/> Loading saved notes…</div> : pastNotesError ? <div className="meeting-notes-archive-state meeting-notes-archive-error" role="alert">{pastNotesError}<button type="button" onClick={() => { setPastNotesOpen(false); window.setTimeout(() => setPastNotesOpen(true), 0); }}>Try again</button></div> : <><article className="meeting-notes-archive-content" dangerouslySetInnerHTML={{ __html: pastNotes?.contentHtml || "<p>No notes were saved for this meeting.</p>" }}/><footer><span>Last saved {pastNotes?.updatedAt ? formatDate(pastNotes.updatedAt) : "—"}{pastNotes?.updatedByName ? ` · ${pastNotes.updatedByName}` : ""}</span><button type="button" className="button button-primary button-small" onClick={() => downloadMeetingNotesPdf(meeting.title, meeting.startedAt || meeting.startsAt, pastNotes?.title || "Meeting notes", pastNotes?.contentHtml || "")}><Download size={15}/> Export PDF</button></footer></>}</section></div>}
     </div>
   );
 }
@@ -1226,11 +1362,11 @@ type PrivateDataSignal =
   | { kind: "private-message"; recipientUserId: string; message: PrivateMessage }
   | { kind: "moderator-request"; recipientUserId: string; media: "microphone" | "camera"; hostName: string }
   | { kind: "moderator-media-control"; recipientUserId: string; media: "microphone" | "camera"; action: "disable"; hostName: string };
-const REACTION_LIFETIME = 3600;
+const REACTION_LIFETIME = 5000;
 const PRIVATE_MESSAGE_TOPIC = "meet-enihakole-private";
 /** Reactions use a fixed horizontal launch point and a vertical-only travel distance. */
 function makeReaction(id: string, emoji: string, name: string): FloatingReaction {
-  return { id, emoji, name, x: 12 + Math.random() * 76, rise: 62 + Math.random() * 22, scale: 0.9 + Math.random() * 0.35 };
+  return { id, emoji, name, x: 12 + Math.random() * 76, rise: 65, scale: 0.9 + Math.random() * 0.35 };
 }
 function reactionKind(emoji: string): string {
   if (emoji === "👏") return "clap"; if (emoji === "🙌") return "wave"; if (emoji === "❤️" || emoji === "💛") return "beat";
@@ -1288,8 +1424,9 @@ function ParticipantAvatar({ trackRef, participant }: { trackRef: Parameters<typ
   const muted = useIsMuted(trackRef);
   const { speaking } = useVoiceActivity(participant);
   const videoOn = isTrackReference(trackRef) && Boolean(trackRef.publication?.track) && !muted;
-  // Camera on: the video is the picture, so the waveform runs around the card edges instead of a profile circle.
-  if (videoOn) return speaking ? <SpeakingWave participant={participant}/> : null;
+  // Camera-on participants use the animated card border as their active-speaker cue;
+  // the audio waveform remains reserved for camera-off avatar cards.
+  if (videoOn) return null;
   return <div className="participant-avatar" aria-hidden="true"><div className="participant-avatar-stack"><VoiceRing participant={participant} speaking={speaking}/><ProfilePhoto src={participantPicture(participant.metadata, participant.identity)} name={participantName(participant)} className="participant-avatar-photo" size={512}/></div></div>;
 }
 
@@ -1544,29 +1681,6 @@ function VoiceRing({ participant, speaking }: { participant: Participant; speaki
   }, [participant]);
   useEffect(() => { if (speaking) startRef.current(); }, [speaking]);
   return <canvas ref={canvasRef} className="voice-ring" aria-hidden="true"/>;
-}
-
-/** Animated voice waveform around the sides and corners of a speaking participant's card; follows the real audio level. */
-function SpeakingWave({ participant }: { participant: Participant }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    let frame = 0; let level = 0.4;
-    const tick = () => {
-      const target = Math.min(1, 0.35 + voiceLevel(participant) * 1.8);
-      level += (target - level) * (participant.isLocal && localVoice.active ? 0.35 : 0.16);
-      ref.current?.style.setProperty("--lvl", level.toFixed(3));
-      frame = window.requestAnimationFrame(tick);
-    };
-    frame = window.requestAnimationFrame(tick);
-    return () => window.cancelAnimationFrame(frame);
-  }, [participant]);
-  const bars = (count: number) => Array.from({ length: count }, (_, index) => <i key={index} style={{ "--i": index } as CSSProperties}/>);
-  return <div className="voice-wave" ref={ref} aria-hidden="true">
-    <div className="voice-wave-edge voice-wave-top">{bars(40)}</div>
-    <div className="voice-wave-edge voice-wave-bottom">{bars(40)}</div>
-    <div className="voice-wave-edge voice-wave-left">{bars(22)}</div>
-    <div className="voice-wave-edge voice-wave-right">{bars(22)}</div>
-  </div>;
 }
 
 /** Shown only while a participant's microphone is off; nothing at all is shown while it is on. */
@@ -2022,6 +2136,7 @@ function ScreenShareStage({ screenShare, onStop, onSwitch }: { screenShare: Trac
 
 function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending, isActive }: { meeting: Meeting; role: "host" | "participant"; onLeave: () => void; onEndForEveryone: () => void; ending: boolean; isActive: boolean }) {
   const room = useRoomContext();
+  const { theme, toggleTheme } = useAppContext();
   const { localParticipant, isMicrophoneEnabled, isCameraEnabled, isScreenShareEnabled } = useLocalParticipant();
   const participants = useParticipants();
   const trackRefs = useTracks([{ source: Track.Source.Camera, withPlaceholder: true }], { onlySubscribed: false });
@@ -2031,6 +2146,17 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
   const { chatMessages, send, isSending } = useChat();
   const [messagesOpen, setMessagesOpen] = useState(false);
   const [peopleOpen, setPeopleOpen] = useState(false);
+  const [peopleViewTab, setPeopleViewTab] = useState<"people" | "private">("people");
+  const [notesOpen, setNotesOpen] = useState(false);
+  const [notesTitle, setNotesTitle] = useState("Meeting notes");
+  const [notesHtml, setNotesHtml] = useState("");
+  const [notesRevision, setNotesRevision] = useState(0);
+  const [notesDirty, setNotesDirty] = useState(false);
+  const [notesLoading, setNotesLoading] = useState(false);
+  const [notesSaving, setNotesSaving] = useState(false);
+  const [notesConflict, setNotesConflict] = useState(false);
+  const [notesError, setNotesError] = useState("");
+  const [notesUpdatedBy, setNotesUpdatedBy] = useState("");
   const [recordingState, setRecordingState] = useState<MeetingRecordingState | null>(null);
   const [recordingBusy, setRecordingBusy] = useState(false);
   const [recordingConsentBusy, setRecordingConsentBusy] = useState(false);
@@ -2074,6 +2200,14 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
   const autoFullscreenDone = useRef(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const privateChatEndRef = useRef<HTMLDivElement>(null);
+  const notesEditorRef = useRef<HTMLDivElement>(null);
+  const notesDirtyRef = useRef(false);
+  const notesSavingRef = useRef(false);
+  const notesConflictRef = useRef(false);
+  const notesHtmlRef = useRef("");
+  const notesTitleRef = useRef("Meeting notes");
+  const notesRevisionRef = useRef(0);
+  const notesSaveTimer = useRef(0);
   const directContactRef = useRef<DirectContact | null>(null);
   const privateNoticeTimer = useRef(0);
   const localIdentity = localParticipant.identity;
@@ -2081,6 +2215,10 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
   const onLeaveRef = useRef(onLeave);
   onLeaveRef.current = onLeave;
   directContactRef.current = directContact;
+  notesHtmlRef.current = notesHtml;
+  notesTitleRef.current = notesTitle;
+  notesRevisionRef.current = notesRevision;
+  notesSavingRef.current = notesSaving;
   const localVoiceActivity = useVoiceActivity(localParticipant);
   useBackgroundCall(room, meeting.title, onLeave);
   // Keep the receive-side jitter buffer as small as the browser safely allows so other people's voices play back with minimal delay.
@@ -2208,6 +2346,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
 
   // Recording consent and status are server-authoritative and shared with every connected client.
   useEffect(() => {
+    if (!RECORDING_UI_ENABLED) return;
     let cancelled = false;
     const refresh = () => {
       if (cancelled || room.state !== ConnectionState.Connected) return;
@@ -2273,6 +2412,118 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
     return () => { cancelled = true; };
   }, [meeting.slug, directContact?.userId]);
 
+  async function loadMeetingNotes(force = false) {
+    if (!force && (notesDirtyRef.current || notesSavingRef.current)) return;
+    if (force) setNotesLoading(true);
+    try {
+      const result = await api.meetingNotes(meeting.slug);
+      const note = result.note;
+      const loadedTitle = note.title || "Meeting notes";
+      const loadedHtml = note.contentHtml || "";
+      const loadedRevision = note.revision || 0;
+      setNotesTitle(loadedTitle); notesTitleRef.current = loadedTitle;
+      setNotesHtml(loadedHtml); notesHtmlRef.current = loadedHtml;
+      setNotesRevision(loadedRevision); notesRevisionRef.current = loadedRevision;
+      setNotesUpdatedBy(note.updatedByName || "");
+      setNotesDirty(false); notesDirtyRef.current = false;
+      setNotesConflict(false); notesConflictRef.current = false; setNotesError("");
+      if (notesEditorRef.current) notesEditorRef.current.innerHTML = note.contentHtml || "";
+    } catch (cause) {
+      setNotesError(cause instanceof Error ? cause.message : "Could not load meeting notes.");
+    } finally { if (force) setNotesLoading(false); }
+  }
+
+  async function saveMeetingNotes(force = false) {
+    if (!notesDirtyRef.current || notesSavingRef.current) return;
+    const title = notesTitleRef.current.trim() || "Meeting notes";
+    const contentHtml = notesHtmlRef.current;
+    const expectedRevision = notesRevisionRef.current;
+    setNotesSaving(true); notesSavingRef.current = true;
+    let saved = false;
+    try {
+      const result = await api.saveMeetingNotes(meeting.slug, { title, contentHtml, expectedRevision, force });
+      saved = true;
+      setNotesRevision(result.note.revision); notesRevisionRef.current = result.note.revision;
+      setNotesUpdatedBy(result.note.updatedByName || "");
+      setNotesConflict(false); notesConflictRef.current = false; setNotesError("");
+      if (notesHtmlRef.current === contentHtml && notesTitleRef.current.trim() === title) {
+        setNotesDirty(false); notesDirtyRef.current = false;
+      }
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 409) {
+        setNotesConflict(true);
+        notesConflictRef.current = true;
+        setNotesError("Another participant has saved a newer version. Load their version or explicitly keep yours.");
+      } else setNotesError(cause instanceof Error ? cause.message : "Could not save meeting notes.");
+    } finally {
+      setNotesSaving(false); notesSavingRef.current = false;
+      // If someone typed while the previous save was in flight, persist the newer version too.
+      if (saved && notesDirtyRef.current && !notesConflictRef.current) {
+        window.clearTimeout(notesSaveTimer.current);
+        notesSaveTimer.current = window.setTimeout(() => { void saveMeetingNotes(); }, 0);
+      }
+    }
+  }
+
+  function updateMeetingNotes(html: string) {
+    notesHtmlRef.current = html;
+    setNotesHtml(html);
+    notesDirtyRef.current = true;
+    setNotesDirty(true);
+    if (!notesConflict) setNotesError("");
+    window.clearTimeout(notesSaveTimer.current);
+    notesSaveTimer.current = window.setTimeout(() => { void saveMeetingNotes(); }, 1100);
+  }
+
+  function updateMeetingNotesTitle(title: string) {
+    notesTitleRef.current = title;
+    setNotesTitle(title);
+    notesDirtyRef.current = true;
+    setNotesDirty(true);
+    if (!notesConflict) setNotesError("");
+    window.clearTimeout(notesSaveTimer.current);
+    notesSaveTimer.current = window.setTimeout(() => { void saveMeetingNotes(); }, 1100);
+  }
+
+  useEffect(() => {
+    if (!notesOpen) return;
+    void loadMeetingNotes(true);
+    const refresh = window.setInterval(() => { if (!notesDirtyRef.current && !notesSavingRef.current) void loadMeetingNotes(false); }, 5000);
+    return () => {
+      window.clearInterval(refresh);
+      window.clearTimeout(notesSaveTimer.current);
+      // Closing the Notes panel or leaving the room should flush a pending edit.
+      if (notesDirtyRef.current && !notesConflictRef.current) void saveMeetingNotes();
+    };
+  }, [notesOpen, meeting.slug]);
+
+  // The editor is temporarily unmounted while the initial load skeleton is shown.
+  // Hydrate it after loading completes, without overwriting in-progress local edits.
+  useEffect(() => {
+    const editor = notesEditorRef.current;
+    if (!notesOpen || notesLoading || !editor || notesDirtyRef.current) return;
+    if (editor.innerHTML !== notesHtmlRef.current) editor.innerHTML = notesHtmlRef.current;
+  }, [notesOpen, notesLoading, notesHtml]);
+
+  useEffect(() => {
+    if (!notesOpen || !notesDirty || notesSaving || notesConflict || notesError) return;
+    window.clearTimeout(notesSaveTimer.current);
+    notesSaveTimer.current = window.setTimeout(() => { void saveMeetingNotes(); }, 1100);
+    return () => window.clearTimeout(notesSaveTimer.current);
+  }, [notesOpen, notesDirty, notesSaving, notesConflict, notesError, notesTitle, notesHtml]);
+
+  function formatNote(command: string, value?: string) {
+    const editor = notesEditorRef.current;
+    if (!editor) return;
+    editor.focus();
+    document.execCommand(command, false, value);
+    updateMeetingNotes(editor.innerHTML);
+  }
+
+  function exportNotesPdf() {
+    downloadMeetingNotesPdf(meeting.title, meeting.startedAt || meeting.startsAt, notesTitle, notesHtmlRef.current);
+  }
+
   useEffect(() => {
     const onFullscreen = () => {
       if (document.fullscreenElement === fullScreenRef.current) {
@@ -2321,7 +2572,10 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
     messagesOpenRef.current = messagesOpen;
     overlayOpenRef.current = messagesOpen || reactionsOpen || deviceMenu !== null;
   }, [messagesOpen, reactionsOpen, deviceMenu]);
-  useEffect(() => { pseudoFullRef.current = pseudoFull; }, [pseudoFull]);
+  useEffect(() => {
+    pseudoFullRef.current = pseudoFull;
+    window.dispatchEvent(new Event("meet-pseudo-fullscreen-change"));
+  }, [pseudoFull, fullScreen]);
   useEffect(() => {
     if (chatMessages.length < seenMessages.current) seenMessages.current = chatMessages.length;
     if (chatMessages.length === seenMessages.current) return;
@@ -2509,6 +2763,8 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
     setDirectContact(contact);
     setPrivateDraft("");
     setPeopleOpen(false);
+    setMessagesOpen(false);
+    setNotesOpen(false);
   }
   function openPrivateContact(contact: DirectContact) {
     setPrivateMessages([]);
@@ -2517,6 +2773,8 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
     setPrivateDraft("");
     setPrivateNotice(null);
     setPeopleOpen(false);
+    setMessagesOpen(false);
+    setNotesOpen(false);
   }
   async function sendPrivateMessage(event: FormEvent) {
     event.preventDefault();
@@ -2843,16 +3101,13 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
   const currentPage = Math.min(page, pages - 1);
   const visibleParticipants = visualParticipants.slice(currentPage * PARTICIPANTS_PER_SCREEN, currentPage * PARTICIPANTS_PER_SCREEN + PARTICIPANTS_PER_SCREEN);
 
-  return <div className={`conference-fullscreen-target ${fullScreen ? "is-fullscreen" : ""} ${pseudoFull ? "is-pseudo-fullscreen" : ""} ${fullScreen && controlsVisible ? "controls-shown" : ""}`} ref={fullScreenRef} style={{ "--dock-space": fullScreen && controlsVisible ? `${dockHeight}px` : "0px" } as CSSProperties}>
-    {fullscreenPrompt && !fullScreen && <div className="fullscreen-fallback-prompt" role="status"><span>Fullscreen needs your permission. Tap once to enter.</span><button type="button" onClick={() => void toggleFullscreen()}>Enter fullscreen <Maximize2 size={15}/></button></div>}
-    {moderatorRequest && <div className="moderator-request-banner" role="status"><span>{moderatorRequest.hostName} asks you to turn on your {moderatorRequest.media === "microphone" ? "microphone" : "camera"}. You choose whether to allow it.</span><button type="button" onClick={() => void acceptModeratorRequest()}>Review request</button><button type="button" className="request-dismiss" onClick={() => setModeratorRequest(null)} aria-label="Dismiss request"><X size={15}/></button></div>}
-    {privateNotice && <div className="room-private-notice" role="status"><span><MessageCircle size={16}/> Private message from <b>{privateNotice.name}</b></span><button type="button" onClick={() => openPrivateContact(privateNotice)}>Open chat</button><button type="button" className="notice-dismiss" onClick={() => setPrivateNotice(null)} aria-label="Dismiss notification"><X size={14}/></button></div>}
+  return <div className={`conference-fullscreen-target ${fullScreen ? "is-fullscreen" : ""} ${pseudoFull ? "is-pseudo-fullscreen" : ""} ${fullScreen && controlsVisible ? "controls-shown" : ""}`} data-theme={theme} ref={fullScreenRef} style={{ "--dock-space": fullScreen ? (controlsVisible ? `${dockHeight}px` : "0px") : `${dockHeight || 110}px` } as CSSProperties}>
     <div className="conference-media-area">
       <RoomAudioRenderer />
       <div className="room-top-stack">
         <div className="room-fullscreen-meeting-title" title={meeting.title}>{meeting.title}</div>
         <div className="active-count-pill" role="status" aria-live="polite" title="People currently in this meeting"><Users size={14}/><b>{participants.length}</b><span>{participants.length === 1 ? "person" : "people"} in the meeting</span></div>
-        {recordingState && <div className={`meeting-recording-banner meeting-recording-${recordingState.status}`} role="status" aria-live="polite"><span className="meeting-recording-dot"/><b>{recordingState.status === "recording" ? "Recording" : recordingState.status === "consent_pending" ? "Waiting for recording consent" : recordingState.status === "uploading" ? "Saving recording" : recordingState.status === "ready" ? "Recording saved" : recordingState.status === "failed" ? "Recording upload failed" : recordingState.status === "declined" ? "Recording declined" : "Recording"}</b>{recordingState.status === "consent_pending" && <small>{recordingState.consents.filter((item) => item.decision === "accepted").length}/{recordingState.consents.length} approved</small>}{recordingState.status === "uploading" && <><small>{recordingState.uploadProgressPercent || 0}% uploaded</small><span className="meeting-recording-progress"><i style={{ width: `${Math.max(0, Math.min(100, recordingState.uploadProgressPercent || 0))}%` }}/></span></>}</div>}
+        {RECORDING_UI_ENABLED && recordingState && <div className={`meeting-recording-banner meeting-recording-${recordingState.status}`} role="status" aria-live="polite"><span className="meeting-recording-dot"/><b>{recordingState.status === "recording" ? "Recording" : recordingState.status === "consent_pending" ? "Waiting for recording consent" : recordingState.status === "uploading" ? "Saving recording" : recordingState.status === "ready" ? "Recording saved" : recordingState.status === "failed" ? "Recording upload failed" : recordingState.status === "declined" ? "Recording declined" : "Recording"}</b>{recordingState.status === "consent_pending" && <small>{recordingState.consents.filter((item) => item.decision === "accepted").length}/{recordingState.consents.length} approved</small>}{recordingState.status === "uploading" && <><small>{recordingState.uploadProgressPercent || 0}% uploaded</small><span className="meeting-recording-progress"><i style={{ width: `${Math.max(0, Math.min(100, recordingState.uploadProgressPercent || 0))}%` }}/></span></>}</div>}
         {participants.filter((participant) => raisedHands[participant.identity]).map((participant) => <div className="raised-hand-chip" key={participant.identity} title={`${participantName(participant) || "Participant"} raised a hand`}><Hand size={13}/><span>{participantName(participant) || "Participant"}{participant.identity === localIdentity ? " (You)" : ""}</span></div>)}
       </div>
       <div className={`participant-grid-wrap ${screenShare ? "has-screen-share" : ""}`}>
@@ -2862,7 +3117,8 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
             const isHost = getParticipantRole(participant) === "host";
             const hand = Boolean(raisedHands[participant.identity]);
             const speaking = participant.identity === localIdentity ? localVoiceActivity.speaking : participant.isSpeaking;
-            return <div className={`participant-card ${speaking ? "participant-speaking" : ""} ${isHost ? "participant-host" : ""} ${participant.identity === localIdentity ? "participant-local" : ""} ${participant.identity === spotlightIdentity ? "participant-spotlight" : ""}`} key={participant.identity}>
+            const cameraVideoOn = isTrackReference(trackRef!) && Boolean(trackRef!.publication?.track) && !trackRef!.publication?.isMuted;
+            return <div className={`participant-card ${speaking && cameraVideoOn ? "participant-speaking" : ""} ${isHost ? "participant-host" : ""} ${participant.identity === localIdentity ? "participant-local" : ""} ${participant.identity === spotlightIdentity ? "participant-spotlight" : ""}`} key={participant.identity}>
               <ParticipantTile trackRef={trackRef!} />
               <ParticipantAvatar trackRef={trackRef!} participant={participant} />
               {isHost && <span className="participant-role-label">HOST</span>}
@@ -2871,8 +3127,6 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
           })}
         </div>
         {reactions.length > 0 && <div className="reaction-float-stack" aria-live="polite">{reactions.map((reaction) => <div className="reaction-float" key={reaction.id} style={{ "--x": `${reaction.x}%`, "--rise": `${reaction.rise}%`, "--rs": reaction.scale } as CSSProperties}><span className={`reaction-emoji reaction-emoji-${reactionKind(reaction.emoji)}`}>{reaction.emoji}</span><b>{reaction.name}</b></div>)}</div>}
-        {presenceToasts.length > 0 && <div className={`room-presence-stack ${messageToast ? "room-presence-stack-raised" : ""}`} aria-live="polite">{presenceToasts.map((toast) => <div className={`room-presence-toast room-presence-${toast.kind}`} key={toast.id} role="status"><span className="room-presence-icon">{toast.kind === "joined" ? <LogIn size={15}/> : <LogOut size={15}/>}</span><span className="room-presence-text"><b>{toast.name}</b> {toast.kind === "joined" ? "joined the meeting" : "left the meeting"}</span></div>)}</div>}
-        {messageToast && <div className="room-message-toast" key={messageToast.id} role="status" aria-live="polite"><span className="room-message-toast-icon"><MessageCircle size={16}/></span><span className="room-message-toast-body"><b>{messageToast.name}</b><span>{messageToast.text}</span></span></div>}
         {pages > 1 && <div className="participant-pagination"><span>Screen {currentPage + 1} of {pages} · {visualParticipants.length} participants</span><div><button className="room-icon-button" onClick={() => setPage(Math.max(0, currentPage - 1))} disabled={currentPage === 0} aria-label="Previous participant screen"><ChevronLeft size={18}/></button><button className="room-icon-button" onClick={() => setPage(Math.min(pages - 1, currentPage + 1))} disabled={currentPage >= pages - 1} aria-label="Next participant screen"><ChevronRight size={18}/></button></div></div>}
       </div>
       <div className={`room-control-dock ${!fullScreen || controlsVisible ? "dock-open" : "dock-hidden"}`} ref={dockRef} aria-hidden={fullScreen && !controlsVisible}>
@@ -2883,37 +3137,46 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
           <button className={`room-control-button ${handRaised ? "control-selected" : ""}`} onClick={() => void toggleHand()} title={handRaised ? "Lower your hand" : "Raise your hand"}><Hand size={18}/><span>{handRaised ? "Lower hand" : "Raise hand"}</span></button>
         </div>
         <div className="room-control-group room-control-row-b">
-          <button className={`room-control-button message-control ${messagesOpen ? "control-selected" : ""}`} onClick={() => setMessagesOpen(true)} title="Open room messages"><MessageCircle size={18}/><span>Messages</span>{chatMessages.length > 0 && <i>{chatMessages.length}</i>}</button>
-          <button className={`room-control-button people-control ${peopleOpen ? "control-selected" : ""}`} onClick={() => { setPeopleOpen(true); setMessagesOpen(false); }} title="See who is in the meeting"><Users size={18}/><span>People</span><i>{participants.length}</i></button>
-          {role === "host" && <button className={`room-control-button recording-control ${recordingState?.status === "recording" ? "recording-control-active" : ""}`} onClick={() => recordingState?.status === "recording" ? void stopRecording() : recordingState?.status === "uploading" || recordingState?.status === "consent_pending" ? undefined : recordingState?.status === "failed" && recordingState.canRetry ? void retryRecordingUpload() : void startRecording()} disabled={recordingBusy || recordingState?.status === "uploading" || recordingState?.status === "consent_pending"} title={recordingState?.status === "recording" ? "Stop recording" : recordingState?.status === "failed" && recordingState.canRetry ? "Retry recording upload" : "Start meeting recording"}>{recordingBusy ? <LoaderCircle size={18} className="spin"/> : <span className="meeting-recording-dot"/>}<span>{recordingState?.status === "recording" ? "Stop" : recordingState?.status === "uploading" ? "Saving" : recordingState?.status === "consent_pending" ? "Consent" : recordingState?.status === "failed" && recordingState.canRetry ? "Retry upload" : "Record"}</span></button>}
+          <button className={`room-control-button message-control ${messagesOpen ? "control-selected" : ""}`} onClick={() => { setMessagesOpen(true); setPeopleOpen(false); setDirectContact(null); setNotesOpen(false); }} title="Open room messages"><MessageCircle size={18}/><span>Messages</span>{chatMessages.length > 0 && <i>{chatMessages.length}</i>}</button>
+          <button className={`room-control-button people-control ${peopleOpen ? "control-selected" : ""}`} onClick={() => { setPeopleViewTab("people"); setPeopleOpen(true); setMessagesOpen(false); setDirectContact(null); setNotesOpen(false); }} title="See who is in the meeting"><Users size={18}/><span>People</span><i>{participants.length}</i></button>
+          {RECORDING_UI_ENABLED && role === "host" && <button className={`room-control-button recording-control ${recordingState?.status === "recording" ? "recording-control-active" : ""}`} onClick={() => recordingState?.status === "recording" ? void stopRecording() : recordingState?.status === "uploading" || recordingState?.status === "consent_pending" ? undefined : recordingState?.status === "failed" && recordingState.canRetry ? void retryRecordingUpload() : void startRecording()} disabled={recordingBusy || recordingState?.status === "uploading" || recordingState?.status === "consent_pending"} title={recordingState?.status === "recording" ? "Stop recording" : recordingState?.status === "failed" && recordingState.canRetry ? "Retry recording upload" : "Start meeting recording"}>{recordingBusy ? <LoaderCircle size={18} className="spin"/> : <span className="meeting-recording-dot"/>}<span>{recordingState?.status === "recording" ? "Stop" : recordingState?.status === "uploading" ? "Saving" : recordingState?.status === "consent_pending" ? "Consent" : recordingState?.status === "failed" && recordingState.canRetry ? "Retry upload" : "Record"}</span></button>}
+          <button className={`room-control-button notes-control ${notesOpen ? "control-selected" : ""}`} onClick={() => { setNotesOpen(true); setMessagesOpen(false); setPeopleOpen(false); setDirectContact(null); }} title="Open collaborative meeting notes"><FileText size={18}/><span>Notes</span></button>
           <div className="reaction-control-wrap"><button data-popover="reactions" className={`room-control-button ${reactionsOpen ? "control-selected" : ""}`} onClick={() => setReactionsOpen((open) => !open)} title="Send an emoji or sticker reaction"><Smile size={18}/><span>React</span></button>{reactionsOpen && <div data-popover="reactions" className="reaction-picker" role="dialog" aria-label="Choose a reaction">{REACTION_SET.map((emoji) => <button key={emoji} onClick={() => void react(emoji)} aria-label={`Send ${emoji}`}>{emoji}</button>)}</div>}</div>
-        <div className="room-control-side"><button className="room-icon-button fullscreen-control" onClick={() => void toggleFullscreen()} aria-label={fullScreen ? "Exit fullscreen" : "Enter fullscreen"} title={fullScreen ? "Exit fullscreen" : "Fullscreen"}>{fullScreen ? <Minimize2 size={18}/> : <Maximize2 size={18}/>}</button>{role === "host" && <button className="room-icon-button room-end-button" onClick={onEndForEveryone} disabled={ending} title="End for everyone" aria-label="End for everyone"><X size={18}/></button>}<button className="room-leave-button" onClick={onLeave}><DoorOpen size={17}/><span>Leave</span></button></div></div>
+        <div className="room-control-side"><button className="room-icon-button room-theme-toggle" onClick={toggleTheme} aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`} title={`Switch to ${theme === "light" ? "dark" : "light"} mode`}>{theme === "light" ? <Moon size={17}/> : <Sun size={17}/>}</button><button className="room-icon-button fullscreen-control" onClick={() => void toggleFullscreen()} aria-label={fullScreen ? "Exit fullscreen" : "Enter fullscreen"} title={fullScreen ? "Exit fullscreen" : "Fullscreen"}>{fullScreen ? <Minimize2 size={18}/> : <Maximize2 size={18}/>}</button>{role === "host" && <button className="room-icon-button room-end-button" onClick={onEndForEveryone} disabled={ending} title="End for everyone" aria-label="End for everyone"><X size={18}/></button>}<button className="room-leave-button" onClick={onLeave}><DoorOpen size={17}/><span>Leave</span></button></div></div>
       </div>
     </div>
+    {(fullscreenPrompt || moderatorRequest || privateNotice || presenceToasts.length > 0 || messageToast) && <div className="room-bottom-notifications" aria-live="polite">
+      {fullscreenPrompt && !fullScreen && <div className="fullscreen-fallback-prompt" role="status"><span>Fullscreen needs your permission. Tap once to enter.</span><button type="button" onClick={() => void toggleFullscreen()}>Enter fullscreen <Maximize2 size={15}/></button></div>}
+      {moderatorRequest && <div className="moderator-request-banner" role="status"><span>{moderatorRequest.hostName} asks you to turn on your {moderatorRequest.media === "microphone" ? "microphone" : "camera"}. You choose whether to allow it.</span><button type="button" onClick={() => void acceptModeratorRequest()}>Review request</button><button type="button" className="request-dismiss" onClick={() => setModeratorRequest(null)} aria-label="Dismiss request"><X size={15}/></button></div>}
+      {privateNotice && <div className="room-private-notice" role="status"><span><MessageCircle size={16}/> Private message from <b>{privateNotice.name}</b></span><button type="button" onClick={() => openPrivateContact(privateNotice)}>Open chat</button><button type="button" className="notice-dismiss" onClick={() => setPrivateNotice(null)} aria-label="Dismiss notification"><X size={14}/></button></div>}
+      {presenceToasts.length > 0 && <div className="room-presence-stack" aria-live="polite">{presenceToasts.map((toast) => <div className={`room-presence-toast room-presence-${toast.kind}`} key={toast.id} role="status"><span className="room-presence-icon">{toast.kind === "joined" ? <LogIn size={15}/> : <LogOut size={15}/>}</span><span className="room-presence-text"><b>{toast.name}</b> {toast.kind === "joined" ? "joined the meeting" : "left the meeting"}</span></div>)}</div>}
+      {messageToast && <button type="button" className="room-message-toast" key={messageToast.id} onClick={() => { setMessagesOpen(true); setPeopleOpen(false); }} aria-label={`Open message from ${messageToast.name}`}><span className="room-message-toast-icon"><MessageCircle size={16}/></span><span className="room-message-toast-body"><b>{messageToast.name}</b><span>{messageToast.text}</span></span></button>}
+    </div>}
     {mediaModal && <MediaPermissionModal
       kind={mediaModal.kind}
       state={mediaModal.state}
       skipLabel="Not now"
       grantedLabel="Turning on…"
       onRetry={() => void askMedia(mediaModal.kind)}
-      onGranted={() => { mediaAllowed[mediaModal.kind] = true; void enableMedia(mediaModal.kind); }}
+      onGranted={() => { mediaAllowed[mediaModal.kind as MediaKind] = true; void enableMedia(mediaModal.kind); }}
       onSkip={() => { mediaAttemptRef.current++; setMediaModal(null); }}
       onClose={() => { mediaAttemptRef.current++; setMediaModal(null); }}
     />}
-    {recordingState?.status === "consent_pending" && recordingState.myDecision === "pending" && <div className="recording-consent-backdrop" role="presentation"><section className="recording-consent-modal" role="dialog" aria-modal="true" aria-labelledby="recording-consent-title"><span className="recording-consent-icon"><Video size={24}/></span><p className="section-overline">MEETING RECORDING REQUEST</p><h2 id="recording-consent-title">The host would like to record</h2><p>The recording will capture the meeting's shared audio mix and participant video layout. Your choice is saved with the meeting record. You can decline; recording will not begin unless everyone currently connected accepts.</p><div className="recording-consent-list">{recordingState.consents.map((item) => <span key={item.identity}><b>{item.displayName}</b><small>{item.decision === "accepted" ? "Accepted" : item.decision === "declined" ? "Declined" : "Awaiting response"}</small></span>)}</div><div className="recording-consent-actions"><button type="button" className="button button-soft" disabled={recordingConsentBusy} onClick={() => void respondToRecordingConsent(false)}>Decline</button><button type="button" className="button button-primary" disabled={recordingConsentBusy} onClick={() => void respondToRecordingConsent(true)}>{recordingConsentBusy ? "Saving…" : "I consent"}</button></div></section></div>}
-    {messagesOpen && <div className="messages-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setMessagesOpen(false); }}><section className="messages-modal" role="dialog" aria-modal="true" aria-label="Meeting messages"><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setMessagesOpen(false)} aria-label="Back to call"><ArrowLeft size={18}/></button><div><b>Meeting messages</b><small>Chat with everyone in this room</small></div><button className="room-icon-button" onClick={() => setMessagesOpen(false)} aria-label="Close messages"><X size={18}/></button></header><div className="messages-modal-body">{chatMessages.length === 0 ? <div className="messages-empty"><MessageCircle size={25}/><b>No messages yet</b><span>Send a note to everyone in this gathering.</span></div> : chatMessages.map((message, index) => <article className={`chat-message ${message.from?.identity === localIdentity ? "chat-message-own" : ""}`} key={`${message.timestamp}-${index}`}><span className="chat-message-author">{message.from?.name || (message.from?.identity === localIdentity ? "You" : "Choir guest")}</span><p>{message.message}</p><time>{new Date(message.timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></article>)}<div ref={chatEndRef}/></div><form className="messages-composer" onSubmit={sendMessage}><input value={messageText} onChange={(event) => setMessageText(event.target.value)} placeholder="Write a message…" maxLength={2000} aria-label="Message"/><button className="button button-primary" type="submit" disabled={!messageText.trim() || isSending} aria-label="Send message"><Send size={17}/></button></form></section></div>}
-    {peopleOpen && <div className="messages-modal-backdrop people-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setPeopleOpen(false); }}><section className="messages-modal people-modal" role="dialog" aria-modal="true" aria-label="People in this meeting"><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setPeopleOpen(false)} aria-label="Back to call"><ArrowLeft size={18}/></button><div><b>People</b><small>{participants.length} currently online · presence updates live</small></div><button className="room-icon-button" onClick={() => setPeopleOpen(false)} aria-label="Close people"><X size={18}/></button></header><div className="people-directory-body"><div className="people-online-heading"><span><span className="people-online-dot"/> Online now</span><b>{participants.length}</b></div>{[...participants].sort((a, b) => getParticipantRole(a) === getParticipantRole(b) ? participantName(a).localeCompare(participantName(b)) : getParticipantRole(a) === "host" ? -1 : 1).map((person) => {
+    {RECORDING_UI_ENABLED && recordingState?.status === "consent_pending" && recordingState.myDecision === "pending" && <div className="recording-consent-backdrop" role="presentation"><section className="recording-consent-modal" role="dialog" aria-modal="true" aria-labelledby="recording-consent-title"><span className="recording-consent-icon"><Video size={24}/></span><p className="section-overline">MEETING RECORDING REQUEST</p><h2 id="recording-consent-title">The host would like to record</h2><p>The recording will capture the meeting's shared audio mix and participant video layout. Your choice is saved with the meeting record. You can decline; recording will not begin unless everyone currently connected accepts.</p><div className="recording-consent-list">{recordingState.consents.map((item) => <span key={item.identity}><b>{item.displayName}</b><small>{item.decision === "accepted" ? "Accepted" : item.decision === "declined" ? "Declined" : "Awaiting response"}</small></span>)}</div><div className="recording-consent-actions"><button type="button" className="button button-soft" disabled={recordingConsentBusy} onClick={() => void respondToRecordingConsent(false)}>Decline</button><button type="button" className="button button-primary" disabled={recordingConsentBusy} onClick={() => void respondToRecordingConsent(true)}>{recordingConsentBusy ? "Saving…" : "I consent"}</button></div></section></div>}
+    {notesOpen && <div className="messages-modal-backdrop meeting-notes-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setNotesOpen(false); }}><section className="messages-modal meeting-notes-modal" role="dialog" aria-modal="true" aria-label="Collaborative meeting notes"><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setNotesOpen(false)} aria-label="Back to call"><ArrowLeft size={18}/></button><div className="meeting-panel-heading"><b>Meeting notes</b><small>{meeting.title}</small></div><button className="room-icon-button" onClick={() => setNotesOpen(false)} aria-label="Close notes"><X size={18}/></button></header><nav className="meeting-panel-tabs" aria-label="Meeting tools"><button type="button" className="meeting-panel-tab" onClick={() => { setNotesOpen(false); setMessagesOpen(true); }}>Messages</button><button type="button" className="meeting-panel-tab" onClick={() => { setNotesOpen(false); setPeopleViewTab("people"); setPeopleOpen(true); }}>People</button><button type="button" className="meeting-panel-tab" onClick={() => { setNotesOpen(false); setPeopleViewTab("private"); setPeopleOpen(true); }}>Private chats</button><button type="button" className="meeting-panel-tab meeting-panel-tab-active" aria-current="page">Notes</button></nav><div className="meeting-notes-body"><label className="meeting-notes-title-label">Note title<input value={notesTitle} onChange={(event) => updateMeetingNotesTitle(event.target.value)} onBlur={() => { if (notesDirtyRef.current && !notesConflict) void saveMeetingNotes(); }} maxLength={120} aria-label="Meeting notes title"/></label><div className="meeting-notes-toolbar" role="toolbar" aria-label="Note formatting"><button type="button" title="Bold" aria-label="Bold" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("bold")}><Bold size={16}/></button><button type="button" title="Italic" aria-label="Italic" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("italic")}><Italic size={16}/></button><button type="button" title="Underline" aria-label="Underline" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("underline")}><Underline size={16}/></button><button type="button" title="Heading 1" aria-label="Heading 1" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("formatBlock", "<h1>")}><Heading1 size={16}/></button><button type="button" title="Heading 2" aria-label="Heading 2" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("formatBlock", "<h2>")}><Heading2 size={16}/></button><button type="button" title="Bulleted list" aria-label="Bulleted list" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("insertUnorderedList")}><List size={16}/></button><button type="button" title="Numbered list" aria-label="Numbered list" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("insertOrderedList")}><ListOrdered size={16}/></button><button type="button" title="Indent" aria-label="Indent" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("indent")}><IndentIncrease size={16}/></button><button type="button" title="Outdent" aria-label="Outdent" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("outdent")}><IndentDecrease size={16}/></button></div>{notesLoading ? <div className="meeting-notes-loading"><LoaderCircle size={22} className="spin"/> Loading notes…</div> : <div ref={notesEditorRef} className="meeting-notes-editor" contentEditable suppressContentEditableWarning role="textbox" aria-label="Collaborative meeting notes editor" aria-multiline="true" data-placeholder="Capture decisions, action items, and key points together…" onInput={(event) => updateMeetingNotes(event.currentTarget.innerHTML)} onBlur={() => { if (notesDirtyRef.current && !notesConflict) void saveMeetingNotes(); }}></div>}{notesError && <div className="meeting-notes-error" role="alert">{notesError}{notesConflict && <div className="meeting-notes-conflict-actions"><button type="button" onClick={() => void loadMeetingNotes(true)}>Load latest</button><button type="button" onClick={() => void saveMeetingNotes(true)}>Keep my version</button></div>}</div>}<div className="meeting-notes-footer"><span className="meeting-notes-save-state">{notesSaving ? "Saving…" : notesDirty ? "Unsaved changes" : notesUpdatedBy ? `Saved · ${notesUpdatedBy}` : "Saved for meeting participants"}</span><button type="button" className="button button-soft button-small" onClick={exportNotesPdf}><Download size={15}/> Export PDF</button><button type="button" className="button button-primary button-small" onClick={() => void saveMeetingNotes(notesConflict)} disabled={!notesDirty || notesSaving}><Check size={15}/> Save now</button></div></div></section></div>}
+    {messagesOpen && <div className="messages-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setMessagesOpen(false); }}><section className="messages-modal" role="dialog" aria-modal="true" aria-label="Meeting messages"><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setMessagesOpen(false)} aria-label="Back to call"><ArrowLeft size={18}/></button><div className="meeting-panel-heading"><b>Meeting messages</b><small>Chat with everyone in this room</small></div><button className="room-icon-button" onClick={() => setMessagesOpen(false)} aria-label="Close messages"><X size={18}/></button></header><nav className="meeting-panel-tabs" aria-label="Meeting tools"><button type="button" className="meeting-panel-tab meeting-panel-tab-active" aria-current="page">Messages</button><button type="button" className="meeting-panel-tab" onClick={() => { setMessagesOpen(false); setPeopleViewTab("people"); setPeopleOpen(true); }}>People</button><button type="button" className="meeting-panel-tab" onClick={() => { setMessagesOpen(false); setPeopleViewTab("private"); setPeopleOpen(true); }}>Private chats</button><button type="button" className="meeting-panel-tab" onClick={() => { setMessagesOpen(false); setNotesOpen(true); }}>Notes</button></nav><div className="messages-modal-body">{chatMessages.length === 0 ? <div className="messages-empty"><MessageCircle size={25}/><b>No messages yet</b><span>Send a note to everyone in this gathering.</span></div> : chatMessages.map((message, index) => <article className={`chat-message ${message.from?.identity === localIdentity ? "chat-message-own" : ""}`} key={`${message.timestamp}-${index}`}><span className="chat-message-author">{message.from?.name || (message.from?.identity === localIdentity ? "You" : "Choir guest")}</span><p>{message.message}</p><time>{new Date(message.timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></article>)}<div ref={chatEndRef}/></div><form className="messages-composer" onSubmit={sendMessage}><input value={messageText} onChange={(event) => setMessageText(event.target.value)} placeholder="Write a message…" maxLength={2000} aria-label="Message"/><button className="button button-primary" type="submit" disabled={!messageText.trim() || isSending} aria-label="Send message"><Send size={17}/></button></form></section></div>}
+    {peopleOpen && <div className="messages-modal-backdrop people-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setPeopleOpen(false); }}><section className="messages-modal people-modal" role="dialog" aria-modal="true" aria-label="People and private chats"><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setPeopleOpen(false)} aria-label="Back to call"><ArrowLeft size={18}/></button><div className="meeting-panel-heading"><b>{peopleViewTab === "people" ? "People" : "Private chats"}</b><small>{peopleViewTab === "people" ? `${participants.length} currently online · presence updates live` : `${recentConversations.length} saved conversations`}</small></div><button className="room-icon-button" onClick={() => setPeopleOpen(false)} aria-label="Close people"><X size={18}/></button></header><nav className="meeting-panel-tabs" aria-label="Meeting tools"><button type="button" className={`meeting-panel-tab ${peopleViewTab === "people" ? "meeting-panel-tab-active" : ""}`} aria-current={peopleViewTab === "people" ? "page" : undefined} onClick={() => setPeopleViewTab("people")}>People</button><button type="button" className={`meeting-panel-tab ${peopleViewTab === "private" ? "meeting-panel-tab-active" : ""}`} aria-current={peopleViewTab === "private" ? "page" : undefined} onClick={() => setPeopleViewTab("private")}>Private chats</button><button type="button" className="meeting-panel-tab" onClick={() => { setPeopleOpen(false); setMessagesOpen(true); }}>Messages</button><button type="button" className="meeting-panel-tab" onClick={() => { setPeopleOpen(false); setNotesOpen(true); }}>Notes</button></nav><div className="people-directory-body">{peopleViewTab === "people" ? <><div className="people-online-heading"><span><span className="people-online-dot"/> Online now</span><b>{participants.length}</b></div>{[...participants].sort((a, b) => getParticipantRole(a) === getParticipantRole(b) ? participantName(a).localeCompare(participantName(b)) : getParticipantRole(a) === "host" ? -1 : 1).map((person) => {
       const isSelf = person.identity === localIdentity;
       const micMuted = person.getTrackPublication(Track.Source.Microphone)?.isMuted ?? true;
       const cameraMuted = person.getTrackPublication(Track.Source.Camera)?.isMuted ?? true;
       const isHostPerson = getParticipantRole(person) === "host";
       const busy = moderationBusy === person.identity;
       return <article className="people-person-row" key={person.identity}><ProfilePhoto src={participantPicture(person.metadata, person.identity)} name={participantName(person)} size={128} className="people-person-avatar"/><div className="people-person-details"><div className="people-person-title"><b>{participantName(person) || "Participant"}{isSelf ? " · You" : ""}</b>{isHostPerson && <span className="people-host-tag">HOST</span>}</div><small><span className="people-online-dot"/> Connected {person.isSpeaking ? "· Speaking" : ""}{micMuted ? " · Mic off" : " · Mic on"}{cameraMuted ? " · Camera off" : " · Camera on"}</small></div>{!isSelf && <div className="people-person-actions"><button type="button" onClick={() => void focusParticipant(person.identity)} title={spotlightIdentity === person.identity ? "Clear participant focus" : "Bring participant into the main view"}>{spotlightIdentity === person.identity ? "Unfocus" : "Focus"}</button><button type="button" onClick={() => openPrivateConversation(person)} title={`Private message ${participantName(person) || "participant"}`}><MessageCircle size={15}/><span>Message</span></button>{role === "host" && !isHostPerson && <details className="people-more-menu"><summary aria-label={`Host actions for ${participantName(person) || "participant"}`}><ChevronDown size={16}/></summary><div className="people-more-popover"><button type="button" disabled={busy} onClick={() => void moderateParticipant(person, micMuted ? "request-unmute" : "mute-mic")}>{micMuted ? "Request microphone" : "Mute microphone"}</button><button type="button" disabled={busy} onClick={() => void moderateParticipant(person, cameraMuted ? "request-camera" : "disable-camera")}>{cameraMuted ? "Request camera" : "Disable camera"}</button><button type="button" disabled={busy} onClick={() => void moderateParticipant(person, "remove")}>Remove from meeting</button><button type="button" className="people-ban-action" disabled={busy} onClick={() => void moderateParticipant(person, "ban")}>Remove and block re-entry</button></div></details>}</div>}{isSelf && <span className="people-you-tag">You</span>}</article>;
-    })}{participants.length === 1 && <div className="people-alone-note">You are the only person connected right now.</div>}{recentConversations.length > 0 && <section className="people-recent-conversations"><div className="people-recent-heading">Recent private conversations</div>{recentConversations.map((contact) => {
+    })}{participants.length === 1 && <div className="people-alone-note">You are the only person connected right now.</div>}</> : <section className="people-recent-conversations"><div className="people-recent-heading">Saved private conversations</div>{recentConversations.length === 0 ? <div className="messages-empty"><MessageCircle size={25}/><b>No private conversations yet</b><span>Start a one-to-one conversation from the People tab.</span></div> : recentConversations.map((contact) => {
       const online = participants.some((person) => participantUserId(person) === contact.userId);
       return <button type="button" className="people-recent-row" key={contact.userId} onClick={() => openPrivateContact({ userId: contact.userId, identity: "", name: contact.name, picture: contact.picture })}><ProfilePhoto src={contact.picture} name={contact.name} size={96} className="people-person-avatar"/><span className="people-recent-copy"><b>{contact.name}</b><small>{contact.lastMessage}</small></span><span className={`people-recent-status ${online ? "is-online" : ""}`}>{online ? "Online" : "Saved"}</span></button>;
     })}</section>}</div></section></div>}
-    {directContact && <div className="messages-modal-backdrop private-chat-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setDirectContact(null); }}><section className="messages-modal private-chat-modal" role="dialog" aria-modal="true" aria-label={`Private conversation with ${directContact.name}`}><header className="messages-modal-header"><button className="room-icon-button" onClick={() => { setDirectContact(null); setPeopleOpen(true); }} aria-label="Back to people"><ArrowLeft size={18}/></button><ProfilePhoto src={directContact.picture} name={directContact.name} size={64} className="private-chat-avatar"/><div><b>{directContact.name}</b><small>Private one-to-one conversation</small></div><button className="room-icon-button" onClick={() => setDirectContact(null)} aria-label="Close private messages"><X size={18}/></button></header><div className="messages-modal-body private-chat-body">{privateLoading ? <div className="messages-empty"><LoaderCircle size={23} className="spin"/><span>Loading private conversation…</span></div> : privateMessages.length === 0 ? <div className="messages-empty"><MessageCircle size={25}/><b>No private messages yet</b><span>Only you and {directContact.name} can see this conversation.</span></div> : privateMessages.map((message) => <article className={`chat-message ${message.senderUserId === localUserId ? "chat-message-own" : ""}`} key={message.id}><span className="chat-message-author">{message.senderUserId === localUserId ? "You" : message.senderName}</span><p>{message.message}</p><time>{new Date(message.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></article>)}<div ref={privateChatEndRef}/></div><form className="messages-composer" onSubmit={sendPrivateMessage}><input value={privateDraft} onChange={(event) => setPrivateDraft(event.target.value)} placeholder={`Message ${directContact.name} privately…`} maxLength={2000} aria-label="Private message"/><button className="button button-primary" type="submit" disabled={!privateDraft.trim() || privateSending || privateLoading} aria-label="Send private message">{privateSending ? <LoaderCircle size={17} className="spin"/> : <Send size={17}/>}</button></form></section></div>}
+    {directContact && <div className="messages-modal-backdrop private-chat-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setDirectContact(null); }}><section className="messages-modal private-chat-modal" role="dialog" aria-modal="true" aria-label={`Private conversation with ${directContact.name}`}><header className="messages-modal-header"><button className="room-icon-button" onClick={() => { setDirectContact(null); setPeopleViewTab("private"); setPeopleOpen(true); }} aria-label="Back to private chats"><ArrowLeft size={18}/></button><ProfilePhoto src={directContact.picture} name={directContact.name} size={64} className="private-chat-avatar"/><div className="meeting-panel-heading"><b>{directContact.name}</b><small>Private one-to-one conversation</small></div><button className="room-icon-button" onClick={() => { setDirectContact(null); setPeopleViewTab("private"); setPeopleOpen(true); }} aria-label="Close private messages"><X size={18}/></button></header><nav className="meeting-panel-tabs" aria-label="Meeting tools"><button type="button" className="meeting-panel-tab" onClick={() => { setDirectContact(null); setPeopleViewTab("people"); setPeopleOpen(true); }}>People</button><button type="button" className="meeting-panel-tab meeting-panel-tab-active" aria-current="page" onClick={() => { setDirectContact(null); setPeopleViewTab("private"); setPeopleOpen(true); }}>Private chats</button><button type="button" className="meeting-panel-tab" onClick={() => { setDirectContact(null); setMessagesOpen(true); }}>Messages</button><button type="button" className="meeting-panel-tab" onClick={() => { setDirectContact(null); setNotesOpen(true); }}>Notes</button></nav><div className="messages-modal-body private-chat-body">{privateLoading ? <div className="messages-empty"><LoaderCircle size={23} className="spin"/><span>Loading private conversation…</span></div> : privateMessages.length === 0 ? <div className="messages-empty"><MessageCircle size={25}/><b>No private messages yet</b><span>Only you and {directContact.name} can see this conversation.</span></div> : privateMessages.map((message) => <article className={`chat-message ${message.senderUserId === localUserId ? "chat-message-own" : ""}`} key={message.id}><span className="chat-message-author">{message.senderUserId === localUserId ? "You" : message.senderName}</span><p>{message.message}</p><time>{new Date(message.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></article>)}<div ref={privateChatEndRef}/></div><form className="messages-composer" onSubmit={sendPrivateMessage}><input value={privateDraft} onChange={(event) => setPrivateDraft(event.target.value)} placeholder={`Message ${directContact.name} privately…`} maxLength={2000} aria-label="Private message"/><button className="button button-primary" type="submit" disabled={!privateDraft.trim() || privateSending || privateLoading} aria-label="Send private message">{privateSending ? <LoaderCircle size={17} className="spin"/> : <Send size={17}/>}</button></form></section></div>}
     {role === "host" && <span className="room-host-sr" aria-hidden="true">{meeting.ownerName} is hosting</span>}
   </div>;
 }
@@ -3171,15 +3434,31 @@ function StandaloneError({ message, action }: { message: string; action?: ReactN
 
 function ToastHost() {
   const [toast, setToast] = useState<{ message: string; action?: string; shareUrl?: string } | null>(null);
+  const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
   useEffect(() => {
+    let expiry = 0;
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<{ message: string; action?: string; shareUrl?: string }>).detail;
       setToast(detail);
-      window.setTimeout(() => setToast((current) => current === detail ? null : current), 4200);
+      window.clearTimeout(expiry);
+      expiry = window.setTimeout(() => setToast((current) => current === detail ? null : current), 4200);
     };
+    const updateTarget = () => {
+      const fullscreen = document.fullscreenElement instanceof HTMLElement && document.fullscreenElement.classList.contains("conference-fullscreen-target") ? document.fullscreenElement : null;
+      const pseudo = document.querySelector<HTMLElement>(".conference-fullscreen-target.is-pseudo-fullscreen");
+      setPortalTarget(fullscreen || pseudo || document.body);
+    };
+    updateTarget();
     window.addEventListener("meet-toast", handler);
-    return () => window.removeEventListener("meet-toast", handler);
+    document.addEventListener("fullscreenchange", updateTarget);
+    window.addEventListener("meet-pseudo-fullscreen-change", updateTarget);
+    return () => {
+      window.clearTimeout(expiry);
+      window.removeEventListener("meet-toast", handler);
+      document.removeEventListener("fullscreenchange", updateTarget);
+      window.removeEventListener("meet-pseudo-fullscreen-change", updateTarget);
+    };
   }, []);
-  if (!toast) return null;
-  return <div className="toast-message" role="status"><span className="toast-check"><Check size={15}/></span><span>{toast.message}</span>{toast.action && toast.shareUrl && <button onClick={() => void navigator.clipboard.writeText(toast.shareUrl!)}>{toast.action}</button>}<button className="toast-close" onClick={() => setToast(null)} aria-label="Dismiss"><X size={14}/></button></div>;
+  if (!toast || !portalTarget) return null;
+  return createPortal(<div className="toast-message" role="status"><span className="toast-check"><Check size={15}/></span><span>{toast.message}</span>{toast.action && toast.shareUrl && <button onClick={() => void navigator.clipboard.writeText(toast.shareUrl!)}>{toast.action}</button>}<button className="toast-close" onClick={() => setToast(null)} aria-label="Dismiss"><X size={14}/></button></div>, portalTarget);
 }

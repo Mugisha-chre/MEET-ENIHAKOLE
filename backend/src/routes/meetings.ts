@@ -5,6 +5,7 @@ import { Meeting } from "../models/Meeting.js";
 import { PrivateMessage } from "../models/PrivateMessage.js";
 import { Recording } from "../models/Recording.js";
 import { Attendance } from "../models/Attendance.js";
+import { MeetingNote } from "../models/MeetingNote.js";
 import { PlatformEvent } from "../models/PlatformEvent.js";
 import { optionalAuth, requireAuth, requireRegisteredAuth, signGuestAccessToken } from "../middleware/auth.js";
 import { expireStaleMeetingsThrottled } from "../lib/expiry.js";
@@ -36,6 +37,27 @@ const privateMessageSchema = z.object({
   recipientUserId: z.string().trim().min(1).max(100),
   message: z.string().trim().min(1).max(2000),
 });
+const meetingNotesSchema = z.object({
+  title: z.string().trim().min(1).max(120).default("Meeting notes"),
+  contentHtml: z.string().max(50000),
+  expectedRevision: z.coerce.number().int().min(0).default(0),
+  force: z.boolean().optional().default(false),
+});
+
+// Notes allow a compact formatting subset only. Strip dangerous container elements
+// (including their contents), remove every attribute, then retain semantic tags.
+function sanitizeMeetingNoteHtml(value: string): string {
+  const withoutActiveContent = value.replace(/<(script|style|iframe|object|embed|svg|math|form|input|button|video|audio)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, "");
+  const allowed = new Set(["p", "div", "br", "strong", "b", "em", "i", "u", "h1", "h2", "h3", "ul", "ol", "li", "blockquote", "pre", "code"]);
+  return withoutActiveContent.replace(/<\/?([a-z0-9]+)\b[^>]*>/gi, (tag, name: string) => {
+    const key = name.toLowerCase();
+    if (!allowed.has(key)) return "";
+    // Browsers commonly create DIV blocks in contenteditable; normalize them
+    // to paragraphs so line breaks survive saving and PDF export.
+    const normalized = key === "div" ? "p" : key;
+    return tag.startsWith("</") ? `</${normalized}>` : `<${normalized}>`;
+  }).slice(0, 50000);
+}
 
 function slugFromTitle(title: string): string {
   const prefix = title
@@ -57,6 +79,7 @@ function publicMeeting(meeting: any, currentUserId?: string) {
     ownerName: meeting.ownerName,
     ownerId: String(meeting.owner),
     isOwner: Boolean(currentUserId && String(meeting.owner) === currentUserId),
+    isParticipant: Boolean(currentUserId && (meeting.participantAccounts || []).some((person: any) => person.userId === currentUserId)),
     startsAt: new Date(meeting.startsAt).toISOString(),
     durationMinutes: meeting.durationMinutes,
     timezone: meeting.timezone,
@@ -212,6 +235,73 @@ router.post("/", requireRegisteredAuth, requireAuth, async (req, res) => {
   } catch (error) {
     console.error("[meetings/create] failed", error);
     return res.status(500).json({ error: "Could not schedule this meeting." });
+  }
+});
+
+router.get("/:slug/notes", requireAuth, async (req, res) => {
+  try {
+    if (req.auth!.isGuest && req.auth!.meetingSlug !== req.params.slug) return res.status(403).json({ error: "This guest session belongs to another meeting." });
+    const meeting = await Meeting.findOne({ slug: req.params.slug }).select("_id slug owner participantAccounts").lean();
+    if (!meeting) return res.status(404).json({ error: "Meeting not found." });
+    const knownParticipant = String(meeting.owner) === req.auth!.userId
+      || (meeting.participantAccounts || []).some((person: any) => person.userId === req.auth!.userId)
+      || Boolean(await Attendance.exists({ meetingSlug: meeting.slug, participantId: req.auth!.userId }));
+    if (!knownParticipant) return res.status(403).json({ error: "Join this meeting before accessing its notes." });
+    const note = await MeetingNote.findOne({ meeting: meeting._id }).lean();
+    return res.json({ note: note ? {
+      title: note.title, contentHtml: note.contentHtml, revision: note.revision,
+      updatedAt: note.updatedAt, updatedByName: note.updatedByName,
+    } : { title: "Meeting notes", contentHtml: "", revision: 0, updatedAt: null, updatedByName: "" } });
+  } catch (error) {
+    console.error("[meetings/notes:get] failed", error);
+    return res.status(500).json({ error: "Could not load meeting notes." });
+  }
+});
+
+router.put("/:slug/notes", requireAuth, async (req, res) => {
+  const parsed = meetingNotesSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ error: "Check the meeting note title and content." });
+  try {
+    if (req.auth!.isGuest && req.auth!.meetingSlug !== req.params.slug) return res.status(403).json({ error: "This guest session belongs to another meeting." });
+    const meeting = await Meeting.findOne({ slug: req.params.slug }).select("_id slug owner participantAccounts").lean();
+    if (!meeting) return res.status(404).json({ error: "Meeting not found." });
+    const knownParticipant = String(meeting.owner) === req.auth!.userId
+      || (meeting.participantAccounts || []).some((person: any) => person.userId === req.auth!.userId)
+      || Boolean(await Attendance.exists({ meetingSlug: meeting.slug, participantId: req.auth!.userId }));
+    if (!knownParticipant) return res.status(403).json({ error: "Only meeting participants can edit these notes." });
+    const update = {
+      $set: {
+        meetingSlug: meeting.slug,
+        title: parsed.data.title,
+        contentHtml: sanitizeMeetingNoteHtml(parsed.data.contentHtml),
+        updatedBy: req.auth!.userId,
+        updatedByName: req.auth!.displayName.slice(0, 80) || "Participant",
+      },
+      $inc: { revision: 1 },
+      $setOnInsert: { meeting: meeting._id },
+    };
+    const filter: Record<string, unknown> = { meeting: meeting._id };
+    if (!parsed.data.force) filter.revision = parsed.data.expectedRevision;
+    const note = await MeetingNote.findOneAndUpdate(filter, update, {
+      new: true,
+      upsert: parsed.data.force || parsed.data.expectedRevision === 0,
+      setDefaultsOnInsert: true,
+      runValidators: true,
+    }).lean();
+    if (!note) {
+      const latest = await MeetingNote.findOne({ meeting: meeting._id }).lean();
+      return res.status(409).json({ error: "Another participant updated these notes. Load the latest version before saving again.", note: latest ? { title: latest.title, contentHtml: latest.contentHtml, revision: latest.revision, updatedAt: latest.updatedAt, updatedByName: latest.updatedByName } : null });
+    }
+    return res.json({ note: { title: note.title, contentHtml: note.contentHtml, revision: note.revision, updatedAt: note.updatedAt, updatedByName: note.updatedByName } });
+  } catch (error) {
+    // A stale first-save upsert can race with another participant's first save.
+    if ((error as { code?: number })?.code === 11000) {
+      const meeting = await Meeting.findOne({ slug: req.params.slug }).select("_id").lean();
+      const latest = meeting ? await MeetingNote.findOne({ meeting: meeting._id }).lean() : null;
+      return res.status(409).json({ error: "Another participant created the notes at the same time. Load the latest version before saving again.", note: latest ? { title: latest.title, contentHtml: latest.contentHtml, revision: latest.revision, updatedAt: latest.updatedAt, updatedByName: latest.updatedByName } : null });
+    }
+    console.error("[meetings/notes:save] failed", error);
+    return res.status(500).json({ error: "Could not save meeting notes." });
   }
 });
 
@@ -557,6 +647,8 @@ router.post("/:slug/end", requireAuth, async (req, res) => {
       if (recording?.status === "recording") await stopRoomRecording(String(recording._id));
       else if (recording?.status === "consent_pending") {
         recording.status = "declined";
+        recording.endedAt = new Date();
+        recording.expiresAt = new Date(recording.endedAt.getTime() + 30 * 24 * 60 * 60 * 1000);
         recording.lastError = "The meeting ended before recording consent was complete.";
         await recording.save();
         meeting.recordingStatus = "declined";
@@ -663,6 +755,8 @@ router.post("/:slug/recording/consent", requireAuth, async (req, res) => {
     consent.decidedAt = new Date();
     if (!parsed.data.accepted) {
       recording.status = "declined";
+      recording.endedAt = new Date();
+      recording.expiresAt = new Date(recording.endedAt.getTime() + 30 * 24 * 60 * 60 * 1000);
       recording.lastError = `${person.name || "A participant"} declined recording consent.`;
       await recording.save();
       await Meeting.updateOne({ _id: meeting._id }, { $set: { recordingStatus: "declined" } });

@@ -27,13 +27,26 @@ const recordingSchema = new mongoose.Schema(
     startedAt: { type: Date, default: null },
     endedAt: { type: Date, default: null },
     uploadAttempts: { type: Number, default: 0 },
+    uploadLeaseId: { type: String, default: "", index: true },
+    uploadLeaseUntil: { type: Date, default: null, index: true },
+    nextUploadAttemptAt: { type: Date, default: null, index: true },
     uploadProgressPercent: { type: Number, default: 0, min: 0, max: 100 },
     lastError: { type: String, default: "", maxlength: 1000 },
+    // Expiry is anchored to recording completion (UTC), not upload completion.
+    // Legacy rows are backfilled from endedAt, startedAt, then createdAt.
+    expiresAt: { type: Date, default: null, index: true },
+    deletionStatus: { type: String, enum: ["active", "deleting", "delete_failed"], default: "active", index: true },
+    deletionAttempts: { type: Number, default: 0 },
+    nextDeletionAttemptAt: { type: Date, default: null, index: true },
+    deletionLeaseUntil: { type: Date, default: null },
+    lastDeletionError: { type: String, default: "", maxlength: 1000 },
   },
   { timestamps: true, versionKey: false },
 );
 
 recordingSchema.index({ meeting: 1, createdAt: -1 });
 recordingSchema.index({ hostUserId: 1, status: 1, createdAt: -1 });
+recordingSchema.index({ status: 1, deletionStatus: 1, expiresAt: 1, nextDeletionAttemptAt: 1 });
+recordingSchema.index({ status: 1, stagedAvailable: 1, uploadLeaseUntil: 1, nextUploadAttemptAt: 1 });
 export type RecordingDocument = InferSchemaType<typeof recordingSchema> & mongoose.Document;
 export const Recording = (mongoose.models.Recording ?? mongoose.model("Recording", recordingSchema)) as mongoose.Model<InferSchemaType<typeof recordingSchema>>;

@@ -53,6 +53,10 @@ services:
       - key: RECORDING_S3_ENDPOINT
         sync: false
       - key: RECORDING_S3_FORCE_PATH_STYLE
-        value: false
+        value: true
+      - key: RECORDING_UPLOAD_MAX_ATTEMPTS
+        value: 5
+      - key: RECORDING_RETENTION_CRON_SECRET
+        sync: false
       - key: RECORDING_MAX_FILE_BYTES
         value: 20000000000

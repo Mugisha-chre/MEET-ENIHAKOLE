@@ -56,7 +56,8 @@ router.post("/livekit", async (req: Request, res: Response) => {
           const pending = await Recording.findOne({ meeting: meeting._id, status: "consent_pending", "consents.identity": participant.identity });
           if (pending) {
             if (userId && userId === pending.hostUserId) {
-              await Recording.updateOne({ _id: pending._id, status: "consent_pending" }, { $set: { status: "declined", lastError: "The host left before recording consent was complete." } });
+              const declinedAt = new Date();
+              await Recording.updateOne({ _id: pending._id, status: "consent_pending" }, { $set: { status: "declined", endedAt: declinedAt, expiresAt: new Date(declinedAt.getTime() + 30 * 24 * 60 * 60 * 1000), lastError: "The host left before recording consent was complete." } });
               await Meeting.updateOne({ _id: meeting._id, activeRecordingId: pending._id }, { $set: { recordingStatus: "declined" } });
             } else {
               await Recording.updateOne({ _id: pending._id, status: "consent_pending" }, {
@@ -90,7 +91,7 @@ router.post("/livekit", async (req: Request, res: Response) => {
         // one worker uploads it to Cloudinary.
         const recording = await Recording.findOneAndUpdate(
           { egressId, status: { $in: ["recording", "uploading"] }, stagedAvailable: { $ne: true } },
-          { $set: { status: "uploading", endedAt: new Date(), fileSize: Number(fileResult.size || 0), stagedAvailable: true } },
+          { $set: { status: "uploading", endedAt: new Date(), expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), fileSize: Number(fileResult.size || 0), stagedAvailable: true } },
           { new: true },
         );
         if (recording) {
@@ -99,7 +100,7 @@ router.post("/livekit", async (req: Request, res: Response) => {
       } else {
         const recording = await Recording.findOneAndUpdate(
           { egressId, status: { $in: ["recording", "uploading"] }, stagedAvailable: { $ne: true } },
-          { $set: { status: "failed", endedAt: new Date(), lastError: String(payload.egressInfo.error || "LiveKit recording did not finish successfully.").slice(0, 1000) } },
+          { $set: { status: "failed", endedAt: new Date(), expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), lastError: String(payload.egressInfo.error || "LiveKit recording did not finish successfully.").slice(0, 1000) } },
           { new: true },
         );
         if (recording) {

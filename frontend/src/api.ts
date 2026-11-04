@@ -41,6 +41,14 @@ export function clearAuthToken(): void {
   sessionStorage.removeItem(GUEST_PROFILE_KEY);
 }
 
+export interface MeetingNotesPayload {
+  title: string;
+  contentHtml: string;
+  revision: number;
+  updatedAt: string | null;
+  updatedByName: string;
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(message: string, status: number) { super(message); this.status = status; }
@@ -109,6 +117,9 @@ export const api = {
     request<{ success: boolean; action: string; message: string; removedSessions?: number }>(`/meetings/${encodeURIComponent(slug)}/moderation`, {
       method: "POST", body: JSON.stringify({ identity, action }),
     }),
+  meetingNotes: (slug: string) => request<{ note: MeetingNotesPayload }>(`/meetings/${encodeURIComponent(slug)}/notes`),
+  saveMeetingNotes: (slug: string, input: { title: string; contentHtml: string; expectedRevision: number; force?: boolean }) =>
+    request<{ note: MeetingNotesPayload }>(`/meetings/${encodeURIComponent(slug)}/notes`, { method: "PUT", body: JSON.stringify(input) }),
   privateConversations: (slug: string) =>
     request<{ conversations: PrivateConversationSummary[] }>(`/meetings/${encodeURIComponent(slug)}/private-conversations`),
   privateMessages: (slug: string, otherUserId: string) =>
@@ -122,13 +133,16 @@ export const api = {
   recordingPlayback: (id: string) => request<{ playbackUrl: string; expiresInSeconds: number }>(`/recordings/${encodeURIComponent(id)}/playback`),
   pageView: (path: string, pageLoad = false) => request<{ accepted: boolean }>("/analytics/page-view", { method: "POST", body: JSON.stringify({ path, pageLoad }) }),
   adminOverview: () => request<any>("/admin/overview"),
-  adminMeetings: () => request<any>("/admin/meetings?limit=500"),
-  adminAttendance: (slug: string) => request<any>(`/admin/meetings/${encodeURIComponent(slug)}/attendance`),
+  adminMeetings: (page = 1, q = "", status = "", sort = "newest") => request<any>(`/admin/meetings?page=${page}&limit=20&sort=${sort}${q ? `&q=${encodeURIComponent(q)}` : ""}${status ? `&status=${encodeURIComponent(status)}` : ""}`),
+  adminAttendance: (slug: string, page = 1) => request<any>(`/admin/meetings/${encodeURIComponent(slug)}/attendance?page=${page}&limit=20`),
   adminTerminateMeeting: (slug: string) => request<{ success: boolean }>(`/admin/meetings/${encodeURIComponent(slug)}/terminate`, { method: "POST" }),
-  adminUsers: (q = "") => request<any>(`/admin/users${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+  adminUsers: (q = "", page = 1, sort = "newest", status = "") => request<any>(`/admin/users?page=${page}&limit=20&sort=${sort}${q ? `&q=${encodeURIComponent(q)}` : ""}${status ? `&status=${encodeURIComponent(status)}` : ""}`),
   adminSetUserStatus: (id: string, status: "active" | "suspended") => request<{ success: boolean }>(`/admin/users/${encodeURIComponent(id)}/status`, { method: "PATCH", body: JSON.stringify({ status }) }),
-  adminRecordings: () => request<any>("/admin/recordings"),
-  adminActivity: () => request<any>("/admin/activity?limit=150"),
+  adminRecordings: (page = 1, q = "", status = "", sort = "newest") => request<any>(`/admin/recordings?page=${page}&limit=20&sort=${sort}${q ? `&q=${encodeURIComponent(q)}` : ""}${status ? `&status=${encodeURIComponent(status)}` : ""}`),
+  adminActivity: (page = 1, q = "", category = "", sort = "newest") => request<any>(`/admin/activity?page=${page}&limit=20&sort=${sort}${q ? `&q=${encodeURIComponent(q)}` : ""}${category ? `&category=${encodeURIComponent(category)}` : ""}`),
+  adminDeleteMeeting: (slug: string) => request<{ success: boolean }>(`/admin/meetings/${encodeURIComponent(slug)}`, { method: "DELETE" }),
+  adminDeleteUser: (id: string) => request<{ success: boolean }>(`/admin/users/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  adminDeleteRecording: (id: string) => request<{ success: boolean }>(`/admin/recordings/${encodeURIComponent(id)}`, { method: "DELETE" }),
   sendPrivateMessage: (slug: string, recipientUserId: string, message: string) =>
     request<{ message: PrivateMessage }>(`/meetings/${encodeURIComponent(slug)}/private-messages`, {
       method: "POST", body: JSON.stringify({ recipientUserId, message }),

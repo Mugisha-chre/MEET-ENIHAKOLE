@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -10,6 +11,7 @@ import adminRoutes from "./routes/admin.js";
 import analyticsRoutes from "./routes/analytics.js";
 import webhookRoutes from "./routes/webhooks.js";
 import { PlatformEvent } from "./models/PlatformEvent.js";
+import { runRecordingRetentionSweep } from "./lib/recordingRetention.js";
 
 const defaultAppUrl = process.env.NODE_ENV === "production" ? "https://meet-enihakole.vercel.app" : "http://localhost:5173";
 function getFrontendBaseUrl(): string {
@@ -60,7 +62,7 @@ export function createApp(): Express {
       if (!origin || origins.includes(origin.replace(/\/$/, ""))) return callback(null, true);
       return callback(new Error("Origin is not allowed by CORS."));
     },
-    methods: ["GET", "POST", "PATCH", "OPTIONS"],
+    methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
   }));
   // LiveKit webhook signatures cover the raw body, so parse this content type before JSON.
@@ -119,6 +121,25 @@ export function createApp(): Express {
 
   app.use("/api", apiLimiter);
   app.use("/api/auth/google", authLimiter);
+
+  // Optional external scheduler endpoint. Use a long random secret in Render
+  // and send it as a Bearer token; never put it in the URL/query string.
+  app.post("/api/maintenance/recording-retention", async (req: Request, res: Response) => {
+    const expected = process.env.RECORDING_RETENTION_CRON_SECRET?.trim() || "";
+    const supplied = (req.get("Authorization") || "").replace(/^Bearer\s+/i, "").trim();
+    const expectedBytes = Buffer.from(expected);
+    const suppliedBytes = Buffer.from(supplied);
+    if (!expected || expectedBytes.length !== suppliedBytes.length || !crypto.timingSafeEqual(expectedBytes, suppliedBytes)) {
+      return res.status(401).json({ error: "Unauthorized maintenance request." });
+    }
+    try {
+      await runRecordingRetentionSweep();
+      return res.json({ success: true, completedAt: new Date().toISOString() });
+    } catch (error) {
+      console.error("[recording-retention] external sweep failed", error instanceof Error ? error.message : error);
+      return res.status(503).json({ error: "Recording retention cleanup did not complete." });
+    }
+  });
   app.use("/api/webhooks", webhookRoutes);
   app.use("/api/auth", authRoutes);
   app.use("/api/analytics", analyticsRoutes);
