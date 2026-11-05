@@ -17,6 +17,7 @@ import { AdminCenterPage, AudioRecordingPlayer, RecordingsPage } from "./Managem
 import { clearCachePrefix, patchCache, readCache, removeCache, writeCache } from "./cache";
 import type { JoinSession, Meeting, PrivateConversationSummary, PrivateMessage, User } from "./types";
 import { GoogleContinueButton, ProfilePhoto, googleSignOut, preloadPhoto, preloadPhotoBriefly } from "./google";
+import { MotionPresence } from "./MotionPresence";
 
 interface AppContextValue {
   user: User | null;
@@ -458,8 +459,8 @@ export default function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
       {activeRoomSlug && <MeetingRoomPage key={activeRoomSlug} slug={activeRoomSlug} isActive={activeRoomVisible}/>}
-      {authOpen && <AuthModal onClose={() => setAuthOpen(false)} onAuthenticated={completeAuth} />}
-      {scheduleOpen && user && (user.canCreateMeetings || user.isAdmin) && <ScheduleModal onClose={() => setScheduleOpen(false)} onCreated={(meeting) => {
+      <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} onAuthenticated={completeAuth} />
+      <ScheduleModal open={scheduleOpen && Boolean(user && (user.canCreateMeetings || user.isAdmin))} onClose={() => setScheduleOpen(false)} onCreated={(meeting) => {
         if (meeting.meetingType === "prayer") {
           const merge = (list: Meeting[]) => [meeting, ...list.filter((item) => item.slug !== meeting.slug)];
           setMeetings((current) => { const next = merge(current); writeCache("mine", next); return next; });
@@ -467,7 +468,7 @@ export default function App() {
         }
         writeCache(`meeting:${user.id}:${meeting.slug}`, meeting);
         void refreshMeetings(true);
-      }} />}
+      }} />
       {!location.pathname.startsWith("/room/") && !location.pathname.startsWith("/meeting/") && <InstallPwaButton />}
       <ToastHost />
     </AppContext.Provider>
@@ -1045,17 +1046,18 @@ function MeetingPage() {
         </section>
       </main>
       <footer className="landing-footer"><span>© {new Date().getFullYear()} MEET ENIHAKOLE</span><span>Built for togetherness.</span></footer>
-      {mediaPrompt && <MediaPermissionModal
-        kind={mediaPrompt.kind}
-        state={mediaPrompt.state}
-        skipLabel={mediaPrompt.kind === "camera" ? "Join without camera" : "Join without microphone"}
+      <MediaPermissionModal
+        open={Boolean(mediaPrompt)}
+        kind={mediaPrompt?.kind ?? "microphone"}
+        state={mediaPrompt?.state ?? { phase: "ask" }}
+        skipLabel={(mediaPrompt?.kind ?? "microphone") === "camera" ? "Join without camera" : "Join without microphone"}
         grantedLabel="Joining…"
-        onRetry={() => { void askBrowser(mediaPrompt.kind); }}
-        onGranted={() => { const kind = mediaPrompt.kind as MediaKind; mediaAllowed[kind] = true; mediaRetryRef.current++; setMediaPrompt({ kind, state: { phase: "granted" } }); void continueJoin(micOn, cameraOn); }}
-        onSkip={() => { mediaRetryRef.current++; if (mediaPrompt.kind === "camera") { setCameraOn(false); void continueJoin(micOn, false); } else { setMicOn(false); void continueJoin(false, cameraOn); } }}
+        onRetry={() => { void askBrowser(mediaPrompt?.kind ?? "microphone"); }}
+        onGranted={() => { const kind = mediaPrompt?.kind ?? "microphone"; mediaAllowed[kind] = true; mediaRetryRef.current++; setMediaPrompt({ kind, state: { phase: "granted" } }); void continueJoin(micOn, cameraOn); }}
+        onSkip={() => { mediaRetryRef.current++; if ((mediaPrompt?.kind ?? "microphone") === "camera") { setCameraOn(false); void continueJoin(micOn, false); } else { setMicOn(false); void continueJoin(false, cameraOn); } }}
         onClose={() => { mediaRetryRef.current++; setMediaPrompt(null); }}
-      />}
-      {pastNotesOpen && <div className="meeting-notes-archive-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setPastNotesOpen(false); }}><section className="meeting-notes-archive" role="dialog" aria-modal="true" aria-labelledby="past-meeting-notes-title"><header><div><span className="section-overline">MEETING ARCHIVE</span><h2 id="past-meeting-notes-title">{pastNotes?.title || "Meeting notes"}</h2><p>{meeting.title} · {formatDate(meeting.startedAt || meeting.startsAt)}</p></div><button type="button" className="room-icon-button" onClick={() => setPastNotesOpen(false)} aria-label="Close meeting notes"><X size={18}/></button></header>{pastNotesLoading ? <div className="meeting-notes-archive-state"><LoaderCircle size={22} className="spin"/> Loading saved notes…</div> : pastNotesError ? <div className="meeting-notes-archive-state meeting-notes-archive-error" role="alert">{pastNotesError}<button type="button" onClick={() => { setPastNotesOpen(false); window.setTimeout(() => setPastNotesOpen(true), 0); }}>Try again</button></div> : <><article className="meeting-notes-archive-content" dangerouslySetInnerHTML={{ __html: pastNotes?.contentHtml || "<p>No notes were saved for this meeting.</p>" }}/><footer><span>Last saved {pastNotes?.updatedAt ? formatDate(pastNotes.updatedAt) : "—"}{pastNotes?.updatedByName ? ` · ${pastNotes.updatedByName}` : ""}</span><button type="button" className="button button-primary button-small" onClick={() => downloadMeetingNotesPdf(meeting.title, meeting.startedAt || meeting.startsAt, pastNotes?.title || "Meeting notes", pastNotes?.contentHtml || "")}><Download size={15}/> Export PDF</button></footer></>}</section></div>}
+      />
+      <MotionPresence present={pastNotesOpen} kind="dialog" onEscape={() => setPastNotesOpen(false)}>      {pastNotesOpen && <div className="meeting-notes-archive-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setPastNotesOpen(false); }}><section className="meeting-notes-archive" role="dialog" aria-modal="true" aria-labelledby="past-meeting-notes-title"><header><div><span className="section-overline">MEETING ARCHIVE</span><h2 id="past-meeting-notes-title">{pastNotes?.title || "Meeting notes"}</h2><p>{meeting.title} · {formatDate(meeting.startedAt || meeting.startsAt)}</p></div><button type="button" className="room-icon-button" onClick={() => setPastNotesOpen(false)} aria-label="Close meeting notes"><X size={18}/></button></header>{pastNotesLoading ? <div className="meeting-notes-archive-state"><LoaderCircle size={22} className="spin"/> Loading saved notes…</div> : pastNotesError ? <div className="meeting-notes-archive-state meeting-notes-archive-error" role="alert">{pastNotesError}<button type="button" onClick={() => { setPastNotesOpen(false); window.setTimeout(() => setPastNotesOpen(true), 0); }}>Try again</button></div> : <><article className="meeting-notes-archive-content" dangerouslySetInnerHTML={{ __html: pastNotes?.contentHtml || "<p>No notes were saved for this meeting.</p>" }}/><footer><span>Last saved {pastNotes?.updatedAt ? formatDate(pastNotes.updatedAt) : "—"}{pastNotes?.updatedByName ? ` · ${pastNotes.updatedByName}` : ""}</span><button type="button" className="button button-primary button-small" onClick={() => downloadMeetingNotesPdf(meeting.title, meeting.startedAt || meeting.startsAt, pastNotes?.title || "Meeting notes", pastNotes?.contentHtml || "")}><Download size={15}/> Export PDF</button></footer></>}</section></div>}</MotionPresence>
     </div>
   );
 }
@@ -1100,7 +1102,7 @@ async function requestMediaAccess(kind: MediaKind): Promise<MicPromptState> {
   }
 }
 
-function MediaPermissionModal({ kind, state, skipLabel, grantedLabel, onRetry, onGranted, onSkip, onClose }: { kind: MediaKind; state: MicPromptState; skipLabel: string; grantedLabel: string; onRetry: () => void; onGranted: () => void; onSkip: () => void; onClose: () => void }) {
+function MediaPermissionModal({ open, kind, state, skipLabel, grantedLabel, onRetry, onGranted, onSkip, onClose }: { open: boolean; kind: MediaKind; state: MicPromptState; skipLabel: string; grantedLabel: string; onRetry: () => void; onGranted: () => void; onSkip: () => void; onClose: () => void }) {
   const isCamera = kind === "camera";
   const noun = isCamera ? "camera" : "microphone";
   const Noun = isCamera ? "Camera" : "Microphone";
@@ -1117,7 +1119,7 @@ function MediaPermissionModal({ kind, state, skipLabel, grantedLabel, onRetry, o
   // While access is blocked, keep watching: the moment the person allows it (in the address bar or settings) we continue on our own.
   // We only look at the permission state here, so the browser is never asked again behind the person's back.
   useEffect(() => {
-    if (!failed) return;
+    if (!open || !failed) return;
     let stopped = false;
     let status: PermissionStatus | null = null;
     const onChange = () => { if (!stopped && status?.state === "granted") grantedRef.current(); };
@@ -1130,21 +1132,22 @@ function MediaPermissionModal({ kind, state, skipLabel, grantedLabel, onRetry, o
       });
     }, 2500);
     return () => { stopped = true; window.clearInterval(timer); status?.removeEventListener("change", onChange); };
-  }, [failed, kind]);
+  }, [open, failed, kind]);
 
   useEffect(() => {
+    if (!open) return;
     document.body.classList.add("modal-open");
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape" && !granted) closeRef.current(); };
     document.addEventListener("keydown", onKey);
     return () => { document.body.classList.remove("modal-open"); document.removeEventListener("keydown", onKey); };
-  }, [granted]);
+  }, [open, granted]);
 
   const help = failure?.phase === "blocked" ? "Tap the lock icon by the address bar, set " + Noun + " to Allow, then press Try again."
     : failure?.phase === "busy" ? "Close other apps using it (like Zoom or Teams), then press Try again."
     : failure?.phase === "unavailable" ? "Check your device settings or plug one in, then press Try again." : "";
 
   return (
-    <div className="modal-backdrop mic-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !granted) onClose(); }}>
+    <MotionPresence present={open} kind="dialog">{<div className="modal-backdrop mic-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !granted) onClose(); }}>
       <section className="modal-panel modal-panel-narrow mic-modal" role="dialog" aria-modal="true" aria-labelledby="mic-modal-title">
         {!granted && <button type="button" className="icon-button modal-close mic-modal-close" onClick={onClose} aria-label="Close"><X size={17}/></button>}
         <div className="mic-modal-body">
@@ -1163,7 +1166,7 @@ function MediaPermissionModal({ kind, state, skipLabel, grantedLabel, onRetry, o
           {!granted && <button type="button" className="button button-soft button-full" onClick={onSkip}>{skipLabel}</button>}
         </div>
       </section>
-    </div>
+    </div>}</MotionPresence>
   );
 }
 
@@ -1265,7 +1268,7 @@ function MeetingRoomPage({ slug, isActive }: { slug: string; isActive: boolean }
             <ConferenceWorkspace meeting={session.meeting} role={session.role} onLeave={leaveRoom} onEndForEveryone={() => endForEveryone()} ending={ending} isActive={isActive}/>
             {!preparedRoom && <RoomReadyOverlay expected={(session.participants ?? []).map((person) => person.identity)}/>}
           </div>
-          {confirmEnd && <ConfirmEndModal busy={ending} onCancel={() => setConfirmEnd(false)} onConfirm={() => void confirmEndForEveryone()}/>}
+          <ConfirmEndModal open={confirmEnd} busy={ending} onCancel={() => setConfirmEnd(false)} onConfirm={() => void confirmEndForEveryone()}/>
           <div className="conference-bottom-note"><span><ShieldCheck size={15}/> {session.meeting.visibility === "public" ? "This gathering is publicly listed." : "This meeting uses an unlisted invitation link."}</span><span>For the clearest call, use headphones and a stable connection.</span></div>
         </main>
       </div>
@@ -1295,15 +1298,16 @@ function BackgroundMeetingDock({ title, disconnected, onReturn, onLeave }: { tit
 
 
 /** Our own confirmation for ending a meeting. It is drawn inside the fullscreen room when the room is fullscreen, so it is always visible. */
-function ConfirmEndModal({ busy, onCancel, onConfirm }: { busy: boolean; onCancel: () => void; onConfirm: () => void }) {
+function ConfirmEndModal({ open, busy, onCancel, onConfirm }: { open: boolean; busy: boolean; onCancel: () => void; onConfirm: () => void }) {
   useEffect(() => {
+    if (!open) return;
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape" && !busy) onCancel(); };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [busy, onCancel]);
+  }, [open, busy, onCancel]);
   const host = document.fullscreenElement ?? document.querySelector(".conference-fullscreen-target.is-pseudo-fullscreen") ?? document.body;
   return createPortal(
-    <div className="modal-backdrop confirm-end-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onCancel(); }}>
+    <MotionPresence present={open} kind="dialog">{<div className="modal-backdrop confirm-end-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onCancel(); }}>
       <section className="modal-panel modal-panel-narrow confirm-end-panel" role="alertdialog" aria-modal="true" aria-labelledby="confirm-end-title" aria-describedby="confirm-end-text">
         <div className="confirm-end-icon" aria-hidden="true"><DoorOpen size={26}/></div>
         <h2 id="confirm-end-title">End this meeting for everyone?</h2>
@@ -1313,7 +1317,7 @@ function ConfirmEndModal({ busy, onCancel, onConfirm }: { busy: boolean; onCance
           <button type="button" className="button button-danger" onClick={onConfirm} disabled={busy}>{busy ? <LoaderCircle size={16} className="spin"/> : <X size={16}/>} {busy ? "Ending…" : "End for everyone"}</button>
         </div>
       </section>
-    </div>,
+    </div>}</MotionPresence>,
     host,
   );
 }
@@ -2326,8 +2330,8 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
   const dockRef = useRef<HTMLDivElement>(null);
   const fullScreenStateRef = useRef(false);
   const [topSpeaker, setTopSpeaker] = useState("");
-  const [messageToast, setMessageToast] = useState<{ id: number; name: string; text: string } | null>(null);
-  const [presenceToasts, setPresenceToasts] = useState<Array<{ id: number; kind: "joined" | "left"; name: string }>>([]);
+  const [messageToast, setMessageToast] = useState<{ id: number; name: string; text: string; visible: boolean } | null>(null);
+  const [presenceToasts, setPresenceToasts] = useState<Array<{ id: number; kind: "joined" | "left"; name: string; visible: boolean }>>([]);
   const presenceTimers = useRef<number[]>([]);
   const pseudoFullRef = useRef(false);
   const lastFullscreenAction = useRef(0);
@@ -2339,7 +2343,14 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
   const fullScreenRef = useRef<HTMLDivElement>(null);
   const autoFullscreenDone = useRef(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const chatBodyRef = useRef<HTMLDivElement>(null);
+  const chatWasOpenRef = useRef(false);
+  const chatStickToBottomRef = useRef(true);
   const privateChatEndRef = useRef<HTMLDivElement>(null);
+  const privateChatBodyRef = useRef<HTMLDivElement>(null);
+  const privateChatIdRef = useRef<string | null>(null);
+  const privateChatWasOpenRef = useRef(false);
+  const privateChatStickToBottomRef = useRef(true);
   const notesEditorRef = useRef<HTMLDivElement>(null);
   const notesDirtyRef = useRef(false);
   const notesSavingRef = useRef(false);
@@ -2455,7 +2466,28 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
   }, [room, localUserId, localParticipant, meeting.ownerId]);
 
   useEffect(() => () => window.clearTimeout(privateNoticeTimer.current), []);
-  useEffect(() => { privateChatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [privateMessages.length, directContact]);
+  const onPrivateChatBodyScroll = useCallback(() => {
+    const body = privateChatBodyRef.current;
+    privateChatStickToBottomRef.current = !!body && body.scrollHeight - body.scrollTop - body.clientHeight <= 96;
+  }, []);
+  useEffect(() => {
+    const contactId = directContact?.userId || null;
+    if (!contactId) {
+      privateChatIdRef.current = null;
+      privateChatWasOpenRef.current = false;
+      return;
+    }
+    if (privateChatIdRef.current !== contactId) {
+      privateChatIdRef.current = contactId;
+      privateChatStickToBottomRef.current = true;
+      privateChatWasOpenRef.current = false;
+    }
+    const justOpened = !privateChatWasOpenRef.current;
+    if (justOpened || privateChatStickToBottomRef.current) {
+      privateChatEndRef.current?.scrollIntoView({ behavior: justOpened ? "auto" : "smooth", block: "end" });
+    }
+    privateChatWasOpenRef.current = true;
+  }, [privateMessages.length, directContact?.userId]);
 
   // Register the signed-in account even when an existing stored LiveKit token is reused after a refresh.
   // A blocked account is disconnected again if it tries to reconnect with a still-valid token.
@@ -2771,7 +2803,18 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
     return () => document.removeEventListener("fullscreenchange", onFullscreen);
   }, []);
 
-  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [chatMessages.length, messagesOpen]);
+  const onChatBodyScroll = useCallback(() => {
+    const body = chatBodyRef.current;
+    chatStickToBottomRef.current = !!body && body.scrollHeight - body.scrollTop - body.clientHeight <= 96;
+  }, []);
+  useEffect(() => {
+    if (!messagesOpen) { chatWasOpenRef.current = false; return; }
+    const justOpened = !chatWasOpenRef.current;
+    if (justOpened || chatStickToBottomRef.current) {
+      chatEndRef.current?.scrollIntoView({ behavior: justOpened ? "auto" : "smooth", block: "end" });
+    }
+    chatWasOpenRef.current = true;
+  }, [chatMessages.length, messagesOpen]);
 
   // The latest person to speak moves to the top and stays there (even after they stop) until someone else starts speaking.
   useEffect(() => {
@@ -2813,9 +2856,10 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
     if (!latest) return;
     playMessageTone();
     if (messagesOpenRef.current) return;
-    setMessageToast({ id: Date.now(), name: latest.from?.name || "Choir guest", text: latest.message });
+    const id = Date.now();
+    setMessageToast({ id, name: latest.from?.name || "Choir guest", text: latest.message, visible: true });
     window.clearTimeout(messageToastTimer.current);
-    messageToastTimer.current = window.setTimeout(() => setMessageToast(null), 5000);
+    messageToastTimer.current = window.setTimeout(() => setMessageToast((current) => current?.id === id ? { ...current, visible: false } : current), 5000);
   }, [chatMessages, localIdentity]);
   useEffect(() => () => window.clearTimeout(messageToastTimer.current), []);
   // Someone joins or leaves: play a tone and show a bottom pop-up saying who. People already in the room when we arrive are not announced.
@@ -2831,8 +2875,8 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
       const id = Date.now() + Math.random();
       const name = participantName(participant) || "A participant";
       playPresenceTone(kind);
-      setPresenceToasts((current) => [...current.slice(-2), { id, kind, name }]);
-      const timer = window.setTimeout(() => setPresenceToasts((current) => current.filter((toast) => toast.id !== id)), 3600);
+      setPresenceToasts((current) => [...current.slice(-2), { id, kind, name, visible: true }]);
+      const timer = window.setTimeout(() => setPresenceToasts((current) => current.map((toast) => toast.id === id ? { ...toast, visible: false } : toast)), 3400);
       presenceTimers.current.push(timer);
     };
     const onJoined = (participant: RemoteParticipant) => {
@@ -3269,6 +3313,26 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
   fullScreenStateRef.current = fullScreen;
   useEffect(() => { setControlsVisible(false); }, [fullScreen]);
   useEffect(() => {
+    if (!fullScreen) return;
+    const target = fullScreenRef.current;
+    if (!target) return;
+    const revealFromPointer = (event: PointerEvent) => {
+      if (event.pointerType === "touch") return;
+      setControlsVisible(true);
+    };
+    const revealFromKeyboard = (event: KeyboardEvent) => {
+      if (["Tab", "Enter", " ", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) {
+        setControlsVisible(true);
+      }
+    };
+    target.addEventListener("pointermove", revealFromPointer, { passive: true });
+    target.addEventListener("keydown", revealFromKeyboard);
+    return () => {
+      target.removeEventListener("pointermove", revealFromPointer);
+      target.removeEventListener("keydown", revealFromKeyboard);
+    };
+  }, [fullScreen]);
+  useEffect(() => {
     const dock = dockRef.current;
     if (!dock) return;
     const measure = () => setDockHeight(Math.round(dock.getBoundingClientRect().height));
@@ -3369,47 +3433,50 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
           <button className={`room-control-button people-control ${peopleOpen ? "control-selected" : ""}`} onClick={() => { setPeopleViewTab("people"); setPeopleOpen(true); setMessagesOpen(false); setDirectContact(null); setNotesOpen(false); }} title="See who is in the meeting"><Users size={18}/><span>People</span><i>{participants.length}</i></button>
           {RECORDING_UI_ENABLED && role === "host" && <button className={`room-control-button recording-control ${recordingState?.status === "recording" ? "recording-control-active" : ""}`} onClick={() => recordingState?.status === "recording" ? void stopRecording() : recordingState?.status === "uploading" || recordingState?.status === "consent_pending" ? undefined : recordingState?.status === "failed" && recordingState.canRetry ? void retryRecordingUpload() : void startRecording()} disabled={recordingBusy || recordingState?.status === "uploading" || recordingState?.status === "consent_pending"} title={recordingState?.status === "recording" ? "Stop audio recording" : recordingState?.status === "failed" && recordingState.canRetry ? "Retry audio upload" : "Start audio-only recording"}>{recordingBusy ? <LoaderCircle size={18} className="spin"/> : <span className="meeting-recording-dot"/>}<span>{recordingState?.status === "recording" ? "Stop" : recordingState?.status === "uploading" ? "Saving" : recordingState?.status === "consent_pending" ? "Consent" : recordingState?.status === "failed" && recordingState.canRetry ? "Retry upload" : "Record"}</span></button>}
           <button className={`room-control-button notes-control ${notesOpen ? "control-selected" : ""}`} onClick={() => { setNotesOpen(true); setMessagesOpen(false); setPeopleOpen(false); setDirectContact(null); }} title="Open collaborative meeting notes"><FileText size={18}/><span>Notes</span></button>
-          <div className="reaction-control-wrap"><button data-popover="reactions" className={`room-control-button ${reactionsOpen ? "control-selected" : ""}`} onClick={() => setReactionsOpen((open) => !open)} title="Send an emoji or sticker reaction"><Smile size={18}/><span>React</span></button>{reactionsOpen && <div data-popover="reactions" className="reaction-picker" role="dialog" aria-label="Choose a reaction">{REACTION_SET.map((emoji) => <button key={emoji} onClick={() => void react(emoji)} aria-label={`Send ${emoji}`}>{emoji}</button>)}</div>}</div>
+          <div className="reaction-control-wrap"><button data-popover="reactions" className={`room-control-button ${reactionsOpen ? "control-selected" : ""}`} onClick={() => setReactionsOpen((open) => !open)} title="Send an emoji or sticker reaction"><Smile size={18}/><span>React</span></button><MotionPresence present={reactionsOpen} kind="popover" onEscape={() => setReactionsOpen(false)}>{reactionsOpen && <div data-popover="reactions" className="reaction-picker" role="dialog" aria-label="Choose a reaction">{REACTION_SET.map((emoji) => <button key={emoji} onClick={() => void react(emoji)} aria-label={`Send ${emoji}`}>{emoji}</button>)}</div>}</MotionPresence></div>
         <div className="room-control-side"><button className="room-icon-button room-theme-toggle" onClick={toggleTheme} aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`} title={`Switch to ${theme === "light" ? "dark" : "light"} mode`}>{theme === "light" ? <Moon size={17}/> : <Sun size={17}/>}</button><button className="room-icon-button fullscreen-control" onClick={() => void toggleFullscreen()} aria-label={fullScreen ? "Exit fullscreen" : "Enter fullscreen"} title={fullScreen ? "Exit fullscreen" : "Fullscreen"}>{fullScreen ? <Minimize2 size={18}/> : <Maximize2 size={18}/>}</button>{role === "host" && <button className="room-icon-button room-end-button" onClick={onEndForEveryone} disabled={ending} title="End for everyone" aria-label="End for everyone"><X size={18}/></button>}<button className="room-leave-button" onClick={onLeave}><DoorOpen size={17}/><span>Leave</span></button></div></div>
       </div>
     </div>
-    {(fullscreenPrompt || moderatorRequest || privateNotice || presenceToasts.length > 0 || messageToast) && <div className="room-bottom-notifications" aria-live="polite">
-      {fullscreenPrompt && !fullScreen && <div className="fullscreen-fallback-prompt" role="status"><span>Fullscreen needs your permission. Tap once to enter.</span><button type="button" onClick={() => void toggleFullscreen()}>Enter fullscreen <Maximize2 size={15}/></button></div>}
-      {moderatorRequest && <div className="moderator-request-banner" role="status"><span>{moderatorRequest.hostName} asks you to turn on your {moderatorRequest.media === "microphone" ? "microphone" : "camera"}. You choose whether to allow it.</span><button type="button" onClick={() => void acceptModeratorRequest()}>Review request</button><button type="button" className="request-dismiss" onClick={() => setModeratorRequest(null)} aria-label="Dismiss request"><X size={15}/></button></div>}
-      {privateNotice && <div className="room-private-notice" role="status"><span><MessageCircle size={16}/> Private message from <b>{privateNotice.name}</b></span><button type="button" onClick={() => openPrivateContact(privateNotice)}>Open chat</button><button type="button" className="notice-dismiss" onClick={() => setPrivateNotice(null)} aria-label="Dismiss notification"><X size={14}/></button></div>}
-      {presenceToasts.length > 0 && <div className="room-presence-stack" aria-live="polite">{presenceToasts.map((toast) => <div className={`room-presence-toast room-presence-${toast.kind}`} key={toast.id} role="status"><span className="room-presence-icon">{toast.kind === "joined" ? <LogIn size={15}/> : <LogOut size={15}/>}</span><span className="room-presence-text"><b>{toast.name}</b> {toast.kind === "joined" ? "joined the meeting" : "left the meeting"}</span></div>)}</div>}
-      {messageToast && <button type="button" className="room-message-toast" key={messageToast.id} onClick={() => { setMessagesOpen(true); setPeopleOpen(false); }} aria-label={`Open message from ${messageToast.name}`}><span className="room-message-toast-icon"><MessageCircle size={16}/></span><span className="room-message-toast-body"><b>{messageToast.name}</b><span>{messageToast.text}</span></span></button>}
-    </div>}
-    {mediaModal && <MediaPermissionModal
-      kind={mediaModal.kind}
-      state={mediaModal.state}
+    <div className="room-bottom-notifications" aria-live="polite">
+      <MotionPresence present={Boolean(fullscreenPrompt && !fullScreen)} kind="popover">{fullscreenPrompt && !fullScreen && <div className="fullscreen-fallback-prompt" role="status"><span>Fullscreen needs your permission. Tap once to enter.</span><button type="button" onClick={() => void toggleFullscreen()}>Enter fullscreen <Maximize2 size={15}/></button></div>}</MotionPresence>
+      <MotionPresence present={Boolean(moderatorRequest)} kind="popover">{moderatorRequest && <div className="moderator-request-banner" role="status"><span>{moderatorRequest.hostName} asks you to turn on your {moderatorRequest.media === "microphone" ? "microphone" : "camera"}. You choose whether to allow it.</span><button type="button" onClick={() => void acceptModeratorRequest()}>Review request</button><button type="button" className="request-dismiss" onClick={() => setModeratorRequest(null)} aria-label="Dismiss request"><X size={15}/></button></div>}</MotionPresence>
+      <MotionPresence present={Boolean(privateNotice)} kind="popover">{privateNotice && <div className="room-private-notice" role="status"><span><MessageCircle size={16}/> Private message from <b>{privateNotice.name}</b></span><button type="button" onClick={() => openPrivateContact(privateNotice)}>Open chat</button><button type="button" className="notice-dismiss" onClick={() => setPrivateNotice(null)} aria-label="Dismiss notification"><X size={14}/></button></div>}</MotionPresence>
+      {presenceToasts.length > 0 && <div className="room-presence-stack" aria-live="polite">{presenceToasts.map((toast) => <MotionPresence key={toast.id} present={toast.visible} kind="popover" onExited={() => setPresenceToasts((current) => current.filter((item) => item.id !== toast.id))}><div className={`room-presence-toast room-presence-${toast.kind}`} role="status"><span className="room-presence-icon">{toast.kind === "joined" ? <LogIn size={15}/> : <LogOut size={15}/>}</span><span className="room-presence-text"><b>{toast.name}</b> {toast.kind === "joined" ? "joined the meeting" : "left the meeting"}</span></div></MotionPresence>)}</div>}
+      <MotionPresence present={Boolean(messageToast?.visible)} kind="popover" onExited={() => setMessageToast((current) => current?.id === messageToast?.id ? null : current)}>{messageToast && <button type="button" className="room-message-toast" key={messageToast.id} onClick={() => { setMessagesOpen(true); setPeopleOpen(false); }} aria-label={`Open message from ${messageToast.name}`}><span className="room-message-toast-icon"><MessageCircle size={16}/></span><span className="room-message-toast-body"><b>{messageToast.name}</b><span>{messageToast.text}</span></span></button>}</MotionPresence>
+    </div>
+    <MediaPermissionModal
+      open={Boolean(mediaModal)}
+      kind={mediaModal?.kind ?? "microphone"}
+      state={mediaModal?.state ?? { phase: "ask" }}
       skipLabel="Not now"
       grantedLabel="Turning on…"
-      onRetry={() => void askMedia(mediaModal.kind)}
-      onGranted={() => { mediaAllowed[mediaModal.kind as MediaKind] = true; void enableMedia(mediaModal.kind); }}
+      onRetry={() => void askMedia(mediaModal?.kind ?? "microphone")}
+      onGranted={() => { const kind = mediaModal?.kind ?? "microphone"; mediaAllowed[kind] = true; void enableMedia(kind); }}
       onSkip={() => { mediaAttemptRef.current++; setMediaModal(null); }}
       onClose={() => { mediaAttemptRef.current++; setMediaModal(null); }}
-    />}
-    {RECORDING_UI_ENABLED && recordingState?.status === "consent_pending" && recordingState.myDecision === "pending" && <div className="recording-consent-backdrop" role="presentation"><section className="recording-consent-modal" role="dialog" aria-modal="true" aria-labelledby="recording-consent-title"><span className="recording-consent-icon"><AudioLines size={24}/></span><p className="section-overline">MEETING AUDIO RECORDING REQUEST</p><h2 id="recording-consent-title">The host would like to record</h2><p>The recording captures synchronized audio from the connected participants. No camera video is recorded. Your choice is saved with the meeting record. You can decline; recording will not begin unless everyone currently connected accepts.</p><div className="recording-consent-list">{recordingState.consents.map((item) => <span key={item.identity}><b>{item.displayName}</b><small>{item.decision === "accepted" ? "Accepted" : item.decision === "declined" ? "Declined" : "Awaiting response"}</small></span>)}</div><div className="recording-consent-actions"><button type="button" className="button button-soft" disabled={recordingConsentBusy} onClick={() => void respondToRecordingConsent(false)}>Decline</button><button type="button" className="button button-primary" disabled={recordingConsentBusy} onClick={() => void respondToRecordingConsent(true)}>{recordingConsentBusy ? "Saving…" : "I consent"}</button></div></section></div>}
-    {notesOpen && <div className="messages-modal-backdrop meeting-notes-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setNotesOpen(false); }}><section className="messages-modal meeting-notes-modal" role="dialog" aria-modal="true" aria-label="Collaborative meeting notes"><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setNotesOpen(false)} aria-label="Back to call"><ArrowLeft size={18}/></button><div className="meeting-panel-heading"><b>Meeting notes</b><small>{meeting.title}</small></div><button className="room-icon-button" onClick={() => setNotesOpen(false)} aria-label="Close notes"><X size={18}/></button></header><nav className="meeting-panel-tabs" aria-label="Meeting tools"><button type="button" className="meeting-panel-tab" onClick={() => { setNotesOpen(false); setMessagesOpen(true); }}>Messages</button><button type="button" className="meeting-panel-tab" onClick={() => { setNotesOpen(false); setPeopleViewTab("people"); setPeopleOpen(true); }}>People</button><button type="button" className="meeting-panel-tab" onClick={() => { setNotesOpen(false); setPeopleViewTab("private"); setPeopleOpen(true); }}>Private chats</button><button type="button" className="meeting-panel-tab meeting-panel-tab-active" aria-current="page">Notes</button></nav><div className="meeting-notes-body"><label className="meeting-notes-title-label">Note title<input value={notesTitle} onChange={(event) => updateMeetingNotesTitle(event.target.value)} onBlur={() => { if (notesDirtyRef.current && !notesConflict) void saveMeetingNotes(); }} maxLength={120} aria-label="Meeting notes title"/></label><div className="meeting-notes-toolbar" role="toolbar" aria-label="Note formatting"><button type="button" title="Bold" aria-label="Bold" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("bold")}><Bold size={16}/></button><button type="button" title="Italic" aria-label="Italic" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("italic")}><Italic size={16}/></button><button type="button" title="Underline" aria-label="Underline" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("underline")}><Underline size={16}/></button><button type="button" title="Heading 1" aria-label="Heading 1" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("formatBlock", "<h1>")}><Heading1 size={16}/></button><button type="button" title="Heading 2" aria-label="Heading 2" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("formatBlock", "<h2>")}><Heading2 size={16}/></button><button type="button" title="Bulleted list" aria-label="Bulleted list" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("insertUnorderedList")}><List size={16}/></button><button type="button" title="Numbered list" aria-label="Numbered list" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("insertOrderedList")}><ListOrdered size={16}/></button><button type="button" title="Indent" aria-label="Indent" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("indent")}><IndentIncrease size={16}/></button><button type="button" title="Outdent" aria-label="Outdent" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("outdent")}><IndentDecrease size={16}/></button></div>{notesLoading ? <div className="meeting-notes-loading"><LoaderCircle size={22} className="spin"/> Loading notes…</div> : <div ref={notesEditorRef} className="meeting-notes-editor" contentEditable suppressContentEditableWarning role="textbox" aria-label="Collaborative meeting notes editor" aria-multiline="true" data-placeholder="Capture decisions, action items, and key points together…" onInput={(event) => updateMeetingNotes(event.currentTarget.innerHTML)} onBlur={() => { if (notesDirtyRef.current && !notesConflict) void saveMeetingNotes(); }}></div>}{notesError && <div className="meeting-notes-error" role="alert">{notesError}{notesConflict && <div className="meeting-notes-conflict-actions"><button type="button" onClick={() => void loadMeetingNotes(true)}>Load latest</button><button type="button" onClick={() => void saveMeetingNotes(true)}>Keep my version</button></div>}</div>}<div className="meeting-notes-footer"><span className="meeting-notes-save-state">{notesSaving ? "Saving…" : notesDirty ? "Unsaved changes" : notesUpdatedBy ? `Saved · ${notesUpdatedBy}` : "Saved for meeting participants"}</span><button type="button" className="button button-soft button-small" onClick={exportNotesPdf}><Download size={15}/> Export PDF</button><button type="button" className="button button-primary button-small" onClick={() => void saveMeetingNotes(notesConflict)} disabled={!notesDirty || notesSaving}><Check size={15}/> Save now</button></div></div></section></div>}
-    {messagesOpen && <div className="messages-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setMessagesOpen(false); }}><section className="messages-modal" role="dialog" aria-modal="true" aria-label="Meeting messages"><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setMessagesOpen(false)} aria-label="Back to call"><ArrowLeft size={18}/></button><div className="meeting-panel-heading"><b>Meeting messages</b><small>Chat with everyone in this room</small></div><button className="room-icon-button" onClick={() => setMessagesOpen(false)} aria-label="Close messages"><X size={18}/></button></header><nav className="meeting-panel-tabs" aria-label="Meeting tools"><button type="button" className="meeting-panel-tab meeting-panel-tab-active" aria-current="page">Messages</button><button type="button" className="meeting-panel-tab" onClick={() => { setMessagesOpen(false); setPeopleViewTab("people"); setPeopleOpen(true); }}>People</button><button type="button" className="meeting-panel-tab" onClick={() => { setMessagesOpen(false); setPeopleViewTab("private"); setPeopleOpen(true); }}>Private chats</button><button type="button" className="meeting-panel-tab" onClick={() => { setMessagesOpen(false); setNotesOpen(true); }}>Notes</button></nav><div className="messages-modal-body">{chatMessages.length === 0 ? <div className="messages-empty"><MessageCircle size={25}/><b>No messages yet</b><span>Send a note to everyone in this gathering.</span></div> : chatMessages.map((message, index) => <article className={`chat-message ${message.from?.identity === localIdentity ? "chat-message-own" : ""}`} key={`${message.timestamp}-${index}`}><span className="chat-message-author">{message.from?.name || (message.from?.identity === localIdentity ? "You" : "Choir guest")}</span><p>{message.message}</p><time>{new Date(message.timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></article>)}<div ref={chatEndRef}/></div><form className="messages-composer" onSubmit={sendMessage}><input value={messageText} onChange={(event) => setMessageText(event.target.value)} placeholder="Write a message…" maxLength={2000} aria-label="Message"/><button className="button button-primary" type="submit" disabled={!messageText.trim() || isSending} aria-label="Send message"><Send size={17}/></button></form></section></div>}
-    {peopleOpen && <div className="messages-modal-backdrop people-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setPeopleOpen(false); }}><section className="messages-modal people-modal" role="dialog" aria-modal="true" aria-label="People and private chats"><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setPeopleOpen(false)} aria-label="Back to call"><ArrowLeft size={18}/></button><div className="meeting-panel-heading"><b>{peopleViewTab === "people" ? "People" : "Private chats"}</b><small>{peopleViewTab === "people" ? `${participants.length} currently online · presence updates live` : `${recentConversations.length} saved conversations`}</small></div><button className="room-icon-button" onClick={() => setPeopleOpen(false)} aria-label="Close people"><X size={18}/></button></header><nav className="meeting-panel-tabs" aria-label="Meeting tools"><button type="button" className={`meeting-panel-tab ${peopleViewTab === "people" ? "meeting-panel-tab-active" : ""}`} aria-current={peopleViewTab === "people" ? "page" : undefined} onClick={() => setPeopleViewTab("people")}>People</button><button type="button" className={`meeting-panel-tab ${peopleViewTab === "private" ? "meeting-panel-tab-active" : ""}`} aria-current={peopleViewTab === "private" ? "page" : undefined} onClick={() => setPeopleViewTab("private")}>Private chats</button><button type="button" className="meeting-panel-tab" onClick={() => { setPeopleOpen(false); setMessagesOpen(true); }}>Messages</button><button type="button" className="meeting-panel-tab" onClick={() => { setPeopleOpen(false); setNotesOpen(true); }}>Notes</button></nav><div className="people-directory-body">{peopleViewTab === "people" ? <><div className="people-online-heading"><span><span className="people-online-dot"/> Online now</span><b>{participants.length}</b></div>{[...participants].sort((a, b) => getParticipantRole(a) === getParticipantRole(b) ? participantName(a).localeCompare(participantName(b)) : getParticipantRole(a) === "host" ? -1 : 1).map((person) => {
+    />
+    <MotionPresence present={Boolean(RECORDING_UI_ENABLED && recordingState?.status === "consent_pending" && recordingState.myDecision === "pending")} kind="dialog">
+      {RECORDING_UI_ENABLED && recordingState?.status === "consent_pending" && recordingState.myDecision === "pending" && <div className="recording-consent-backdrop" role="presentation"><section className="recording-consent-modal" role="dialog" aria-modal="true" aria-labelledby="recording-consent-title"><span className="recording-consent-icon"><AudioLines size={24}/></span><p className="section-overline">MEETING AUDIO RECORDING REQUEST</p><h2 id="recording-consent-title">The host would like to record</h2><p>The recording captures synchronized audio from the connected participants. No camera video is recorded. Your choice is saved with the meeting record. You can decline; recording will not begin unless everyone currently connected accepts.</p><div className="recording-consent-list">{recordingState.consents.map((item) => <span key={item.identity}><b>{item.displayName}</b><small>{item.decision === "accepted" ? "Accepted" : item.decision === "declined" ? "Declined" : "Awaiting response"}</small></span>)}</div><div className="recording-consent-actions"><button type="button" className="button button-soft" disabled={recordingConsentBusy} onClick={() => void respondToRecordingConsent(false)}>Decline</button><button type="button" className="button button-primary" disabled={recordingConsentBusy} onClick={() => void respondToRecordingConsent(true)}>{recordingConsentBusy ? "Saving…" : "I consent"}</button></div></section></div>}
+    </MotionPresence>
+    <MotionPresence present={notesOpen} kind="panel" onEscape={() => setNotesOpen(false)}>    {notesOpen && <div className="messages-modal-backdrop meeting-notes-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setNotesOpen(false); }}><section className="messages-modal meeting-notes-modal" role="dialog" aria-modal="true" aria-label="Collaborative meeting notes"><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setNotesOpen(false)} aria-label="Back to call"><ArrowLeft size={18}/></button><div className="meeting-panel-heading"><b>Meeting notes</b><small>{meeting.title}</small></div><button className="room-icon-button" onClick={() => setNotesOpen(false)} aria-label="Close notes"><X size={18}/></button></header><nav className="meeting-panel-tabs" aria-label="Meeting tools"><button type="button" className="meeting-panel-tab" onClick={() => { setNotesOpen(false); setMessagesOpen(true); }}>Messages</button><button type="button" className="meeting-panel-tab" onClick={() => { setNotesOpen(false); setPeopleViewTab("people"); setPeopleOpen(true); }}>People</button><button type="button" className="meeting-panel-tab" onClick={() => { setNotesOpen(false); setPeopleViewTab("private"); setPeopleOpen(true); }}>Private chats</button><button type="button" className="meeting-panel-tab meeting-panel-tab-active" aria-current="page">Notes</button></nav><div className="meeting-notes-body"><label className="meeting-notes-title-label">Note title<input value={notesTitle} onChange={(event) => updateMeetingNotesTitle(event.target.value)} onBlur={() => { if (notesDirtyRef.current && !notesConflict) void saveMeetingNotes(); }} maxLength={120} aria-label="Meeting notes title"/></label><div className="meeting-notes-toolbar" role="toolbar" aria-label="Note formatting"><button type="button" title="Bold" aria-label="Bold" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("bold")}><Bold size={16}/></button><button type="button" title="Italic" aria-label="Italic" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("italic")}><Italic size={16}/></button><button type="button" title="Underline" aria-label="Underline" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("underline")}><Underline size={16}/></button><button type="button" title="Heading 1" aria-label="Heading 1" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("formatBlock", "<h1>")}><Heading1 size={16}/></button><button type="button" title="Heading 2" aria-label="Heading 2" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("formatBlock", "<h2>")}><Heading2 size={16}/></button><button type="button" title="Bulleted list" aria-label="Bulleted list" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("insertUnorderedList")}><List size={16}/></button><button type="button" title="Numbered list" aria-label="Numbered list" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("insertOrderedList")}><ListOrdered size={16}/></button><button type="button" title="Indent" aria-label="Indent" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("indent")}><IndentIncrease size={16}/></button><button type="button" title="Outdent" aria-label="Outdent" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("outdent")}><IndentDecrease size={16}/></button></div>{notesLoading ? <div className="meeting-notes-loading"><LoaderCircle size={22} className="spin"/> Loading notes…</div> : <div ref={notesEditorRef} className="meeting-notes-editor" contentEditable suppressContentEditableWarning role="textbox" aria-label="Collaborative meeting notes editor" aria-multiline="true" data-placeholder="Capture decisions, action items, and key points together…" onInput={(event) => updateMeetingNotes(event.currentTarget.innerHTML)} onBlur={() => { if (notesDirtyRef.current && !notesConflict) void saveMeetingNotes(); }}></div>}{notesError && <div className="meeting-notes-error" role="alert">{notesError}{notesConflict && <div className="meeting-notes-conflict-actions"><button type="button" onClick={() => void loadMeetingNotes(true)}>Load latest</button><button type="button" onClick={() => void saveMeetingNotes(true)}>Keep my version</button></div>}</div>}<div className="meeting-notes-footer"><span className="meeting-notes-save-state">{notesSaving ? "Saving…" : notesDirty ? "Unsaved changes" : notesUpdatedBy ? `Saved · ${notesUpdatedBy}` : "Saved for meeting participants"}</span><button type="button" className="button button-soft button-small" onClick={exportNotesPdf}><Download size={15}/> Export PDF</button><button type="button" className="button button-primary button-small" onClick={() => void saveMeetingNotes(notesConflict)} disabled={!notesDirty || notesSaving}><Check size={15}/> Save now</button></div></div></section></div>}</MotionPresence>
+    <MotionPresence present={messagesOpen} kind="panel" onEscape={() => setMessagesOpen(false)}>    {messagesOpen && <div className="messages-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setMessagesOpen(false); }}><section className="messages-modal" role="dialog" aria-modal="true" aria-label="Meeting messages"><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setMessagesOpen(false)} aria-label="Back to call"><ArrowLeft size={18}/></button><div className="meeting-panel-heading"><b>Meeting messages</b><small>Chat with everyone in this room</small></div><button className="room-icon-button" onClick={() => setMessagesOpen(false)} aria-label="Close messages"><X size={18}/></button></header><nav className="meeting-panel-tabs" aria-label="Meeting tools"><button type="button" className="meeting-panel-tab meeting-panel-tab-active" aria-current="page">Messages</button><button type="button" className="meeting-panel-tab" onClick={() => { setMessagesOpen(false); setPeopleViewTab("people"); setPeopleOpen(true); }}>People</button><button type="button" className="meeting-panel-tab" onClick={() => { setMessagesOpen(false); setPeopleViewTab("private"); setPeopleOpen(true); }}>Private chats</button><button type="button" className="meeting-panel-tab" onClick={() => { setMessagesOpen(false); setNotesOpen(true); }}>Notes</button></nav><div ref={chatBodyRef} onScroll={onChatBodyScroll} className="messages-modal-body">{chatMessages.length === 0 ? <div className="messages-empty"><MessageCircle size={25}/><b>No messages yet</b><span>Send a note to everyone in this gathering.</span></div> : chatMessages.map((message, index) => <article className={`chat-message ${message.from?.identity === localIdentity ? "chat-message-own" : ""}`} key={`${message.timestamp}-${index}`}><span className="chat-message-author">{message.from?.name || (message.from?.identity === localIdentity ? "You" : "Choir guest")}</span><p>{message.message}</p><time>{new Date(message.timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></article>)}<div ref={chatEndRef}/></div><form className="messages-composer" onSubmit={sendMessage}><input value={messageText} onChange={(event) => setMessageText(event.target.value)} placeholder="Write a message…" maxLength={2000} aria-label="Message"/><button className="button button-primary" type="submit" disabled={!messageText.trim() || isSending} aria-label="Send message"><Send size={17}/></button></form></section></div>}</MotionPresence>
+    <MotionPresence present={peopleOpen} kind="panel" onEscape={() => setPeopleOpen(false)}>    {peopleOpen && <div className="messages-modal-backdrop people-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setPeopleOpen(false); }}><section className="messages-modal people-modal" role="dialog" aria-modal="true" aria-label="People and private chats"><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setPeopleOpen(false)} aria-label="Back to call"><ArrowLeft size={18}/></button><div className="meeting-panel-heading"><b>{peopleViewTab === "people" ? "People" : "Private chats"}</b><small>{peopleViewTab === "people" ? `${participants.length} currently online · presence updates live` : `${recentConversations.length} saved conversations`}</small></div><button className="room-icon-button" onClick={() => setPeopleOpen(false)} aria-label="Close people"><X size={18}/></button></header><nav className="meeting-panel-tabs" aria-label="Meeting tools"><button type="button" className={`meeting-panel-tab ${peopleViewTab === "people" ? "meeting-panel-tab-active" : ""}`} aria-current={peopleViewTab === "people" ? "page" : undefined} onClick={() => setPeopleViewTab("people")}>People</button><button type="button" className={`meeting-panel-tab ${peopleViewTab === "private" ? "meeting-panel-tab-active" : ""}`} aria-current={peopleViewTab === "private" ? "page" : undefined} onClick={() => setPeopleViewTab("private")}>Private chats</button><button type="button" className="meeting-panel-tab" onClick={() => { setPeopleOpen(false); setMessagesOpen(true); }}>Messages</button><button type="button" className="meeting-panel-tab" onClick={() => { setPeopleOpen(false); setNotesOpen(true); }}>Notes</button></nav><div className="people-directory-body">{peopleViewTab === "people" ? <><div className="people-online-heading"><span><span className="people-online-dot"/> Online now</span><b>{participants.length}</b></div>{[...participants].sort((a, b) => getParticipantRole(a) === getParticipantRole(b) ? participantName(a).localeCompare(participantName(b)) : getParticipantRole(a) === "host" ? -1 : 1).map((person) => {
       const isSelf = person.identity === localIdentity;
       const micMuted = person.getTrackPublication(Track.Source.Microphone)?.isMuted ?? true;
       const cameraMuted = person.getTrackPublication(Track.Source.Camera)?.isMuted ?? true;
       const isHostPerson = getParticipantRole(person) === "host";
       const busy = moderationBusy === person.identity;
-      return <article className="people-person-row" key={person.identity}><ProfilePhoto src={participantPicture(person.metadata, person.identity)} name={participantName(person)} size={128} className="people-person-avatar"/><div className="people-person-details"><div className="people-person-title"><b>{participantName(person) || "Participant"}{isSelf ? " · You" : ""}</b>{isHostPerson && <span className="people-host-tag">HOST</span>}</div><small><span className="people-online-dot"/> Connected {person.isSpeaking ? "· Speaking" : ""}{micMuted ? " · Mic off" : " · Mic on"}{cameraMuted ? " · Camera off" : " · Camera on"}</small></div>{!isSelf && <div className="people-person-actions"><button type="button" onClick={() => void focusParticipant(person.identity)} title={spotlightIdentity === person.identity ? "Clear participant focus" : "Bring participant into the main view"}>{spotlightIdentity === person.identity ? "Unfocus" : "Focus"}</button><button type="button" onClick={() => openPrivateConversation(person)} title={`Private message ${participantName(person) || "participant"}`}><MessageCircle size={15}/><span>Message</span></button>{role === "host" && !isHostPerson && <details className="people-more-menu"><summary aria-label={`Host actions for ${participantName(person) || "participant"}`}><ChevronDown size={16}/></summary><div className="people-more-popover"><button type="button" disabled={busy} onClick={() => void moderateParticipant(person, micMuted ? "request-unmute" : "mute-mic")}>{micMuted ? "Request microphone" : "Mute microphone"}</button><button type="button" disabled={busy} onClick={() => void moderateParticipant(person, cameraMuted ? "request-camera" : "disable-camera")}>{cameraMuted ? "Request camera" : "Disable camera"}</button><button type="button" disabled={busy} onClick={() => void moderateParticipant(person, "remove")}>Remove from meeting</button><button type="button" className="people-ban-action" disabled={busy} onClick={() => void moderateParticipant(person, "ban")}>Remove and block re-entry</button></div></details>}</div>}{isSelf && <span className="people-you-tag">You</span>}</article>;
+      return <article className="people-person-row" key={person.identity}><ProfilePhoto src={participantPicture(person.metadata, person.identity)} name={participantName(person)} size={128} className="people-person-avatar"/><div className="people-person-details"><div className="people-person-title"><b>{participantName(person) || "Participant"}{isSelf ? " · You" : ""}</b>{isHostPerson && <span className="people-host-tag">HOST</span>}{raisedHands[person.identity] && <span className="people-raised-hand" title="Raised hand"><Hand size={12}/> Raised hand</span>}</div><small><span className="people-online-dot"/> Connected {person.isSpeaking ? "· Speaking" : ""}{micMuted ? " · Mic off" : " · Mic on"}{cameraMuted ? " · Camera off" : " · Camera on"}</small></div>{!isSelf && <div className="people-person-actions"><button type="button" onClick={() => void focusParticipant(person.identity)} title={spotlightIdentity === person.identity ? "Clear participant focus" : "Bring participant into the main view"}>{spotlightIdentity === person.identity ? "Unfocus" : "Focus"}</button><button type="button" onClick={() => openPrivateConversation(person)} title={`Private message ${participantName(person) || "participant"}`}><MessageCircle size={15}/><span>Message</span></button>{role === "host" && !isHostPerson && <details className="people-more-menu"><summary aria-label={`Host actions for ${participantName(person) || "participant"}`}><ChevronDown size={16}/></summary><div className="people-more-popover"><button type="button" disabled={busy} onClick={() => void moderateParticipant(person, micMuted ? "request-unmute" : "mute-mic")}>{micMuted ? "Request microphone" : "Mute microphone"}</button><button type="button" disabled={busy} onClick={() => void moderateParticipant(person, cameraMuted ? "request-camera" : "disable-camera")}>{cameraMuted ? "Request camera" : "Disable camera"}</button><button type="button" disabled={busy} onClick={() => void moderateParticipant(person, "remove")}>Remove from meeting</button><button type="button" className="people-ban-action" disabled={busy} onClick={() => void moderateParticipant(person, "ban")}>Remove and block re-entry</button></div></details>}</div>}{isSelf && <span className="people-you-tag">You</span>}</article>;
     })}{participants.length === 1 && <div className="people-alone-note">You are the only person connected right now.</div>}</> : <section className="people-recent-conversations"><div className="people-recent-heading">Saved private conversations</div>{recentConversations.length === 0 ? <div className="messages-empty"><MessageCircle size={25}/><b>No private conversations yet</b><span>Start a one-to-one conversation from the People tab.</span></div> : recentConversations.map((contact) => {
       const online = participants.some((person) => participantUserId(person) === contact.userId);
       return <button type="button" className="people-recent-row" key={contact.userId} onClick={() => openPrivateContact({ userId: contact.userId, identity: "", name: contact.name, picture: contact.picture })}><ProfilePhoto src={contact.picture} name={contact.name} size={96} className="people-person-avatar"/><span className="people-recent-copy"><b>{contact.name}</b><small>{contact.lastMessage}</small></span><span className={`people-recent-status ${online ? "is-online" : ""}`}>{online ? "Online" : "Saved"}</span></button>;
-    })}</section>}</div></section></div>}
-    {directContact && <div className="messages-modal-backdrop private-chat-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setDirectContact(null); }}><section className="messages-modal private-chat-modal" role="dialog" aria-modal="true" aria-label={`Private conversation with ${directContact.name}`}><header className="messages-modal-header"><button className="room-icon-button" onClick={() => { setDirectContact(null); setPeopleViewTab("private"); setPeopleOpen(true); }} aria-label="Back to private chats"><ArrowLeft size={18}/></button><ProfilePhoto src={directContact.picture} name={directContact.name} size={64} className="private-chat-avatar"/><div className="meeting-panel-heading"><b>{directContact.name}</b><small>Private one-to-one conversation</small></div><button className="room-icon-button" onClick={() => { setDirectContact(null); setPeopleViewTab("private"); setPeopleOpen(true); }} aria-label="Close private messages"><X size={18}/></button></header><nav className="meeting-panel-tabs" aria-label="Meeting tools"><button type="button" className="meeting-panel-tab" onClick={() => { setDirectContact(null); setPeopleViewTab("people"); setPeopleOpen(true); }}>People</button><button type="button" className="meeting-panel-tab meeting-panel-tab-active" aria-current="page" onClick={() => { setDirectContact(null); setPeopleViewTab("private"); setPeopleOpen(true); }}>Private chats</button><button type="button" className="meeting-panel-tab" onClick={() => { setDirectContact(null); setMessagesOpen(true); }}>Messages</button><button type="button" className="meeting-panel-tab" onClick={() => { setDirectContact(null); setNotesOpen(true); }}>Notes</button></nav><div className="messages-modal-body private-chat-body">{privateLoading ? <div className="messages-empty"><LoaderCircle size={23} className="spin"/><span>Loading private conversation…</span></div> : privateMessages.length === 0 ? <div className="messages-empty"><MessageCircle size={25}/><b>No private messages yet</b><span>Only you and {directContact.name} can see this conversation.</span></div> : privateMessages.map((message) => <article className={`chat-message ${message.senderUserId === localUserId ? "chat-message-own" : ""}`} key={message.id}><span className="chat-message-author">{message.senderUserId === localUserId ? "You" : message.senderName}</span><p>{message.message}</p><time>{new Date(message.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></article>)}<div ref={privateChatEndRef}/></div><form className="messages-composer" onSubmit={sendPrivateMessage}><input value={privateDraft} onChange={(event) => setPrivateDraft(event.target.value)} placeholder={`Message ${directContact.name} privately…`} maxLength={2000} aria-label="Private message"/><button className="button button-primary" type="submit" disabled={!privateDraft.trim() || privateSending || privateLoading} aria-label="Send private message">{privateSending ? <LoaderCircle size={17} className="spin"/> : <Send size={17}/>}</button></form></section></div>}
+    })}</section>}</div></section></div>}</MotionPresence>
+    <MotionPresence present={Boolean(directContact)} kind="panel" onEscape={() => setDirectContact(null)}>    {directContact && <div className="messages-modal-backdrop private-chat-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setDirectContact(null); }}><section className="messages-modal private-chat-modal" role="dialog" aria-modal="true" aria-label={`Private conversation with ${directContact.name}`}><header className="messages-modal-header"><button className="room-icon-button" onClick={() => { setDirectContact(null); setPeopleViewTab("private"); setPeopleOpen(true); }} aria-label="Back to private chats"><ArrowLeft size={18}/></button><ProfilePhoto src={directContact.picture} name={directContact.name} size={64} className="private-chat-avatar"/><div className="meeting-panel-heading"><b>{directContact.name}</b><small>Private one-to-one conversation</small></div><button className="room-icon-button" onClick={() => { setDirectContact(null); setPeopleViewTab("private"); setPeopleOpen(true); }} aria-label="Close private messages"><X size={18}/></button></header><nav className="meeting-panel-tabs" aria-label="Meeting tools"><button type="button" className="meeting-panel-tab" onClick={() => { setDirectContact(null); setPeopleViewTab("people"); setPeopleOpen(true); }}>People</button><button type="button" className="meeting-panel-tab meeting-panel-tab-active" aria-current="page" onClick={() => { setDirectContact(null); setPeopleViewTab("private"); setPeopleOpen(true); }}>Private chats</button><button type="button" className="meeting-panel-tab" onClick={() => { setDirectContact(null); setMessagesOpen(true); }}>Messages</button><button type="button" className="meeting-panel-tab" onClick={() => { setDirectContact(null); setNotesOpen(true); }}>Notes</button></nav><div ref={privateChatBodyRef} onScroll={onPrivateChatBodyScroll} className="messages-modal-body private-chat-body">{privateLoading ? <div className="messages-empty"><LoaderCircle size={23} className="spin"/><span>Loading private conversation…</span></div> : privateMessages.length === 0 ? <div className="messages-empty"><MessageCircle size={25}/><b>No private messages yet</b><span>Only you and {directContact.name} can see this conversation.</span></div> : privateMessages.map((message) => <article className={`chat-message ${message.senderUserId === localUserId ? "chat-message-own" : ""}`} key={message.id}><span className="chat-message-author">{message.senderUserId === localUserId ? "You" : message.senderName}</span><p>{message.message}</p><time>{new Date(message.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></article>)}<div ref={privateChatEndRef}/></div><form className="messages-composer" onSubmit={sendPrivateMessage}><input value={privateDraft} onChange={(event) => setPrivateDraft(event.target.value)} placeholder={`Message ${directContact.name} privately…`} maxLength={2000} aria-label="Private message"/><button className="button button-primary" type="submit" disabled={!privateDraft.trim() || privateSending || privateLoading} aria-label="Send private message">{privateSending ? <LoaderCircle size={17} className="spin"/> : <Send size={17}/>}</button></form></section></div>}</MotionPresence>
     {role === "host" && <span className="room-host-sr" aria-hidden="true">{meeting.ownerName} is hosting</span>}
   </div>;
 }
 
-function AuthModal({ onClose, onAuthenticated }: { onClose: () => void; onAuthenticated: (user: User, token: string) => void }) {
+function AuthModal({ open, onClose, onAuthenticated }: { open: boolean; onClose: () => void; onAuthenticated: (user: User, token: string) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -3424,7 +3491,7 @@ function AuthModal({ onClose, onAuthenticated }: { onClose: () => void; onAuthen
     } finally { setBusy(false); }
   }
 
-  return <Modal onClose={onClose} wide={false}>
+  return <Modal open={open} onClose={onClose} wide={false}>
     <div className="auth-modal-content"><span className="modal-brand-icon"><AudioLines size={23}/></span><p className="section-overline">WELCOME TO YOUR GATHERING SPACE</p><h2>Good to have you here.</h2><p className="modal-subtitle">Continue with Google to sign in or create your account. We use your Google name and profile photo — no password needed.</p>
       <div className="form-stack">
         <GoogleContinueButton onCredential={(credential) => void handleCredential(credential)}/>
@@ -3512,7 +3579,7 @@ function CustomDateTimePicker({ value, onChange }: { value: string; onChange: (v
   return <div className="custom-datetime"><div className="custom-datetime-row"><div className="custom-picker-wrap date-picker-wrap" ref={calendarWrapRef}><button type="button" className="custom-picker-trigger" onClick={() => setCalendarOpen((current) => !current)} aria-expanded={calendarOpen}><CalendarDays size={16}/><span>{selectedDate.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</span><ChevronRight size={15} className={calendarOpen ? "picker-chevron-open" : "picker-chevron"}/></button>{calendarOpen && <><button type="button" className="picker-dismiss" aria-label="Close calendar" onClick={() => setCalendarOpen(false)}/><div ref={calendarPopRef} className={`custom-calendar-popover ${calendarUp ? "popover-up" : ""}`}><div className="calendar-month-row"><button type="button" className="room-icon-button" onClick={() => setShownMonth(new Date(shownMonth.getFullYear(), shownMonth.getMonth() - 1, 1))} aria-label="Previous month"><ChevronLeft size={16}/></button><b>{shownMonth.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</b><button type="button" className="room-icon-button" onClick={() => setShownMonth(new Date(shownMonth.getFullYear(), shownMonth.getMonth() + 1, 1))} aria-label="Next month"><ChevronRight size={16}/></button></div><div className="calendar-weekdays">{["S", "M", "T", "W", "T", "F", "S"].map((day, index) => <span key={`${day}-${index}`}>{day}</span>)}</div><div className="calendar-days">{Array.from({ length: firstDay }, (_, index) => <span key={`blank-${index}`}/>)}{Array.from({ length: dayCount }, (_, index) => { const day = index + 1; const date = `${shownMonth.getFullYear()}-${String(shownMonth.getMonth() + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`; const isPast = date < today; return <button type="button" key={date} disabled={isPast} className={`${date === datePart ? "calendar-day-active" : ""} ${date === today ? "calendar-day-today" : ""}`} onClick={() => { updateDate(date); setCalendarOpen(false); }}>{day}</button>; })}</div></div></>}</div><TimePicker value={timePart} datePart={datePart} onChange={(time) => onChange(`${datePart}T${time}`)} /></div><input className="visually-hidden-date-value" type="datetime-local" value={value} onChange={(event) => onChange(event.target.value)} min={localDateTimeValue(new Date(Date.now() - 60_000))} tabIndex={-1} aria-hidden="true"/></div>;
 }
 
-function ScheduleModal({ onClose, onCreated }: { onClose: () => void; onCreated: (meeting: Meeting, shareUrl: string) => void }) {
+function ScheduleModal({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (meeting: Meeting, shareUrl: string) => void }) {
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [meetingType, setMeetingType] = useState<"meeting" | "prayer" | null>(null);
   const [title, setTitle] = useState("");
@@ -3523,6 +3590,13 @@ function ScheduleModal({ onClose, onCreated }: { onClose: () => void; onCreated:
   const [error, setError] = useState("");
   const [created, setCreated] = useState<{ meeting: Meeting; shareUrl: string } | null>(null);
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "Africa/Kigali";
+
+  useEffect(() => {
+    if (!open) return;
+    setStep(1); setMeetingType(null); setTitle(""); setDescription("");
+    setStartsAt(localDateTimeValue(new Date(Date.now() + 15 * 60_000)));
+    setDurationMinutes("60"); setBusy(false); setError(""); setCreated(null);
+  }, [open]);
 
   function nextStep() {
     setError("");
@@ -3576,7 +3650,7 @@ function ScheduleModal({ onClose, onCreated }: { onClose: () => void; onCreated:
     catch { /* The share sheet can be dismissed without action. */ }
   }
 
-  return <Modal onClose={onClose} solidTop>
+  return <Modal open={open} onClose={onClose} solidTop>
     {!created ? <div className="schedule-modal-content">
       <div className="modal-heading-row"><span className="modal-brand-icon"><CalendarClock size={22}/></span><button className="icon-button" onClick={onClose} aria-label="Close dialog"><X size={19}/></button></div>
       <div className="modal-scroll-body">
@@ -3606,7 +3680,7 @@ function ScheduleModal({ onClose, onCreated }: { onClose: () => void; onCreated:
   </Modal>;
 }
 
-function Modal({ children, onClose, wide = true, solidTop = false }: { children: ReactNode; onClose: () => void; wide?: boolean; solidTop?: boolean }) {
+function Modal({ children, open, onClose, wide = true, solidTop = false }: { children: ReactNode; open: boolean; onClose: () => void; wide?: boolean; solidTop?: boolean }) {
   const panelRef = useRef<HTMLElement>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
   const closingRef = useRef(false);
@@ -3620,6 +3694,7 @@ function Modal({ children, onClose, wide = true, solidTop = false }: { children:
     const panel = panelRef.current; const backdrop = backdropRef.current;
     if (!panel) return;
     panel.style.transition = animated ? "transform .28s cubic-bezier(.22,1,.36,1)" : "none";
+    if (animated) panel.style.animation = "";
     panel.style.transform = `translate3d(0, ${offset.current}px, 0)`;
     if (backdrop) {
       backdrop.style.transition = animated ? "opacity .28s ease" : "none";
@@ -3629,19 +3704,21 @@ function Modal({ children, onClose, wide = true, solidTop = false }: { children:
   const requestClose = useCallback(() => {
     if (closingRef.current) return;
     closingRef.current = true;
-    const panel = panelRef.current;
-    if (!panel || window.innerWidth > 720) { onCloseRef.current(); return; }
-    offset.current = panel.offsetHeight + 40;
-    paint(true);
-    window.setTimeout(() => onCloseRef.current(), 250);
+    // Presence owns the exit lifecycle. Clear any drag-following inline styles
+    // so its CSS exit curve can take over without a timer-based unmount.
+    if (panelRef.current) { panelRef.current.style.transition = ""; panelRef.current.style.transform = ""; panelRef.current.style.animation = ""; }
+    if (backdropRef.current) { backdropRef.current.style.transition = ""; backdropRef.current.style.opacity = ""; }
+    onCloseRef.current();
   }, []);
 
   useEffect(() => {
+    if (!open) return;
+    closingRef.current = false;
     const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") onCloseRef.current(); };
     document.addEventListener("keydown", onKeyDown);
     document.body.classList.add("modal-open");
     return () => { document.removeEventListener("keydown", onKeyDown); document.body.classList.remove("modal-open"); cancelAnimationFrame(frame.current); };
-  }, []);
+  }, [open]);
 
   const onTouchStart = (event: ReactTouchEvent) => {
     if (window.innerWidth > 720 || closingRef.current) return;
@@ -3680,7 +3757,7 @@ function Modal({ children, onClose, wide = true, solidTop = false }: { children:
     else { offset.current = 0; paint(true); }
   };
 
-  return <div ref={backdropRef} className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) requestClose(); }}><section ref={panelRef} className={`modal-panel ${wide ? "modal-panel-wide" : "modal-panel-narrow"} ${solidTop ? "modal-panel-solid-top" : ""}`} role="dialog" aria-modal="true" onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd} onTouchCancel={onTouchEnd}><div className="modal-drag-handle" aria-hidden="true"><span/></div>{children}</section></div>;
+  return <MotionPresence present={open} kind="dialog">{<div ref={backdropRef} className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) requestClose(); }}><section ref={panelRef} className={`modal-panel ${wide ? "modal-panel-wide" : "modal-panel-narrow"} ${solidTop ? "modal-panel-solid-top" : ""}`} role="dialog" aria-modal="true" onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd} onTouchCancel={onTouchEnd}><div className="modal-drag-handle" aria-hidden="true"><span/></div>{children}</section></div>}</MotionPresence>;
 }
 function StandaloneLoading({ label }: { label: string }) {
   return <div className="standalone-state"><span className="modal-brand-icon"><AudioLines size={23}/></span><LoaderCircle size={22} className="spin"/><p>{label}</p></div>;
@@ -3693,13 +3770,15 @@ function StandaloneError({ message, action }: { message: string; action?: ReactN
 function ToastHost() {
   const [toast, setToast] = useState<{ message: string; action?: string; shareUrl?: string } | null>(null);
   const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
+  const [toastVisible, setToastVisible] = useState(false);
   useEffect(() => {
     let expiry = 0;
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<{ message: string; action?: string; shareUrl?: string }>).detail;
       setToast(detail);
+      setToastVisible(true);
       window.clearTimeout(expiry);
-      expiry = window.setTimeout(() => setToast((current) => current === detail ? null : current), 4200);
+      expiry = window.setTimeout(() => setToastVisible(false), 4200);
     };
     const updateTarget = () => {
       const fullscreen = document.fullscreenElement instanceof HTMLElement && document.fullscreenElement.classList.contains("conference-fullscreen-target") ? document.fullscreenElement : null;
@@ -3717,6 +3796,6 @@ function ToastHost() {
       window.removeEventListener("meet-pseudo-fullscreen-change", updateTarget);
     };
   }, []);
-  if (!toast || !portalTarget) return null;
-  return createPortal(<div className="toast-message" role="status"><span className="toast-check"><Check size={15}/></span><span>{toast.message}</span>{toast.action && toast.shareUrl && <button onClick={() => void navigator.clipboard.writeText(toast.shareUrl!)}>{toast.action}</button>}<button className="toast-close" onClick={() => setToast(null)} aria-label="Dismiss"><X size={14}/></button></div>, portalTarget);
+  if (!portalTarget) return null;
+  return createPortal(<MotionPresence present={toastVisible} kind="toast">{toast && <div className="toast-message" role="status"><span className="toast-check"><Check size={15}/></span><span>{toast.message}</span>{toast.action && toast.shareUrl && <button onClick={() => void navigator.clipboard.writeText(toast.shareUrl!)}>{toast.action}</button>}<button className="toast-close" onClick={() => setToastVisible(false)} aria-label="Dismiss"><X size={14}/></button></div>}</MotionPresence>, portalTarget);
 }

@@ -3162,3 +3162,191 @@ html[data-theme="light"] .room-control-dock .room-control-button.control-selecte
   .room-control-dock .room-control-row-b { flex: 0 1 auto; flex-wrap: wrap; justify-content: center; row-gap: 6px; }
   .room-control-dock .room-control-row-b .room-control-side { margin-left: 0; flex-wrap: wrap; justify-content: center; }
 }
+
+/* ===== Shared motion language: deliberate easing, distance-scaled timing, and complete presence exits ===== */
+:root {
+  --motion-ease-enter: cubic-bezier(.16, 1, .3, 1);
+  --motion-ease-exit: cubic-bezier(.4, 0, 1, 1);
+  --motion-ease-reposition: cubic-bezier(.65, 0, .35, 1);
+  --motion-ease-spring: cubic-bezier(.2, .82, .25, 1.12);
+  --motion-ease-standard: cubic-bezier(.2, .7, .2, 1);
+  --motion-duration-press: 90ms;
+  --motion-duration-control: 160ms;
+  --motion-duration-small: 190ms;
+  --motion-duration-menu: 180ms;
+  --motion-duration-panel: 280ms;
+  --motion-duration-dialog: 300ms;
+  --motion-duration-exit: 190ms;
+  --motion-stagger-unit: 22ms;
+}
+
+button:not(:disabled), [role="button"], a, summary {
+  transition-property: color, background-color, border-color, box-shadow, opacity, transform;
+  transition-duration: var(--motion-duration-control);
+  transition-timing-function: var(--motion-ease-standard);
+}
+button:not(:disabled):active, [role="button"]:active {
+  transform: translateY(1px) scale(.985);
+  transition-duration: var(--motion-duration-press);
+  transition-timing-function: var(--motion-ease-spring);
+}
+button:disabled { transition: opacity 140ms var(--motion-ease-standard); }
+button:focus-visible, a:focus-visible, [role="button"]:focus-visible {
+  transition: outline-offset 140ms var(--motion-ease-enter), box-shadow 160ms var(--motion-ease-standard);
+}
+@media (hover: hover) and (pointer: fine) {
+  .button:not(:disabled):hover, .room-icon-button:not(:disabled):hover,
+  .room-control-button:not(:disabled):hover, .room-leave-button:not(:disabled):hover,
+  .cselect-trigger:not(:disabled):hover, .meeting-panel-tab:not(:disabled):hover,
+  .icon-button:not(:disabled):hover, .admin-row-actions button:not(:disabled):hover {
+    transform: translateY(-1px);
+  }
+}
+
+/* A single lifecycle class is attached to the actual overlay/menu root. The root's
+   own animation end is the unmount signal; nested panel animations may finish first. */
+.motion-presence-root { will-change: opacity, transform; }
+.motion-presence-root.motion-entering {
+  animation: motion-presence-in 300ms var(--motion-ease-enter) both !important;
+}
+.motion-presence-root.motion-exiting {
+  pointer-events: none !important;
+  animation: motion-presence-out 190ms var(--motion-ease-exit) both !important;
+}
+@keyframes motion-presence-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes motion-presence-out { from { opacity: 1; } to { opacity: 0; } }
+
+.motion-kind-dialog.motion-entering > .modal-panel,
+.motion-kind-dialog.motion-entering > .admin-modal,
+.motion-kind-dialog.motion-entering > .meeting-notes-archive,
+.motion-kind-dialog.motion-entering > .meeting-notes-archive-backdrop > .meeting-notes-archive,
+.motion-kind-dialog.motion-entering > .confirm-end-panel,
+.motion-kind-dialog.motion-entering > .mic-modal,
+.motion-kind-dialog.motion-entering > .recording-consent-modal {
+  animation: motion-dialog-panel-in 300ms var(--motion-ease-enter) both !important;
+}
+.motion-kind-dialog.motion-exiting > .modal-panel,
+.motion-kind-dialog.motion-exiting > .admin-modal,
+.motion-kind-dialog.motion-exiting > .meeting-notes-archive,
+.motion-kind-dialog.motion-exiting > .meeting-notes-archive-backdrop > .meeting-notes-archive,
+.motion-kind-dialog.motion-exiting > .confirm-end-panel,
+.motion-kind-dialog.motion-exiting > .mic-modal,
+.motion-kind-dialog.motion-exiting > .recording-consent-modal {
+  animation: motion-dialog-panel-out 175ms var(--motion-ease-exit) both !important;
+}
+@keyframes motion-dialog-panel-in {
+  from { opacity: .72; transform: translate3d(0, 12px, 0) scale(.985); }
+  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+@keyframes motion-dialog-panel-out {
+  from { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+  to { opacity: 0; transform: translate3d(0, 7px, 0) scale(.99); }
+}
+
+.motion-kind-panel.motion-entering > .messages-modal,
+.motion-kind-panel.motion-entering > .people-modal,
+.motion-kind-panel.motion-entering > .private-chat-modal {
+  animation: motion-drawer-in 280ms var(--motion-ease-enter) both !important;
+}
+.motion-kind-panel.motion-exiting > .messages-modal,
+.motion-kind-panel.motion-exiting > .people-modal,
+.motion-kind-panel.motion-exiting > .private-chat-modal {
+  animation: motion-drawer-out 180ms var(--motion-ease-exit) both !important;
+}
+@keyframes motion-drawer-in { from { opacity: .85; transform: translate3d(22px, 0, 0); } to { opacity: 1; transform: translate3d(0, 0, 0); } }
+@keyframes motion-drawer-out { from { opacity: 1; transform: translate3d(0, 0, 0); } to { opacity: .75; transform: translate3d(18px, 0, 0); } }
+@media (max-width: 720px) {
+  .motion-kind-panel.motion-entering > .messages-modal,
+  .motion-kind-panel.motion-entering > .people-modal,
+  .motion-kind-panel.motion-entering > .private-chat-modal { animation-name: motion-drawer-mobile-in !important; }
+  .motion-kind-panel.motion-exiting > .messages-modal,
+  .motion-kind-panel.motion-exiting > .people-modal,
+  .motion-kind-panel.motion-exiting > .private-chat-modal { animation-name: motion-drawer-mobile-out !important; }
+}
+@keyframes motion-drawer-mobile-in { from { opacity: .8; transform: translate3d(0, 15px, 0); } to { opacity: 1; transform: translate3d(0, 0, 0); } }
+@keyframes motion-drawer-mobile-out { from { opacity: 1; transform: translate3d(0, 0, 0); } to { opacity: .7; transform: translate3d(0, 12px, 0); } }
+
+.motion-kind-menu.motion-entering { transform-origin: top center; animation: motion-menu-in 180ms var(--motion-ease-enter) both !important; }
+.motion-kind-menu.motion-exiting { transform-origin: top center; animation: motion-menu-out 135ms var(--motion-ease-exit) both !important; }
+@keyframes motion-menu-in { from { opacity: 0; transform: translate3d(0, -4px, 0) scale(.985); } to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); } }
+@keyframes motion-menu-out { from { opacity: 1; transform: translate3d(0, 0, 0) scale(1); } to { opacity: 0; transform: translate3d(0, -3px, 0) scale(.99); } }
+.motion-kind-toast.motion-entering { animation: motion-toast-in 220ms var(--motion-ease-enter) both !important; }
+.motion-kind-toast.motion-exiting { animation: motion-toast-out 170ms var(--motion-ease-exit) both !important; }
+@keyframes motion-toast-in { from { opacity: 0; transform: translate(-50%, 9px) scale(.985); } to { opacity: 1; transform: translate(-50%, 0) scale(1); } }
+@keyframes motion-toast-out { from { opacity: 1; transform: translate(-50%, 0) scale(1); } to { opacity: 0; transform: translate(-50%, 6px) scale(.99); } }
+
+/* Content entrances are restrained: short-distance fades, not blanket movement. */
+.admin-panel, .admin-stat-card, .admin-metric-card, .admin-chart-grid > * {
+  animation: motion-section-in 230ms var(--motion-ease-enter) both;
+}
+.admin-panel:nth-of-type(2), .admin-stat-card:nth-child(2), .admin-metric-card:nth-child(2) { animation-delay: var(--motion-stagger-unit); }
+.admin-panel:nth-of-type(3), .admin-stat-card:nth-child(3), .admin-metric-card:nth-child(3) { animation-delay: calc(var(--motion-stagger-unit) * 2); }
+.admin-panel:nth-of-type(4), .admin-stat-card:nth-child(4), .admin-metric-card:nth-child(4) { animation-delay: calc(var(--motion-stagger-unit) * 3); }
+@keyframes motion-section-in { from { opacity: 0; transform: translate3d(0, 7px, 0); } to { opacity: 1; transform: translate3d(0, 0, 0); } }
+.admin-table tbody tr { animation: motion-row-in 190ms var(--motion-ease-enter) both; }
+.admin-table tbody tr:nth-child(2) { animation-delay: 18ms; }
+.admin-table tbody tr:nth-child(3) { animation-delay: 36ms; }
+.admin-table tbody tr:nth-child(4) { animation-delay: 54ms; }
+.admin-table tbody tr:nth-child(5) { animation-delay: 72ms; }
+@keyframes motion-row-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+.admin-user-row, .admin-activity-row, .people-person-row, .people-recent-row {
+  transition: background-color 170ms var(--motion-ease-standard), border-color 170ms var(--motion-ease-standard), box-shadow 170ms var(--motion-ease-standard), transform 170ms var(--motion-ease-standard);
+}
+.people-person-row, .people-recent-row { animation: motion-row-in 180ms var(--motion-ease-enter) both; }
+.admin-donut circle { transition: stroke-dasharray 260ms var(--motion-ease-reposition), stroke-dashoffset 260ms var(--motion-ease-reposition); }
+.admin-stat-card, .admin-panel, .admin-metric-card { transition: border-color 180ms var(--motion-ease-standard), box-shadow 180ms var(--motion-ease-standard); }
+
+/* Message bubbles enter subtly and preserve the chat's existing reading position. */
+.chat-message { animation: motion-message-in 170ms var(--motion-ease-enter) both; }
+@keyframes motion-message-in { from { opacity: 0; transform: translateY(5px) scale(.99); } to { opacity: 1; transform: translateY(0) scale(1); } }
+.meeting-panel-tab { transition: color 170ms var(--motion-ease-standard), background-color 170ms var(--motion-ease-standard), box-shadow 170ms var(--motion-ease-standard); }
+.meeting-notes-toolbar button { transition: color 150ms var(--motion-ease-standard), background-color 150ms var(--motion-ease-standard), border-color 150ms var(--motion-ease-standard), transform 120ms var(--motion-ease-spring); }
+.meeting-notes-toolbar button:active { transform: scale(.94); }
+.people-online-dot, .people-recent-status.is-online { transition: background-color 180ms var(--motion-ease-standard), color 180ms var(--motion-ease-standard), box-shadow 180ms var(--motion-ease-standard); }
+.room-presence-toast { animation-duration: 230ms, 260ms; animation-timing-function: var(--motion-ease-enter), var(--motion-ease-exit); }
+.room-message-toast { transition: opacity 180ms var(--motion-ease-standard), transform 180ms var(--motion-ease-enter), box-shadow 180ms var(--motion-ease-standard); }
+
+@media (prefers-reduced-motion: reduce) {
+  :root { scroll-behavior: auto !important; }
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    animation-delay: 0ms !important;
+    transition-duration: 1ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+  .motion-presence-root.motion-entering,
+  .motion-presence-root.motion-exiting { animation-duration: 1ms !important; }
+  .motion-presence-root { will-change: auto; }
+}
+
+/* A synchronized raised hand gets a short, restrained acknowledgement when its real state appears. */
+.raised-hand-badge { animation: raised-hand-arrive 260ms var(--motion-ease-spring) both; transform-origin: 50% 80%; }
+@keyframes raised-hand-arrive { 0% { opacity: 0; transform: translateY(5px) scale(.82); } 72% { opacity: 1; transform: translateY(-1px) scale(1.045); } 100% { opacity: 1; transform: translateY(0) scale(1); } }
+@media (prefers-reduced-motion: reduce) { .raised-hand-badge { animation-duration: 1ms !important; } }
+
+.people-raised-hand { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; border: 1px solid rgba(217,183,123,.34); border-radius: 999px; color: #f0d5a0; background: rgba(143,33,65,.22); font-size: 9px; font-weight: 750; animation: raised-hand-arrive 260ms var(--motion-ease-spring) both; }
+:root[data-theme="light"] .people-raised-hand { color: #7b3b4f; border-color: #ead6b4; background: #fbf1df; }
+
+/* Compact in-room alerts and popovers use vertical motion so their flex alignment and centering stay intact. */
+.motion-kind-popover.motion-entering { animation: motion-popover-in 190ms var(--motion-ease-enter) both !important; }
+.motion-kind-popover.motion-exiting { pointer-events: none !important; animation: motion-popover-out 145ms var(--motion-ease-exit) both !important; }
+@keyframes motion-popover-in { from { opacity: 0; transform: translate3d(0, 6px, 0) scale(.99); } to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); } }
+@keyframes motion-popover-out { from { opacity: 1; transform: translate3d(0, 0, 0) scale(1); } to { opacity: 0; transform: translate3d(0, 4px, 0) scale(.995); } }
+.motion-kind-popover.motion-entered.room-presence-toast { animation: none !important; }
+.motion-kind-popover.motion-entering.reaction-picker { animation-name: motion-reaction-pop-in !important; }
+.motion-kind-popover.motion-exiting.reaction-picker { animation-name: motion-reaction-pop-out !important; }
+.reaction-picker { --reaction-origin-x: -50%; }
+@keyframes motion-reaction-pop-in { from { opacity: 0; transform: translateX(var(--reaction-origin-x)) translateY(5px) scale(.985); } to { opacity: 1; transform: translateX(var(--reaction-origin-x)) translateY(0) scale(1); } }
+@keyframes motion-reaction-pop-out { from { opacity: 1; transform: translateX(var(--reaction-origin-x)) translateY(0) scale(1); } to { opacity: 0; transform: translateX(var(--reaction-origin-x)) translateY(3px) scale(.99); } }
+@media (max-width: 720px) { .reaction-picker { --reaction-origin-x: 0%; } }
+@media (prefers-reduced-motion: reduce) { .motion-kind-popover.motion-entering, .motion-kind-popover.motion-exiting { animation-duration: 1ms !important; } }
+
+/* Form controls and disclosure elements share the same restrained interaction response. */
+input, textarea, select, [contenteditable="true"] { transition: border-color 170ms var(--motion-ease-standard), box-shadow 170ms var(--motion-ease-standard), background-color 170ms var(--motion-ease-standard); }
+input:focus-visible, textarea:focus-visible, select:focus-visible, [contenteditable="true"]:focus-visible { outline-offset: 2px; transition: outline-offset 140ms var(--motion-ease-enter), box-shadow 170ms var(--motion-ease-standard); }
+.admin-tab { transition: color 180ms var(--motion-ease-standard), background-color 180ms var(--motion-ease-standard), border-color 180ms var(--motion-ease-standard), transform 150ms var(--motion-ease-standard); }
+.admin-tab:active { transform: scale(.975); }
+.cselect-chevron { transition: transform 180ms var(--motion-ease-standard); }
+.cselect-trigger.is-open .cselect-chevron { transform: rotate(180deg); }
+.people-more-popover { transform-origin: top right; animation: motion-popover-in 170ms var(--motion-ease-enter) both; }
