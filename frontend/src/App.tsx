@@ -466,7 +466,9 @@ export default function App() {
           setMeetings((current) => { const next = merge(current); writeCache("mine", next); return next; });
           setPublicMeetings((current) => { const next = merge(current); writeCache("public", next); return next; });
         }
-        writeCache(`meeting:${user.id}:${meeting.slug}`, meeting);
+        // Authentication can change while the schedule modal is mounted; only cache
+        // a user-scoped meeting entry when the current user is still available.
+        if (user) writeCache(`meeting:${user.id}:${meeting.slug}`, meeting);
         void refreshMeetings(true);
       }} />
       {!location.pathname.startsWith("/room/") && !location.pathname.startsWith("/meeting/") && <InstallPwaButton />}
