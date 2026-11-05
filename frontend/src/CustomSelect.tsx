@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronDown } from "lucide-react";
-import { MotionPresence } from "./MotionPresence";
 
 export type SelectOption = { value: string; label: string };
 
@@ -50,12 +49,12 @@ export function CustomSelect({ value, onChange, options, ariaLabel, className = 
   }, []);
 
   useLayoutEffect(() => {
-    if (!open) return;
-    const frame = window.requestAnimationFrame(place);
+    if (!open) { setMenuStyle({ visibility: "hidden" }); return; }
+    place();
     const reposition = () => place();
     window.addEventListener("resize", reposition);
     window.addEventListener("scroll", reposition, true);
-    return () => { window.cancelAnimationFrame(frame); window.removeEventListener("resize", reposition); window.removeEventListener("scroll", reposition, true); };
+    return () => { window.removeEventListener("resize", reposition); window.removeEventListener("scroll", reposition, true); };
   }, [open, place, options.length]);
 
   useEffect(() => {
@@ -122,8 +121,8 @@ export function CustomSelect({ value, onChange, options, ariaLabel, className = 
       <span className={selected ? "cselect-value" : "cselect-value cselect-placeholder"}>{selected ? selected.label : placeholder || "Select…"}</span>
       <ChevronDown size={15} className="cselect-chevron" aria-hidden="true"/>
     </button>
-    {createPortal(
-      <MotionPresence present={open} kind="menu">{<div ref={menuRef} id={listId} className="cselect-menu" role="listbox" aria-label={ariaLabel} style={menuStyle} onKeyDown={onKeyDown}>
+    {open && createPortal(
+      <div ref={menuRef} id={listId} className="cselect-menu" role="listbox" aria-label={ariaLabel} style={menuStyle} onKeyDown={onKeyDown}>
         {options.map((option, index) => <button
           type="button"
           key={option.value || `empty-${index}`}
@@ -134,7 +133,7 @@ export function CustomSelect({ value, onChange, options, ariaLabel, className = 
           onMouseEnter={() => setActive(index)}
           onClick={() => choose(index)}
         ><span>{option.label}</span>{option.value === value && <Check size={15} aria-hidden="true"/>}</button>)}
-      </div>}</MotionPresence>,
+      </div>,
       document.body,
     )}
   </>;
