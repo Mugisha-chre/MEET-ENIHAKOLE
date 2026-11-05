@@ -139,7 +139,7 @@ export const api = {
   adminAttendance: (slug: string, page = 1) => request<any>(`/admin/meetings/${encodeURIComponent(slug)}/attendance?page=${page}&limit=20`),
   adminTerminateMeeting: (slug: string) => request<{ success: boolean }>(`/admin/meetings/${encodeURIComponent(slug)}/terminate`, { method: "POST" }),
   adminUsers: (q = "", page = 1, sort = "newest", status = "") => request<any>(`/admin/users?page=${page}&limit=20&sort=${sort}${q ? `&q=${encodeURIComponent(q)}` : ""}${status ? `&status=${encodeURIComponent(status)}` : ""}`),
-  adminSetUserStatus: (id: string, status: "active" | "suspended") => request<{ success: boolean }>(`/admin/users/${encodeURIComponent(id)}/status`, { method: "PATCH", body: JSON.stringify({ status }) }),
+  adminSetUserStatus: (id: string, status: "active" | "suspended") => request<{ success: boolean; user: { id: string; accountStatus: "active" | "suspended" } }>(`/admin/users/${encodeURIComponent(id)}/status`, { method: "PATCH", body: JSON.stringify({ status }) }),
   adminSetMeetingPermission: (id: string, allowed: boolean) => request<{ success: boolean; user: { id: string; canCreateMeetings: boolean } }>(`/admin/users/${encodeURIComponent(id)}/meeting-permission`, { method: "PATCH", body: JSON.stringify({ allowed }) }),
   adminRecordings: (page = 1, q = "", status = "", sort = "newest") => request<any>(`/admin/recordings?page=${page}&limit=20&sort=${sort}${q ? `&q=${encodeURIComponent(q)}` : ""}${status ? `&status=${encodeURIComponent(status)}` : ""}`),
   adminActivity: (page = 1, q = "", category = "", sort = "newest") => request<any>(`/admin/activity?page=${page}&limit=20&sort=${sort}${q ? `&q=${encodeURIComponent(q)}` : ""}${category ? `&category=${encodeURIComponent(category)}` : ""}`),

@@ -471,10 +471,10 @@ router.post("/:slug/token", async (req, res) => {
 
     // Both meeting types are closed until their scheduled start instant. The
     // server clock is authoritative even if a client enables the Join button.
-    if (meeting.status === "scheduled" && now.getTime() < meeting.startsAt.getTime()) {
+    if (!isHost && meeting.status === "scheduled" && now.getTime() < meeting.startsAt.getTime()) {
       return res.status(409).json({ error: "Not Yet Open. This gathering becomes available at its scheduled start time.", code: "NOT_YET_OPEN", opensAt: meeting.startsAt.toISOString() });
     }
-    // Once the scheduled start arrives the room becomes joinable automatically.
+    // The host may start early; other people wait. Once the scheduled start arrives the room becomes joinable automatically.
     // The first attendee may initialize the room; only the owner receives host role.
     if (meeting.status === "scheduled") {
       meeting.status = "live";

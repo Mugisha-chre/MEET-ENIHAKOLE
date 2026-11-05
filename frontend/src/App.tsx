@@ -368,7 +368,7 @@ export default function App() {
         } catch (cause) {
           // Only drop the session when the server says it is invalid, never because the network was slow or unreachable.
           if (cause instanceof ApiError && (cause.status === 401 || cause.status === 403)) {
-            clearAuthToken(); removeCache("user"); removeCache("mine");
+            clearAuthToken(); removeCache("user"); removeCache("mine"); clearCachePrefix("admin:"); clearCachePrefix("recordings:"); clearCachePrefix("notes:");
             if (!cancelled) { setUser(null); setMeetings([]); }
           }
         }
@@ -404,7 +404,7 @@ export default function App() {
     void api.logout().catch(() => undefined);
     googleSignOut();
     clearAuthToken();
-    removeCache("user"); removeCache("mine"); clearCachePrefix("meeting:");
+    removeCache("user"); removeCache("mine"); clearCachePrefix("meeting:"); clearCachePrefix("admin:"); clearCachePrefix("recordings:"); clearCachePrefix("notes:");
     setUser(null);
     setMeetings([]);
     void refreshMeetings(true);
@@ -488,7 +488,7 @@ function InstallPwaButton({ inline = false }: { inline?: boolean }) {
   const [installed, setInstalled] = useState(isStandalone);
   const [iosTip, setIosTip] = useState(false);
   const { pathname } = useLocation();
-  const hasBottomNav = pathname === "/" || pathname === "/meetings";
+  const hasBottomNav = pathname === "/" || pathname === "/meetings" || pathname === "/recordings" || pathname === "/admin";
   const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 
   useEffect(() => {
@@ -828,6 +828,22 @@ function MeetingPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug, cacheKey]);
 
+  // While a gathering is still scheduled, quietly watch for the host starting it early so waiting people see the Join button right away.
+  const waitingForStart = meeting?.status === "scheduled";
+  useEffect(() => {
+    if (!waitingForStart) return;
+    let cancelled = false;
+    const poll = window.setInterval(() => {
+      if (document.visibilityState === "hidden") return;
+      api.meeting(slug).then(({ meeting: result }) => {
+        if (cancelled) return;
+        if (result.status !== "scheduled") { setMeeting(result); writeCache(cacheKey, result); }
+      }).catch(() => undefined);
+    }, 5000);
+    return () => { cancelled = true; window.clearInterval(poll); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [waitingForStart, slug, cacheKey]);
+
   useEffect(() => { if (user?.picture) void preloadPhoto(user.picture, 512); }, [user?.picture]);
   useEffect(() => {
     const tick = window.setInterval(() => setClockNow(Date.now() + serverClockOffsetRef.current), 1000);
@@ -908,7 +924,7 @@ function MeetingPage() {
   async function join(event: FormEvent) {
     event.preventDefault();
     if (!meeting) return;
-    if (meeting.status === "scheduled" && clockNow < new Date(meeting.startsAt).getTime()) {
+    if (!meeting.isOwner && meeting.status === "scheduled" && clockNow < new Date(meeting.startsAt).getTime()) {
       setError(`Not Yet Open. Please return at ${formatTime(meeting.startsAt, meeting.timezone)}.`);
       return;
     }
@@ -919,7 +935,7 @@ function MeetingPage() {
 
   async function enterRoom(audio: boolean, video: boolean) {
     if (!meeting || (!user && !getGuestProfile(slug)) || enteringRef.current) return;
-    if (meeting.status === "scheduled" && Date.now() + serverClockOffsetRef.current < new Date(meeting.startsAt).getTime()) {
+    if (!meeting.isOwner && meeting.status === "scheduled" && Date.now() + serverClockOffsetRef.current < new Date(meeting.startsAt).getTime()) {
       setError("Not Yet Open. This gathering becomes available at its scheduled start time.");
       return;
     }
@@ -1000,7 +1016,8 @@ function MeetingPage() {
   if (!meeting) return <StandaloneError message={error || "This meeting could not be found."}/>;
   const ended = meeting.status === "ended" || meeting.status === "cancelled";
   const opensAt = new Date(meeting.startsAt).getTime();
-  const notYetOpen = meeting.status === "scheduled" && Number.isFinite(opensAt) && clockNow < opensAt;
+  // The host may always start their own gathering early; everyone else waits for the scheduled time.
+  const notYetOpen = !meeting.isOwner && meeting.status === "scheduled" && Number.isFinite(opensAt) && clockNow < opensAt;
 
   return (
     <div className="meeting-landing">
@@ -2005,6 +2022,33 @@ type AnnotationMessage =
   | { k: "hello" };
 type AnnotationTool = "off" | "pointer" | "arrow";
 const ANNOTATION_TOPIC = "meet-enihakole-annotate";
+/** Realtime channel (LiveKit data channel) that keeps every participant's notes in step while anyone types. */
+const NOTES_TOPIC = "meet-enihakole-notes";
+type NotesCache = { title: string; html: string; revision: number; updatedByName: string };
+/** Caret position as plain-text offsets so a remote update can be applied without throwing the cursor back to the start. */
+function readCaretOffsets(editor: HTMLElement): { start: number; end: number } | null {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0 || !editor.contains(selection.anchorNode)) return null;
+  const range = selection.getRangeAt(0);
+  const measure = (node: Node, offset: number) => { const probe = document.createRange(); probe.selectNodeContents(editor); probe.setEnd(node, offset); return probe.toString().length; };
+  return { start: measure(range.startContainer, range.startOffset), end: measure(range.endContainer, range.endOffset) };
+}
+function restoreCaretOffsets(editor: HTMLElement, offsets: { start: number; end: number }) {
+  const selection = window.getSelection();
+  if (!selection) return;
+  const locate = (target: number) => {
+    const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+    let remaining = target; let node = walker.nextNode();
+    while (node) { const length = node.textContent?.length ?? 0; if (remaining <= length) return { node, offset: remaining }; remaining -= length; node = walker.nextNode(); }
+    return { node: editor, offset: editor.childNodes.length };
+  };
+  try {
+    const from = locate(offsets.start); const to = locate(offsets.end);
+    const range = document.createRange();
+    range.setStart(from.node, from.offset); range.setEnd(to.node, to.offset);
+    selection.removeAllRanges(); selection.addRange(range);
+  } catch { /* A caret that cannot be restored is harmless. */ }
+}
 const MAX_ANNOTATION_ARROWS = 30;
 const unit = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0);
 function cleanArrow(raw: unknown): AnnotationArrow | null {
@@ -2242,15 +2286,17 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
   const [peopleOpen, setPeopleOpen] = useState(false);
   const [peopleViewTab, setPeopleViewTab] = useState<"people" | "private">("people");
   const [notesOpen, setNotesOpen] = useState(false);
-  const [notesTitle, setNotesTitle] = useState("Meeting notes");
-  const [notesHtml, setNotesHtml] = useState("");
-  const [notesRevision, setNotesRevision] = useState(0);
+  // Notes are cache-first: the last known copy is ready instantly (and preloaded below), then refreshed quietly in the background.
+  const notesCacheKey = `notes:${meeting.slug}`;
+  const [notesTitle, setNotesTitle] = useState(() => readCache<NotesCache>(notesCacheKey)?.value.title || "Meeting notes");
+  const [notesHtml, setNotesHtml] = useState(() => readCache<NotesCache>(notesCacheKey)?.value.html || "");
+  const [notesRevision, setNotesRevision] = useState(() => readCache<NotesCache>(notesCacheKey)?.value.revision || 0);
   const [notesDirty, setNotesDirty] = useState(false);
   const [notesLoading, setNotesLoading] = useState(false);
   const [notesSaving, setNotesSaving] = useState(false);
   const [notesConflict, setNotesConflict] = useState(false);
   const [notesError, setNotesError] = useState("");
-  const [notesUpdatedBy, setNotesUpdatedBy] = useState("");
+  const [notesUpdatedBy, setNotesUpdatedBy] = useState(() => readCache<NotesCache>(notesCacheKey)?.value.updatedByName || "");
   const [recordingState, setRecordingState] = useState<MeetingRecordingState | null>(null);
   const [recordingBusy, setRecordingBusy] = useState(false);
   const [recordingConsentBusy, setRecordingConsentBusy] = useState(false);
@@ -2302,6 +2348,9 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
   const notesTitleRef = useRef("Meeting notes");
   const notesRevisionRef = useRef(0);
   const notesSaveTimer = useRef(0);
+  const notesLiveTimer = useRef(0);
+  const notesLoadedRef = useRef(Boolean(readCache<NotesCache>(notesCacheKey)));
+  const notesBaseRef = useRef(readCache<NotesCache>(notesCacheKey)?.value.html || "");
   const directContactRef = useRef<DirectContact | null>(null);
   const privateNoticeTimer = useRef(0);
   const localIdentity = localParticipant.identity;
@@ -2506,25 +2555,69 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
     return () => { cancelled = true; };
   }, [meeting.slug, directContact?.userId]);
 
+  // Puts note content into the editor without disturbing a person who is mid-sentence (the caret is restored).
+  function paintNotesEditor(html: string) {
+    const editor = notesEditorRef.current;
+    if (!editor || editor.innerHTML === html) return;
+    const caret = document.activeElement === editor ? readCaretOffsets(editor) : null;
+    editor.innerHTML = html;
+    if (caret) restoreCaretOffsets(editor, caret);
+  }
+
   async function loadMeetingNotes(force = false) {
     if (!force && (notesDirtyRef.current || notesSavingRef.current)) return;
-    if (force) setNotesLoading(true);
+    // Only a first-ever load (or an explicit "Load latest") shows the loading state; everything else is a quiet background refresh.
+    if (force || !notesLoadedRef.current) setNotesLoading(true);
     try {
       const result = await api.meetingNotes(meeting.slug);
+      // Someone may have started typing while the request was in flight; never overwrite their edit.
+      if (!force && (notesDirtyRef.current || notesSavingRef.current)) return;
       const note = result.note;
       const loadedTitle = note.title || "Meeting notes";
       const loadedHtml = note.contentHtml || "";
       const loadedRevision = note.revision || 0;
-      setNotesTitle(loadedTitle); notesTitleRef.current = loadedTitle;
-      setNotesHtml(loadedHtml); notesHtmlRef.current = loadedHtml;
+      notesLoadedRef.current = true;
+      notesBaseRef.current = loadedHtml;
+      writeCache<NotesCache>(notesCacheKey, { title: loadedTitle, html: loadedHtml, revision: loadedRevision, updatedByName: note.updatedByName || "" });
+      if (loadedTitle !== notesTitleRef.current) { setNotesTitle(loadedTitle); notesTitleRef.current = loadedTitle; }
+      if (loadedHtml !== notesHtmlRef.current) { setNotesHtml(loadedHtml); notesHtmlRef.current = loadedHtml; }
       setNotesRevision(loadedRevision); notesRevisionRef.current = loadedRevision;
       setNotesUpdatedBy(note.updatedByName || "");
       setNotesDirty(false); notesDirtyRef.current = false;
       setNotesConflict(false); notesConflictRef.current = false; setNotesError("");
-      if (notesEditorRef.current) notesEditorRef.current.innerHTML = note.contentHtml || "";
+      paintNotesEditor(loadedHtml);
     } catch (cause) {
-      setNotesError(cause instanceof Error ? cause.message : "Could not load meeting notes.");
-    } finally { if (force) setNotesLoading(false); }
+      if (force || !notesLoadedRef.current) setNotesError(cause instanceof Error ? cause.message : "Could not load meeting notes.");
+    } finally { setNotesLoading(false); }
+  }
+
+  // Sends a small realtime message over the room's data channel so everyone's notes update as the person types.
+  function publishNotesSignal(signal: Record<string, unknown>, reliable = true) {
+    try {
+      void localParticipant.publishData(new TextEncoder().encode(JSON.stringify({ ...signal, name: participantName(localParticipant) || "A participant" })), { reliable, topic: NOTES_TOPIC }).catch(() => { /* The next save broadcast or background refresh catches everyone up. */ });
+    } catch { /* Not connected yet. */ }
+  }
+  function broadcastNotesLive() {
+    if (notesLiveTimer.current) return;
+    notesLiveTimer.current = window.setTimeout(() => {
+      notesLiveTimer.current = 0;
+      const html = notesHtmlRef.current;
+      // Long notes exceed a safe data-channel packet; those peers catch up from the "saved" signal instead.
+      if (new TextEncoder().encode(html).length > 12_000) return;
+      publishNotesSignal({ kind: "live", html, title: notesTitleRef.current });
+    }, 160);
+  }
+  // Applies another participant's live edit, unless this person is typing (their own save would then be reconciled as usual).
+  function applyRemoteNotes(data: { html?: string; title?: string; name?: string }) {
+    if (notesDirtyRef.current || notesSavingRef.current || notesConflictRef.current) return;
+    const html = typeof data.html === "string" ? data.html : notesHtmlRef.current;
+    const title = typeof data.title === "string" && data.title ? data.title : notesTitleRef.current;
+    if (html === notesHtmlRef.current && title === notesTitleRef.current) return;
+    notesHtmlRef.current = html; notesTitleRef.current = title; notesBaseRef.current = html;
+    setNotesHtml(html); setNotesTitle(title);
+    if (data.name) setNotesUpdatedBy(data.name);
+    writeCache<NotesCache>(notesCacheKey, { title, html, revision: notesRevisionRef.current, updatedByName: data.name || "" });
+    paintNotesEditor(html);
   }
 
   async function saveMeetingNotes(force = false) {
@@ -2539,15 +2632,32 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
       saved = true;
       setNotesRevision(result.note.revision); notesRevisionRef.current = result.note.revision;
       setNotesUpdatedBy(result.note.updatedByName || "");
+      notesBaseRef.current = contentHtml;
+      writeCache<NotesCache>(notesCacheKey, { title, html: contentHtml, revision: result.note.revision, updatedByName: result.note.updatedByName || "" });
+      // Tell everyone else a new version exists so they refresh it in the background.
+      publishNotesSignal({ kind: "saved", revision: result.note.revision });
       setNotesConflict(false); notesConflictRef.current = false; setNotesError("");
       if (notesHtmlRef.current === contentHtml && notesTitleRef.current.trim() === title) {
         setNotesDirty(false); notesDirtyRef.current = false;
       }
     } catch (cause) {
       if (cause instanceof ApiError && cause.status === 409) {
-        setNotesConflict(true);
-        notesConflictRef.current = true;
-        setNotesError("Another participant has saved a newer version. Load their version or explicitly keep yours.");
+        // If the newest server copy is exactly what this edit was based on, nobody else changed anything in between
+        // (our revision number was just behind), so the edit is safely retried on top of it.
+        let reconciled = false;
+        try {
+          const latest = (await api.meetingNotes(meeting.slug)).note;
+          if ((latest.contentHtml || "") === notesBaseRef.current && !force) {
+            notesRevisionRef.current = latest.revision || 0; setNotesRevision(latest.revision || 0);
+            reconciled = true;
+          }
+        } catch { /* Fall back to the conflict prompt below. */ }
+        if (reconciled) saved = true;
+        else {
+          setNotesConflict(true);
+          notesConflictRef.current = true;
+          setNotesError("Another participant has saved a newer version. Load their version or explicitly keep yours.");
+        }
       } else setNotesError(cause instanceof Error ? cause.message : "Could not save meeting notes.");
     } finally {
       setNotesSaving(false); notesSavingRef.current = false;
@@ -2565,6 +2675,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
     notesDirtyRef.current = true;
     setNotesDirty(true);
     if (!notesConflict) setNotesError("");
+    broadcastNotesLive();
     window.clearTimeout(notesSaveTimer.current);
     notesSaveTimer.current = window.setTimeout(() => { void saveMeetingNotes(); }, 1100);
   }
@@ -2575,14 +2686,17 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
     notesDirtyRef.current = true;
     setNotesDirty(true);
     if (!notesConflict) setNotesError("");
+    broadcastNotesLive();
     window.clearTimeout(notesSaveTimer.current);
     notesSaveTimer.current = window.setTimeout(() => { void saveMeetingNotes(); }, 1100);
   }
 
   useEffect(() => {
     if (!notesOpen) return;
-    void loadMeetingNotes(true);
-    const refresh = window.setInterval(() => { if (!notesDirtyRef.current && !notesSavingRef.current) void loadMeetingNotes(false); }, 5000);
+    // Cached notes are already on screen; this only refreshes them quietly (the loading state shows only on a first-ever open).
+    void loadMeetingNotes(false);
+    // Realtime messages keep notes current; this slower refresh is only a safety net.
+    const refresh = window.setInterval(() => { if (!notesDirtyRef.current && !notesSavingRef.current) void loadMeetingNotes(false); }, 12_000);
     return () => {
       window.clearInterval(refresh);
       window.clearTimeout(notesSaveTimer.current);
@@ -2593,11 +2707,31 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
 
   // The editor is temporarily unmounted while the initial load skeleton is shown.
   // Hydrate it after loading completes, without overwriting in-progress local edits.
-  useEffect(() => {
+  useLayoutEffect(() => {
     const editor = notesEditorRef.current;
     if (!notesOpen || notesLoading || !editor || notesDirtyRef.current) return;
     if (editor.innerHTML !== notesHtmlRef.current) editor.innerHTML = notesHtmlRef.current;
   }, [notesOpen, notesLoading, notesHtml]);
+
+  // Preload notes quietly as soon as the room opens, so the Notes panel is instant and always current.
+  useEffect(() => { void loadMeetingNotes(false); }, [meeting.slug]);
+
+  // Realtime notes: apply other participants' live edits and refresh in the background whenever someone saves.
+  useEffect(() => {
+    const onNotesData = (payload: Uint8Array, participant?: { identity: string }, _kind?: unknown, topic?: string) => {
+      if (topic !== NOTES_TOPIC || participant?.identity === localIdentity) return;
+      try {
+        const data = JSON.parse(new TextDecoder().decode(payload)) as { kind?: string; html?: string; title?: string; name?: string };
+        if (data.kind === "live") applyRemoteNotes(data);
+        else if (data.kind === "saved" && !notesDirtyRef.current && !notesSavingRef.current) void loadMeetingNotes(false);
+      } catch { /* Ignore unrelated or malformed room data. */ }
+    };
+    room.on(RoomEvent.DataReceived, onNotesData);
+    // After a reconnect any live messages may have been missed, so catch up quietly.
+    const onReconnected = () => { void loadMeetingNotes(false); };
+    room.on(RoomEvent.Reconnected, onReconnected);
+    return () => { room.off(RoomEvent.DataReceived, onNotesData); room.off(RoomEvent.Reconnected, onReconnected); window.clearTimeout(notesLiveTimer.current); notesLiveTimer.current = 0; };
+  }, [room, meeting.slug, localIdentity]);
 
   useEffect(() => {
     if (!notesOpen || !notesDirty || notesSaving || notesConflict || notesError) return;
@@ -3333,7 +3467,7 @@ function DurationPicker({ value, onChange }: { value: string; onChange: (value: 
   const popRef = useRef<HTMLDivElement>(null);
   const up = usePopoverDirection(open, wrapRef, popRef);
   const selected = DURATION_OPTIONS.find((item) => item.value === value) || DURATION_OPTIONS[3];
-  return <div className="custom-picker-wrap" ref={wrapRef}><button type="button" className="custom-picker-trigger" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)}><Clock3 size={16}/><span>{selected.label}</span><ChevronRight size={15} className={open ? "picker-chevron-open" : "picker-chevron"}/></button>{open && <><button className="picker-dismiss" aria-label="Close duration options" onClick={() => setOpen(false)}/><div ref={popRef} className={`custom-picker-menu duration-picker-menu ${up ? "popover-up" : ""}`} role="listbox" aria-label="Meeting duration">{DURATION_OPTIONS.map((option) => <button type="button" key={option.value} role="option" aria-selected={value === option.value} className={value === option.value ? "custom-picker-option picker-option-active" : "custom-picker-option"} onClick={() => { onChange(option.value); setOpen(false); }}>{option.label}{value === option.value && <Check size={15}/>}</button>)}</div></>}</div>;
+  return <div className="custom-picker-wrap" ref={wrapRef}><button type="button" className="custom-picker-trigger" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)}><Clock3 size={16}/><span>{selected.label}</span><ChevronRight size={15} className={open ? "picker-chevron-open" : "picker-chevron"}/></button>{open && <><button type="button" className="picker-dismiss" aria-label="Close duration options" onClick={() => setOpen(false)}/><div ref={popRef} className={`custom-picker-menu duration-picker-menu ${up ? "popover-up" : ""}`} role="listbox" aria-label="Meeting duration">{DURATION_OPTIONS.map((option) => <button type="button" key={option.value} role="option" aria-selected={value === option.value} className={value === option.value ? "custom-picker-option picker-option-active" : "custom-picker-option"} onClick={() => { onChange(option.value); setOpen(false); }}>{option.label}{value === option.value && <Check size={15}/>}</button>)}</div></>}</div>;
 }
 function TimePicker({ value, datePart, onChange }: { value: string; datePart: string; onChange: (value: string) => void }) {
   const [open, setOpen] = useState(false);
@@ -3375,7 +3509,7 @@ function CustomDateTimePicker({ value, onChange }: { value: string; onChange: (v
   const dayCount = new Date(shownMonth.getFullYear(), shownMonth.getMonth() + 1, 0).getDate();
   const today = localDateTimeValue(new Date()).slice(0, 10);
   const updateDate = (date: string) => onChange(`${date}T${timePart}`);
-  return <div className="custom-datetime"><div className="custom-datetime-row"><div className="custom-picker-wrap date-picker-wrap" ref={calendarWrapRef}><button type="button" className="custom-picker-trigger" onClick={() => setCalendarOpen((current) => !current)} aria-expanded={calendarOpen}><CalendarDays size={16}/><span>{selectedDate.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</span><ChevronRight size={15} className={calendarOpen ? "picker-chevron-open" : "picker-chevron"}/></button>{calendarOpen && <><button className="picker-dismiss" aria-label="Close calendar" onClick={() => setCalendarOpen(false)}/><div ref={calendarPopRef} className={`custom-calendar-popover ${calendarUp ? "popover-up" : ""}`}><div className="calendar-month-row"><button type="button" className="room-icon-button" onClick={() => setShownMonth(new Date(shownMonth.getFullYear(), shownMonth.getMonth() - 1, 1))} aria-label="Previous month"><ChevronLeft size={16}/></button><b>{shownMonth.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</b><button type="button" className="room-icon-button" onClick={() => setShownMonth(new Date(shownMonth.getFullYear(), shownMonth.getMonth() + 1, 1))} aria-label="Next month"><ChevronRight size={16}/></button></div><div className="calendar-weekdays">{["S", "M", "T", "W", "T", "F", "S"].map((day, index) => <span key={`${day}-${index}`}>{day}</span>)}</div><div className="calendar-days">{Array.from({ length: firstDay }, (_, index) => <span key={`blank-${index}`}/>)}{Array.from({ length: dayCount }, (_, index) => { const day = index + 1; const date = `${shownMonth.getFullYear()}-${String(shownMonth.getMonth() + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`; const isPast = date < today; return <button type="button" key={date} disabled={isPast} className={`${date === datePart ? "calendar-day-active" : ""} ${date === today ? "calendar-day-today" : ""}`} onClick={() => { updateDate(date); setCalendarOpen(false); }}>{day}</button>; })}</div></div></>}</div><TimePicker value={timePart} datePart={datePart} onChange={(time) => onChange(`${datePart}T${time}`)} /></div><input className="visually-hidden-date-value" type="datetime-local" value={value} onChange={(event) => onChange(event.target.value)} min={localDateTimeValue(new Date(Date.now() - 60_000))} tabIndex={-1} aria-hidden="true"/></div>;
+  return <div className="custom-datetime"><div className="custom-datetime-row"><div className="custom-picker-wrap date-picker-wrap" ref={calendarWrapRef}><button type="button" className="custom-picker-trigger" onClick={() => setCalendarOpen((current) => !current)} aria-expanded={calendarOpen}><CalendarDays size={16}/><span>{selectedDate.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</span><ChevronRight size={15} className={calendarOpen ? "picker-chevron-open" : "picker-chevron"}/></button>{calendarOpen && <><button type="button" className="picker-dismiss" aria-label="Close calendar" onClick={() => setCalendarOpen(false)}/><div ref={calendarPopRef} className={`custom-calendar-popover ${calendarUp ? "popover-up" : ""}`}><div className="calendar-month-row"><button type="button" className="room-icon-button" onClick={() => setShownMonth(new Date(shownMonth.getFullYear(), shownMonth.getMonth() - 1, 1))} aria-label="Previous month"><ChevronLeft size={16}/></button><b>{shownMonth.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</b><button type="button" className="room-icon-button" onClick={() => setShownMonth(new Date(shownMonth.getFullYear(), shownMonth.getMonth() + 1, 1))} aria-label="Next month"><ChevronRight size={16}/></button></div><div className="calendar-weekdays">{["S", "M", "T", "W", "T", "F", "S"].map((day, index) => <span key={`${day}-${index}`}>{day}</span>)}</div><div className="calendar-days">{Array.from({ length: firstDay }, (_, index) => <span key={`blank-${index}`}/>)}{Array.from({ length: dayCount }, (_, index) => { const day = index + 1; const date = `${shownMonth.getFullYear()}-${String(shownMonth.getMonth() + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`; const isPast = date < today; return <button type="button" key={date} disabled={isPast} className={`${date === datePart ? "calendar-day-active" : ""} ${date === today ? "calendar-day-today" : ""}`} onClick={() => { updateDate(date); setCalendarOpen(false); }}>{day}</button>; })}</div></div></>}</div><TimePicker value={timePart} datePart={datePart} onChange={(time) => onChange(`${datePart}T${time}`)} /></div><input className="visually-hidden-date-value" type="datetime-local" value={value} onChange={(event) => onChange(event.target.value)} min={localDateTimeValue(new Date(Date.now() - 60_000))} tabIndex={-1} aria-hidden="true"/></div>;
 }
 
 function ScheduleModal({ onClose, onCreated }: { onClose: () => void; onCreated: (meeting: Meeting, shareUrl: string) => void }) {
@@ -3403,8 +3537,10 @@ function ScheduleModal({ onClose, onCreated }: { onClose: () => void; onCreated:
     }
   }
 
-  async function submit(event: FormEvent) {
-    event.preventDefault(); setError("");
+  // Creation only ever happens from an explicit click on the Create button (never from Enter, picker taps or step changes).
+  async function submit(event?: FormEvent) {
+    event?.preventDefault(); setError("");
+    if (step !== 3 || busy) return;
     if (!meetingType) { setStep(1); setError("Choose a gathering type."); return; }
     if (title.trim().length < 3 || description.trim().length < 3) { setStep(2); setError("Enter both a meeting title and description."); return; }
     const startMillis = new Date(startsAt).getTime();
@@ -3455,7 +3591,7 @@ function ScheduleModal({ onClose, onCreated }: { onClose: () => void; onCreated:
           <label className="field-label">{meetingType === "prayer" ? "Prayer title" : "Meeting title"}<input value={title} onChange={(event) => setTitle(event.target.value)} minLength={3} maxLength={120} placeholder={meetingType === "prayer" ? "e.g. Wednesday morning prayer" : "e.g. Choir planning meeting"} required autoFocus/></label>
           <label className="field-label">Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={4} minLength={3} maxLength={1000} placeholder="Describe the purpose of this gathering and what participants can expect." required/></label>
         </div>}
-        {step === 3 && <form id="schedule-form" onSubmit={submit} className="form-stack schedule-form">
+        {step === 3 && <form id="schedule-form" onSubmit={(event) => event.preventDefault()} className="form-stack schedule-form">
           <div className="form-row"><label className="field-label">Date and time<CustomDateTimePicker value={startsAt} onChange={setStartsAt}/></label><label className="field-label">Duration<DurationPicker value={durationMinutes} onChange={setDurationMinutes}/></label></div>
           <div className="gathering-visibility-note"><ShieldCheck size={17}/><span>{meetingType === "prayer" ? "Online Prayer will be publicly listed for everyone to discover." : "This Meeting stays private. Only people with its unique invitation link can open it."}</span></div>
           <small className="modal-timezone"><Clock3 size={14}/>{timezone}</small>
@@ -3464,7 +3600,7 @@ function ScheduleModal({ onClose, onCreated }: { onClose: () => void; onCreated:
       </div>
       <div className="schedule-modal-footer schedule-step-footer">
         {step > 1 ? <button className="button button-soft" type="button" onClick={() => { setStep((step - 1) as 1 | 2); setError(""); }} disabled={busy}><ChevronLeft size={16}/> Back</button> : <button className="button button-soft" type="button" onClick={onClose}>Cancel</button>}
-        {step < 3 ? <button className="button button-primary" type="button" onClick={nextStep} disabled={step === 1 && !meetingType}>Continue <ArrowRight size={15}/></button> : <button className="button button-primary" type="submit" form="schedule-form" disabled={busy}>{busy ? <LoaderCircle size={16} className="spin"/> : meetingType === "prayer" ? <HeartHandshake size={16}/> : <CalendarDays size={16}/>} {busy ? "Creating…" : meetingType === "prayer" ? "Schedule Online Prayer" : "Create Meeting"} <ArrowRight size={15}/></button>}
+        {step < 3 ? <button key="schedule-continue" className="button button-primary" type="button" onClick={nextStep} disabled={step === 1 && !meetingType}>Continue <ArrowRight size={15}/></button> : <button key="schedule-create" className="button button-primary" type="button" onClick={() => void submit()} disabled={busy}>{busy ? <LoaderCircle size={16} className="spin"/> : meetingType === "prayer" ? <HeartHandshake size={16}/> : <CalendarDays size={16}/>} {busy ? "Creating…" : meetingType === "prayer" ? "Schedule Online Prayer" : "Create Meeting"} <ArrowRight size={15}/></button>}
       </div>
     </div> : <div className="schedule-success"><div className="modal-scroll-body"><span className="success-icon"><CheckCircle2 size={27}/></span><p className="section-overline">YOUR INVITATION IS READY</p><h2>It's all set.</h2><p className="modal-subtitle">{created.meeting.meetingType === "prayer" ? "Your Online Prayer is listed publicly. Share the invitation too." : "Your private meeting is ready. Only people with this invitation link can open it."}</p><div className="success-meeting-preview"><img src={meetingImage(created.meeting)} alt="Meeting cover"/><div><b>{created.meeting.title}</b><small>{formatDate(created.meeting.startsAt, {}, created.meeting.timezone)} · {created.meeting.durationMinutes} min</small></div></div><div className="share-url-box"><Link2 size={15}/><span>{created.shareUrl}</span><button className="icon-button" onClick={copyShare} aria-label="Copy link"><Copy size={15}/></button></div></div><div className="success-actions modal-footer-fixed"><button className="button button-primary button-full" onClick={() => void shareMeeting()}><Share2 size={16}/> Share invitation</button><Link className="button button-soft button-full" to={`/meeting/${created.meeting.slug}`} onClick={onClose}>Open gathering page <ArrowRight size={16}/></Link><button className="text-action centered-action" onClick={onClose}>Back to workspace</button></div></div>}
   </Modal>;

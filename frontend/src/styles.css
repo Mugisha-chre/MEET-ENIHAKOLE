@@ -2873,3 +2873,292 @@ body { min-height: var(--app-viewport-height, 100vh); }
   .schedule-step-footer .button { min-width:0; flex:1 1 0; }
 }
 .mbn-recordings .mbn-bar { --mbn-x:50%; }
+
+/* Recorded audio card: full-bleed dark stage with concentric rings; the Listen button swaps into inline controls on the same card. */
+.management-recording-card.audio-recording-card, :root[data-theme="light"] .management-recording-card.audio-recording-card { padding: 0; overflow: hidden; border: 0; border-radius: 22px; background: #000; color: #fff; }
+.audio-card-stage { position: relative; display: flex; flex: 1 1 auto; flex-direction: column; align-items: center; justify-content: space-between; gap: 18px; min-height: 340px; padding: 26px 20px 20px; overflow: hidden; background: #000; }
+.audio-card-ring { position: absolute; left: 50%; top: 42%; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
+.audio-card-ring-1 { width: 135%; aspect-ratio: 1; background: radial-gradient(circle, rgba(255,255,255,.075) 0%, rgba(255,255,255,.05) 60%, rgba(255,255,255,0) 100%); }
+.audio-card-ring-2 { width: 88%; aspect-ratio: 1; background: radial-gradient(circle, rgba(255,255,255,.07) 0%, rgba(255,255,255,.045) 70%, rgba(255,255,255,0) 100%); }
+.audio-card-body { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; width: 100%; min-width: 0; margin-top: 8px; text-align: center; }
+.audio-card-icon { display: grid; place-items: center; width: 54px; height: 54px; margin-bottom: 6px; color: #fff; }
+.audio-card-kind { color: #f0c5d0; font-size: 9.5px; font-style: normal; font-weight: 800; letter-spacing: .16em; }
+.audio-card-body b { max-width: 100%; color: #fff; font-size: 19px; line-height: 1.25; overflow-wrap: anywhere; }
+.audio-card-host { color: #e6dbdf; font-size: 12px; }
+.audio-card-body small { color: #a9959d; font-size: 10px; }
+:root[data-theme="light"] .management-recording-card.audio-recording-card .audio-card-body b { color: #fff; }
+:root[data-theme="light"] .management-recording-card.audio-recording-card .audio-card-body small { color: #a9959d; }
+.audio-card-actions { position: relative; z-index: 2; display: flex; align-items: center; justify-content: flex-start; width: 100%; min-height: 48px; }
+.audio-card-listen { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-width: 112px; height: 44px; padding: 0 26px; border: 0; border-radius: 999px; color: #000; background: #fff; font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; transition: transform .15s ease, opacity .15s ease; }
+.audio-card-listen:active { transform: scale(.96); }
+.audio-card-listen:disabled { opacity: .7; cursor: default; }
+.audio-card-controls { position: relative; display: flex; align-items: center; gap: 12px; width: 100%; min-width: 0; animation: audio-card-controls-in .28s ease both; }
+.audio-card-controls audio { display: none; }
+@keyframes audio-card-controls-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.audio-card-round { flex: 0 0 auto; display: grid; place-items: center; width: 42px; height: 42px; padding: 0; border: 1px solid rgba(255,255,255,.2); border-radius: 50%; color: #fff; background: rgba(255,255,255,.06); cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.audio-card-round:active { transform: scale(.92); }
+.audio-card-volume { position: relative; flex: 0 0 auto; }
+.audio-card-volume-pop { position: absolute; left: 0; bottom: calc(100% + 10px); z-index: 3; width: 132px; padding: 12px 14px; border: 1px solid rgba(255,255,255,.16); border-radius: 12px; background: #1b1b1d; box-shadow: 0 10px 26px rgba(0,0,0,.5); }
+.audio-card-timeline { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.audio-card-timeline > span { align-self: flex-end; color: #a9959d; font-size: 9px; font-variant-numeric: tabular-nums; }
+.audio-card-controls input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 4px; margin: 0; border-radius: 99px; outline: none; cursor: pointer; background: linear-gradient(to right, #fff var(--audio-progress, 0%), rgba(255,255,255,.28) var(--audio-progress, 0%)); }
+.audio-card-controls input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 16px; height: 16px; border: 0; border-radius: 50%; background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,.5); }
+.audio-card-controls input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border: 0; border-radius: 50%; background: #fff; }
+.audio-card-error { position: absolute; left: 0; right: 0; top: calc(100% + 6px); color: #e2a0aa; font-size: 10px; text-align: center; }
+@media (prefers-reduced-motion: reduce) { .audio-card-controls { animation: none; } }
+
+/* Playing state: pulsing rings, equalizer bars and a soft glow so the card is alive while audio plays. */
+.audio-card-eq { display: flex; align-items: center; justify-content: center; gap: 4px; height: 38px; }
+.audio-card-eq i { display: block; width: 4px; height: 100%; border-radius: 99px; background: #fff; transform-origin: center; transform: scaleY(.3); animation: audio-card-eq 1s ease-in-out infinite; }
+.audio-card-eq i:nth-child(2) { animation-delay: -.2s; animation-duration: .85s; }
+.audio-card-eq i:nth-child(3) { animation-delay: -.45s; animation-duration: 1.15s; }
+.audio-card-eq i:nth-child(4) { animation-delay: -.7s; animation-duration: .9s; }
+.audio-card-eq i:nth-child(5) { animation-delay: -.1s; animation-duration: 1.05s; }
+@keyframes audio-card-eq { 0%, 100% { transform: scaleY(.25); } 50% { transform: scaleY(1); } }
+.audio-card-playing .audio-card-stage { background: radial-gradient(circle at 50% 38%, rgba(165,40,78,.28), #000 68%); }
+.audio-card-playing .audio-card-ring-1 { animation: audio-card-pulse 3.2s ease-in-out infinite; }
+.audio-card-playing .audio-card-ring-2 { animation: audio-card-pulse 3.2s ease-in-out -1.6s infinite; }
+@keyframes audio-card-pulse { 0%, 100% { transform: translate(-50%, -50%) scale(.94); opacity: .75; } 50% { transform: translate(-50%, -50%) scale(1.08); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .audio-card-eq i, .audio-card-playing .audio-card-ring { animation: none; } .audio-card-eq i { transform: scaleY(.7); } }
+
+/* ==========================================================================
+   Light-mode readability pass. Several newer components use variables that were
+   only ever defined with dark fallbacks, plus hard-coded pale text colours.
+   Everything below is scoped to light mode so dark mode is untouched.
+   ========================================================================== */
+:root[data-theme="light"] {
+  --text-primary: #35212a;
+  --text-secondary: #5f4551;
+  --text-muted: #6f5b63;
+  --surface: #fffdfa;
+  --surface-2: rgba(91, 42, 57, .04);
+  --border: rgba(154, 106, 44, .38);
+  --accent: #8a4f64;
+  --quiet: #7b666e;
+}
+/* Create-gathering modal */
+:root[data-theme="light"] .gathering-type-card { color: #35212a; background: #fffaf6; border-color: #e6d6da; }
+:root[data-theme="light"] .gathering-type-card:hover { border-color: #b98a47; }
+:root[data-theme="light"] .gathering-type-card.is-selected { border-color: #8f2141; background: #fbeef1; box-shadow: 0 0 0 2px rgba(143,33,65,.12); }
+:root[data-theme="light"] .gathering-type-card > span { color: #8f2141; background: #f7e4e9; }
+:root[data-theme="light"] .gathering-type-card b { color: #35212a; }
+:root[data-theme="light"] .gathering-type-card small { color: #6f5b63; }
+:root[data-theme="light"] .visibility-option > svg { color: #9a6a2c; }
+:root[data-theme="light"] .visibility-option b { color: #4a2d39; }
+:root[data-theme="light"] .visibility-option small { color: #6f5b63; }
+:root[data-theme="light"] .share-url-box > svg { color: #8f2141; }
+/* Meeting invitation page */
+:root[data-theme="light"] .meeting-not-yet-open { color: #7a4f12; border-color: rgba(154,106,44,.34); background: #fbf1df; }
+:root[data-theme="light"] .meeting-not-yet-open b { color: #6b430c; }
+:root[data-theme="light"] .meeting-not-yet-open small { color: #6f5b63; }
+:root[data-theme="light"] .meeting-audio-loading, :root[data-theme="light"] .meeting-audio-unavailable { color: #6f5b63; }
+:root[data-theme="light"] .toggle-row b { color: #4a2d39; }
+:root[data-theme="light"] .toggle-row small { color: #6f5b63; }
+:root[data-theme="light"] .toggle-row .toggle-icon { color: #6f4d5b; }
+:root[data-theme="light"] .toggle-row.is-on .toggle-icon { color: #8f2141; }
+:root[data-theme="light"] .join-footnote svg, :root[data-theme="light"] .auth-legal svg, :root[data-theme="light"] .encrypted-pill svg, :root[data-theme="light"] .conference-bottom-note svg { color: #2f7a55; }
+:root[data-theme="light"] .encrypted-pill { color: #2f7a55; }
+:root[data-theme="light"] .page-footer, :root[data-theme="light"] .page-footer span { color: #7a656d; }
+:root[data-theme="light"] .breadcrumb > span { color: #85707a; }
+:root[data-theme="light"] .breadcrumb-slash { color: #a58f98; }
+:root[data-theme="light"] .meeting-audio-loading svg { color: #8f2141; }
+/* Recordings page helper text */
+:root[data-theme="light"] .management-empty span { color: #6f5b63; }
+/* Admin center */
+:root[data-theme="light"] .admin-tabs button, :root[data-theme="light"] .admin-tabs .admin-tab { color: #674956; border-color: #e6d6da; background: #fff8f7; }
+:root[data-theme="light"] .admin-tabs button:hover, :root[data-theme="light"] .admin-tabs .admin-tab:hover { background: #f8ebee; }
+:root[data-theme="light"] .admin-tabs button.is-active,
+:root[data-theme="light"] .admin-tabs .admin-tab-active,
+:root[data-theme="light"] .admin-tabs .admin-tab[aria-selected="true"] { color: #fff; border-color: #8f2141; background: #8f2141; box-shadow: 0 6px 16px rgba(143,33,65,.22); }
+:root[data-theme="light"] .admin-row-actions button, :root[data-theme="light"] .admin-action-button, :root[data-theme="light"] .admin-danger-button, :root[data-theme="light"] .admin-user-row > button { color: #5a3946; border-color: #e3d3d8; background: #fff8f7; }
+:root[data-theme="light"] .admin-row-actions button:hover, :root[data-theme="light"] .admin-action-button:hover, :root[data-theme="light"] .admin-user-row > button:hover { background: #f8ebee; }
+:root[data-theme="light"] .admin-row-actions .admin-danger-link, :root[data-theme="light"] .admin-danger-button, :root[data-theme="light"] .admin-danger-link { color: #a63248; }
+:root[data-theme="light"] .admin-user-main span, :root[data-theme="light"] .admin-user-main small, :root[data-theme="light"] .admin-chart-legend span { color: #6f5b63; }
+:root[data-theme="light"] .admin-status { color: #674956; background: #f6ecee; }
+:root[data-theme="light"] .admin-status-live, :root[data-theme="light"] .admin-status-active, :root[data-theme="light"] .admin-status-ready { color: #1f6b45; background: #e3f3e8; }
+:root[data-theme="light"] .admin-status-ended, :root[data-theme="light"] .admin-status-declined { color: #5d6370; background: #eceef2; }
+:root[data-theme="light"] .admin-status-suspended, :root[data-theme="light"] .admin-status-failed { color: #a63248; background: #fbe6e8; }
+:root[data-theme="light"] .admin-table th, :root[data-theme="light"] .admin-table td small, :root[data-theme="light"] .admin-stat-card small, :root[data-theme="light"] .admin-meeting-bar-day small { color: #6f5b63; }
+:root[data-theme="light"] .admin-activity-icon { color: #8f2141; background: #f7e4e9; }
+:root[data-theme="light"] .admin-panel small, :root[data-theme="light"] .admin-metric-card span, :root[data-theme="light"] .admin-footer-note { color: #6f5b63; }
+:root[data-theme="light"] .toggle-row-switch.is-off b { color: #6f5b63; }
+:root[data-theme="light"] .toggle-row-switch.is-off .toggle-icon { color: #7b666e; }
+:root[data-theme="light"] .toggle-row-switch.is-on b { color: #4a2d39; }
+:root[data-theme="light"] .eyebrow, :root[data-theme="light"] .section-overline, :root[data-theme="light"] .sidebar-label { color: #86606c; }
+:root[data-theme="light"] .host-row small, :root[data-theme="light"] .landing-footer, :root[data-theme="light"] .landing-footer span { color: #75606a; }
+:root[data-theme="light"] .admin-panel-heading p, :root[data-theme="light"] .admin-inline-empty, :root[data-theme="light"] .admin-metric-card span, :root[data-theme="light"] .admin-chart-column small { color: #6f5b63; }
+:root[data-theme="light"] .meeting-card small, :root[data-theme="light"] .stat-card small, :root[data-theme="light"] .glance-card small, :root[data-theme="light"] .at-glance small { color: #75606a; }
+:root[data-theme="light"] .admin-pagination span, :root[data-theme="light"] .admin-pagination small { color: #6f5b63; }
+
+/* Light mode: room panels (messages, people, private chats, notes) and related surfaces. */
+:root[data-theme="light"] .messages-modal-header small, :root[data-theme="light"] .meeting-panel-heading small { color: #6f5b63; }
+:root[data-theme="light"] .messages-modal .messages-empty { color: #8f2141; }
+:root[data-theme="light"] .messages-modal .messages-empty b { color: #4c303c; }
+:root[data-theme="light"] .messages-modal .messages-empty span { color: #6f5b63; }
+:root[data-theme="light"] .messages-modal .chat-message p { color: #4a2d39; }
+:root[data-theme="light"] .messages-modal .chat-message time { color: #7b666e; }
+:root[data-theme="light"] .messages-modal .chat-message-own p { color: #fff; }
+:root[data-theme="light"] .messages-modal .chat-message-own time { color: #f3d9e0; }
+:root[data-theme="light"] .messages-modal .chat-message-author { color: #8f2141; }
+:root[data-theme="light"] .messages-modal .chat-message-own .chat-message-author { color: #f6dce4; }
+:root[data-theme="light"] .messages-composer input { color: #4c303c; }
+:root[data-theme="light"] .messages-composer input::placeholder { color: #8a747e; }
+:root[data-theme="light"] .people-online-heading > b { color: #7a4f12; background: #f7ecd9; }
+:root[data-theme="light"] .people-host-tag { color: #7a4f12; background: #f7ecd9; }
+:root[data-theme="light"] .people-you-tag { color: #1f6b45; background: #e3f3e8; }
+:root[data-theme="light"] .room-presence-text b, :root[data-theme="light"] .room-private-notice > span b, :root[data-theme="light"] .room-message-toast-body b { color: #8f2141; }
+:root[data-theme="light"] .room-device-menu span { color: #6f5b63; }
+:root[data-theme="light"] .participant-pagination { color: #6f5b63; }
+:root[data-theme="light"] .guest-access-divider { color: #7b666e; }
+:root[data-theme="light"] .meeting-notes-modal .meeting-notes-loading, :root[data-theme="light"] .meeting-notes-archive-state { color: #6f5b63; }
+:root[data-theme="light"] .meeting-notes-error, :root[data-theme="light"] .meeting-notes-archive-error { color: #a63248; }
+:root[data-theme="light"] .meeting-notes-conflict-actions button, :root[data-theme="light"] .meeting-notes-archive-error button { color: #7a4f12; border-color: rgba(154,106,44,.4); background: #fbf1df; }
+:root[data-theme="light"] .meeting-notes-title-label input, :root[data-theme="light"] .meeting-notes-editor { color: #4c303c; }
+:root[data-theme="light"] .meeting-notes-toolbar button { color: #674352; }
+:root[data-theme="light"] .recording-consent-modal .section-overline { color: #8f2141; }
+:root[data-theme="light"] .recording-consent-modal b { color: #4c303c; }
+:root[data-theme="light"] .recording-consent-list small { color: #6f5b63; }
+:root[data-theme="light"] .gathering-visibility-note { color: #5f4551; background: #fffaf6; }
+:root[data-theme="light"] .gathering-visibility-note svg { color: #9a6a2c; }
+:root[data-theme="light"] .meeting-ended-audio { background: linear-gradient(145deg, #fbeef1, #fbf3e4); }
+:root[data-theme="light"] .meeting-ended-audio > div { color: #7a4f12; }
+:root[data-theme="light"] .meeting-ended-audio > div b { color: #4c303c; }
+:root[data-theme="light"] .meeting-ended-audio > div small, :root[data-theme="light"] .meeting-ended-audio > small { color: #6f5b63; }
+:root[data-theme="light"] .audio-player-error { color: #a63248; }
+:root[data-theme="light"] .audio-recording-player { color: #35212a; background: #fffaf6; border-color: #e6d6da; }
+:root[data-theme="light"] .audio-player-title b { color: #35212a; }
+:root[data-theme="light"] .audio-player-title span, :root[data-theme="light"] .audio-player-volume { color: #6f5b63; }
+:root[data-theme="light"] .custom-picker-trigger > svg:first-child, :root[data-theme="light"] .picker-chevron, :root[data-theme="light"] .picker-chevron-open, :root[data-theme="light"] .custom-picker-option svg { color: #8f2141; }
+:root[data-theme="light"] .calendar-days button.calendar-day-today { color: #8f2141; }
+/* Active panel tabs and selected controls always read as the dark red brand colour, wherever they render in the room. */
+html[data-theme="light"] .meeting-panel-tab-active,
+.conference-fullscreen-target[data-theme="light"] .meeting-panel-tab-active { color: #fff !important; border-color: #8f2141 !important; background: #8f2141 !important; box-shadow: 0 6px 14px rgba(143,33,65,.22); }
+html[data-theme="light"] .meeting-panel-tab:not(.meeting-panel-tab-active),
+.conference-fullscreen-target[data-theme="light"] .meeting-panel-tab:not(.meeting-panel-tab-active) { color: #674956; border-color: #e6d6da; background: #fffaf7; }
+html[data-theme="light"] .room-control-dock .room-control-button.control-selected,
+.conference-fullscreen-target[data-theme="light"] .room-control-dock .room-control-button.control-selected { color: #fff !important; border-color: #8f2141 !important; background: #8f2141 !important; }
+html[data-theme="light"] .room-control-dock .room-control-button.control-selected svg,
+.conference-fullscreen-target[data-theme="light"] .room-control-dock .room-control-button.control-selected svg { color: #fff; }
+:root[data-theme="light"] .conference-fullscreen-target[data-theme="light"] .messages-modal-header small,
+:root[data-theme="light"] .conference-fullscreen-target[data-theme="light"] .people-person-details > small,
+:root[data-theme="light"] .conference-fullscreen-target[data-theme="light"] .people-recent-copy small { color: #6f5b63; }
+
+/* ===== Custom select (replaces the native <select> everywhere) ===== */
+.cselect-trigger { display: inline-flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; min-height: 40px; padding: 0 11px; border: 1px solid rgba(212,178,190,.22); border-radius: 10px; color: #f4e7ea; background: rgba(255,255,255,.045); font: inherit; font-size: 12px; text-align: left; cursor: pointer; transition: border-color .18s ease, background-color .18s ease, box-shadow .18s ease; -webkit-tap-highlight-color: transparent; }
+.cselect-trigger:hover { border-color: rgba(212,178,190,.4); }
+.cselect-trigger:focus-visible, .cselect-trigger.is-open { outline: none; border-color: #8f2141; box-shadow: 0 0 0 3px rgba(143,33,65,.22); }
+.cselect-trigger:disabled { opacity: .55; cursor: not-allowed; }
+.cselect-value { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cselect-placeholder { color: #a9959d; }
+.cselect-chevron { flex: 0 0 auto; color: #d2a0ae; transition: transform .22s cubic-bezier(.22,1,.36,1); }
+.cselect-trigger.is-open .cselect-chevron { transform: rotate(180deg); }
+.cselect-trigger.admin-filter-select { max-width: 200px; min-height: 36px; padding: 0 10px; font-size: 11px; color: #f4e7ea; background: rgba(255,255,255,.045); border-radius: 9px; }
+.cselect-menu { z-index: 1000; display: flex; flex-direction: column; gap: 2px; box-sizing: border-box; overflow-y: auto; overscroll-behavior: contain; padding: 6px; border: 1px solid rgba(212,178,190,.24); border-radius: 13px; color: #f4e7ea; background: #2a1b23; box-shadow: 0 18px 44px rgba(0,0,0,.5); animation: cselect-pop .16s cubic-bezier(.22,1,.36,1); }
+@keyframes cselect-pop { from { opacity: 0; transform: translateY(-4px) scale(.98); } to { opacity: 1; transform: none; } }
+.cselect-option { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 38px; padding: 0 11px; border: 0; border-radius: 9px; color: inherit; background: transparent; font: inherit; font-size: 12px; text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.cselect-option > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cselect-option svg { flex: 0 0 auto; color: #e3a9b8; }
+.cselect-option.is-active { background: rgba(255,255,255,.07); }
+.cselect-option.is-selected { color: #fff; background: rgba(143,33,65,.42); font-weight: 700; }
+:root[data-theme="light"] .cselect-trigger, :root[data-theme="light"] .cselect-trigger.admin-filter-select { color: #452a36; border-color: #e5d5cf; background: #fffdf9; }
+:root[data-theme="light"] .cselect-trigger:hover { border-color: #d4b8c0; }
+:root[data-theme="light"] .cselect-trigger:focus-visible, :root[data-theme="light"] .cselect-trigger.is-open { border-color: #8f2141; box-shadow: 0 0 0 3px rgba(143,33,65,.14); }
+:root[data-theme="light"] .cselect-chevron { color: #8b415a; }
+:root[data-theme="light"] .cselect-placeholder { color: #9b858d; }
+:root[data-theme="light"] .cselect-menu { color: #452a36; border-color: #e4ccd2; background: #fffdfa; box-shadow: 0 16px 40px rgba(94,44,63,.16); }
+:root[data-theme="light"] .cselect-option.is-active { background: #f7ecee; }
+:root[data-theme="light"] .cselect-option.is-selected { color: #8f2141; background: #f6e3e8; }
+:root[data-theme="light"] .cselect-option svg { color: #8f2141; }
+@media (prefers-reduced-motion: reduce) { .cselect-menu { animation: none; } .cselect-chevron { transition: none; } }
+
+/* ===== Recordings: lazy cards + audio card skeleton ===== */
+.lazy-mount { display: flex; min-width: 0; }
+.lazy-mount > .management-recording-card { flex: 1 1 auto; width: 100%; }
+.audio-card-skeleton { pointer-events: none; }
+.audio-card-skeleton .audio-card-stage { min-height: 340px; }
+.audio-skel { display: block; border-radius: 8px; background: linear-gradient(90deg, rgba(255,255,255,.07), rgba(255,255,255,.18), rgba(255,255,255,.07)); background-size: 220% 100%; animation: admin-skeleton-shimmer 1.3s ease-in-out infinite; }
+.audio-skel-icon { width: 54px; height: 54px; margin-bottom: 8px; border-radius: 50%; }
+.audio-skel-kind { width: 92px; height: 9px; }
+.audio-skel-title { width: 72%; height: 19px; margin: 4px 0; }
+.audio-skel-line { width: 56%; height: 10px; }
+.audio-skel-line-short { width: 38%; }
+.audio-skel-button { width: 112px; height: 44px; border-radius: 999px; }
+.refresh-button { white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) { .audio-skel { animation: none; } }
+
+/* ===== Admin: meeting-permission switch (same switch as the mic / camera toggles) ===== */
+.admin-user-controls { display: flex; flex: 0 1 auto; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
+.admin-user-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+@media (min-width: 721px) { .admin-user-controls, .admin-user-buttons { flex-wrap: nowrap; } .admin-user-controls { flex-shrink: 0; } .admin-user-controls .admin-user-buttons > button { white-space: nowrap; } }
+.admin-user-controls .admin-user-buttons > button { min-height: 34px; padding: 0 12px; border: 1px solid rgba(212,178,190,.2); border-radius: 8px; font-size: 10px; cursor: pointer; background: rgba(255,255,255,.035); color: #e8d9df; }
+.admin-user-controls .admin-user-buttons > .admin-danger-button { color: #f29da3; border-color: rgba(214,102,110,.32); }
+.admin-user-controls .admin-user-buttons > button:disabled { opacity: .55; cursor: not-allowed; }
+.toggle-row.admin-permission-switch { width: auto; min-width: 0; min-height: 40px; padding: 5px 9px 5px 6px; gap: 8px; border: 1px solid rgba(212,178,190,.16); border-radius: 12px; }
+.admin-permission-switch .toggle-icon { width: 28px; height: 28px; flex: 0 0 auto; }
+.admin-permission-switch.is-on .toggle-icon { color: #f0c5d0; background: rgba(143,33,65,.3); }
+.admin-permission-switch > span:nth-child(2) { flex: 1 1 auto; min-width: 0; }
+.admin-permission-switch b { font-size: 10px; white-space: nowrap; }
+.admin-permission-switch:disabled { opacity: .7; cursor: progress; }
+:root[data-theme="light"] .toggle-row.admin-permission-switch { border-color: #eadde1; background: #fffaf6; }
+:root[data-theme="light"] .admin-permission-switch.is-on .toggle-icon { color: #8f2141; background: #f6e3e8; }
+:root[data-theme="light"] .admin-user-controls .admin-user-buttons > button { color: #674956; border-color: #eadde1; background: #fff8f7; }
+:root[data-theme="light"] .admin-user-controls .admin-user-buttons > .admin-danger-button { color: #b4414f; border-color: #efc7cc; }
+
+/* ===== Admin + management pages: buttons that wrap and fill the width on phones ===== */
+.admin-row-actions { flex-wrap: wrap; }
+@media (max-width: 720px) {
+  .management-heading { flex-wrap: wrap; gap: 12px; }
+  .management-heading > .button { flex: 1 1 100%; width: 100%; }
+  .admin-user-row { display: grid; grid-template-columns: 39px minmax(0, 1fr); align-items: start; column-gap: 10px; row-gap: 10px; }
+  .admin-user-row > .admin-user-photo { grid-column: 1; grid-row: 1; }
+  .admin-user-row > .admin-user-main { grid-column: 2; grid-row: 1; min-width: 0; }
+  .admin-user-row > .admin-user-controls { grid-column: 1 / -1; grid-row: 2; display: grid; grid-template-columns: minmax(0, 1fr); justify-items: stretch; gap: 8px; width: 100%; }
+  .admin-user-row > .admin-user-controls > .admin-status { justify-self: start; }
+  .admin-user-controls .toggle-row.admin-permission-switch { width: 100%; justify-content: flex-start; }
+  .admin-user-controls .admin-user-buttons { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
+  .admin-user-controls .admin-user-buttons > button { width: 100%; min-height: 40px; white-space: normal; line-height: 1.2; }
+  .admin-row-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; min-width: 150px; white-space: normal; }
+  .admin-row-actions button { min-height: 36px; }
+  .admin-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
+  .admin-filters .admin-search { grid-column: 1 / -1; width: 100%; max-width: none; }
+  .admin-filters .cselect-trigger.admin-filter-select { width: 100%; max-width: none; min-height: 40px; }
+  .admin-pagination > div { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; }
+  .admin-pagination button { min-height: 38px; }
+  .admin-panel-heading > .text-action { align-self: flex-start; }
+  .admin-inline-error { flex-wrap: wrap; }
+  .admin-inline-error > button, .inline-error > button { min-height: 36px; }
+}
+@media (max-width: 420px) {
+  .admin-user-controls .admin-user-buttons { grid-template-columns: minmax(0, 1fr); }
+  .admin-filters { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ===== Room bottom controls: responsive layout =====
+   Phones: row A is four equal cells; row B is split into a line of main tools (Messages, People, [Record], Notes, React)
+   and a line of utilities (theme, fullscreen, [end], Leave) so no button is ever orphaned, squeezed or cut off. */
+@media (max-width: 720px) {
+  .room-control-dock .room-control-row-b { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .room-control-dock .room-control-row-b:has(.recording-control) { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .room-control-dock .room-control-row-b .room-control-side { display: grid; grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)) minmax(0, 2fr); gap: 0; width: 100%; min-width: 0; margin: 0; }
+  .room-control-dock .room-control-row-b:has(.room-end-button) .room-control-side { grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(0, 2fr); }
+  .room-control-dock .room-control-row-b .room-control-side > * { width: 100%; min-width: 0; margin: 0; }
+  .room-control-dock .room-control-row-b .room-control-side > .room-leave-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+  .room-control-dock .room-control-row-b .room-control-side > .room-leave-button span { max-width: none; font-size: 11px; }
+  .room-control-dock .room-control-row-b .room-control-side > :first-child { border-bottom-left-radius: 10px; }
+  .room-control-dock .room-control-button.message-control { border-bottom-left-radius: 0; }
+  .room-control-dock .room-control-row-b > .room-control-button, .room-control-dock .room-control-row-b > .reaction-control-wrap > .room-control-button { min-height: 44px; }
+  .room-control-dock .room-control-button { flex-direction: column; gap: 2px; padding-block: 4px; }
+  .room-control-dock .room-control-button span { max-width: 100%; text-align: center; }
+  .room-control-dock .room-split-main { flex-direction: column; }
+  .room-control-dock .room-control-row-a .room-control-button { min-height: 46px; }
+}
+@media (max-width: 340px) {
+  .room-control-dock .room-control-button span { font-size: 7px; }
+  .room-control-dock .room-control-button svg { width: 15px; height: 15px; }
+}
+/* Tablets / small laptops: let the dock wrap onto a second line instead of clipping buttons off-screen. */
+@media (min-width: 721px) and (max-width: 1180px) {
+  .room-control-dock { flex-wrap: wrap; justify-content: center; row-gap: 8px; }
+  .room-control-dock .room-control-row-b { flex: 0 1 auto; flex-wrap: wrap; justify-content: center; row-gap: 6px; }
+  .room-control-dock .room-control-row-b .room-control-side { margin-left: 0; flex-wrap: wrap; justify-content: center; }
+}

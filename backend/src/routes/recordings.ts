@@ -19,7 +19,7 @@ const publicPrayerFilter = {
 router.get("/public-prayers", async (_req, res) => {
   try {
     const now = new Date();
-    const publicPrayerMeetings = await Meeting.find({ ...publicPrayerFilter, status: "ended" }).select("_id slug title startsAt timezone").lean();
+    const publicPrayerMeetings = await Meeting.find({ ...publicPrayerFilter }).select("_id slug title startsAt timezone").lean();
     if (!publicPrayerMeetings.length) return res.json({ recordings: [] });
     const meetingIds = publicPrayerMeetings.map((meeting) => meeting._id);
     const records = await Recording.find({
@@ -54,7 +54,7 @@ router.get("/mine", requireAuth, async (req, res) => {
     const meetingById = new Map(meetings.map((meeting) => [String(meeting._id), meeting]));
     const recordings = validRecords.map((item) => {
       const meeting = meetingById.get(String(item.meeting));
-      const publicPrayer = Boolean(meeting && (meeting.meetingType === "prayer" || (!meeting.meetingType && meeting.visibility === "public")) && meeting.status === "ended");
+      const publicPrayer = Boolean(meeting && (meeting.meetingType === "prayer" || (!meeting.meetingType && meeting.visibility === "public")));
       return {
         id: String(item._id), meetingSlug: item.meetingSlug, meetingTitle: item.meetingTitle, hostName: item.hostName,
         participants: item.participants.map((person) => ({ displayName: person.displayName, isGuest: person.isGuest })),
@@ -81,13 +81,17 @@ router.get("/:id/playback", async (req, res) => {
       return res.status(410).json({ error: "This recording has reached the end of its 30-day retention period." });
     }
     const meeting = await Meeting.findById(recording.meeting).select("meetingType visibility status slug").lean();
-    const publicPrayer = Boolean(meeting && (meeting.meetingType === "prayer" || (!meeting.meetingType && meeting.visibility === "public")) && meeting.status === "ended");
+    const publicPrayer = Boolean(meeting && (meeting.meetingType === "prayer" || (!meeting.meetingType && meeting.visibility === "public")));
     if (!publicPrayer) {
-      if (!req.auth) return res.status(401).json({ error: "Sign in or open the exact meeting invitation link to listen to this recording." });
-      if (req.auth.isGuest && req.auth.meetingSlug !== recording.meetingSlug) return res.status(403).json({ error: "This guest identity belongs to a different meeting." });
+      // The meeting slug is a high-entropy bearer invitation: anyone who holds the shared
+      // meeting link (no sign-in, not necessarily an attendee) may listen to its recording.
       const invitedByExactLink = typeof req.query.invite === "string" && req.query.invite === recording.meetingSlug;
-      const isParticipant = recording.hostUserId === req.auth.userId || recording.participants.some((person) => person.userId === req.auth!.userId);
-      if (!isParticipant && !invitedByExactLink) return res.status(403).json({ error: "You do not have access to this private recording." });
+      if (!invitedByExactLink) {
+        if (!req.auth) return res.status(401).json({ error: "Sign in or open the exact meeting invitation link to listen to this recording." });
+        if (req.auth.isGuest && req.auth.meetingSlug !== recording.meetingSlug) return res.status(403).json({ error: "This guest identity belongs to a different meeting." });
+        const isParticipant = recording.hostUserId === req.auth.userId || recording.participants.some((person) => person.userId === req.auth!.userId);
+        if (!isParticipant) return res.status(403).json({ error: "You do not have access to this private recording." });
+      }
     }
     const playbackUrl = await createAuthorizedPlaybackUrl(recording.cloudinaryPublicId, expiresAt);
     return res.json({ playbackUrl, expiresInSeconds: Math.max(1, Math.min(300, Math.floor((expiresAt.getTime() - Date.now()) / 1000))), expiresAt: expiresAt.toISOString() });
