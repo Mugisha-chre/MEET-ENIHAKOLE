@@ -62,7 +62,7 @@ export function createApp(): Express {
       if (!origin || origins.includes(origin.replace(/\/$/, ""))) return callback(null, true);
       return callback(new Error("Origin is not allowed by CORS."));
     },
-    methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
   }));
   // LiveKit webhook signatures cover the raw body, so parse this content type before JSON.

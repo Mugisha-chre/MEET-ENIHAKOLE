@@ -3162,3 +3162,71 @@ html[data-theme="light"] .room-control-dock .room-control-button.control-selecte
   .room-control-dock .room-control-row-b { flex: 0 1 auto; flex-wrap: wrap; justify-content: center; row-gap: 6px; }
   .room-control-dock .room-control-row-b .room-control-side { margin-left: 0; flex-wrap: wrap; justify-content: center; }
 }
+
+
+/* Live camera quality selector and opt-in WebRTC diagnostics. */
+.video-quality-control-wrap { position: relative; display: inline-flex; align-items: center; }
+.video-quality-menu { position: absolute; z-index: 80; right: 0; bottom: calc(100% + 12px); width: min(350px, calc(100vw - 24px)); padding: 14px; border: 1px solid rgba(232,202,145,.32); border-radius: 16px; color: #f9f2f1; background: rgba(35,22,29,.98); box-shadow: 0 18px 48px rgba(0,0,0,.42); text-align: left; }
+.video-quality-menu > header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 11px; }
+.video-quality-menu > header > div { display: grid; gap: 3px; min-width: 0; }
+.video-quality-menu > header b { font-size: 14px; font-weight: 800; }
+.video-quality-menu > header small { color: rgba(255,245,242,.66); font-size: 11px; line-height: 1.4; }
+.video-quality-menu > header > button { flex: 0 0 auto; display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 8px; color: inherit; background: rgba(255,255,255,.08); cursor: pointer; }
+.video-quality-options { display: grid; gap: 5px; }
+.video-quality-options > button { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 47px; padding: 8px 10px; border: 1px solid transparent; border-radius: 10px; color: inherit; background: rgba(255,255,255,.045); text-align: left; cursor: pointer; }
+.video-quality-options > button:hover, .video-quality-options > button.is-selected { border-color: rgba(232,202,145,.45); background: rgba(232,202,145,.12); }
+.video-quality-options > button:disabled { opacity: .48; cursor: not-allowed; }
+.video-quality-options > button.is-unavailable { background: rgba(255,255,255,.02); }
+.video-quality-options > button.is-selected > svg { color: #e8ca91; flex: 0 0 auto; }
+.video-quality-option-copy { display: grid; gap: 2px; min-width: 0; }
+.video-quality-option-copy b { font-size: 12px; font-weight: 800; }
+.video-quality-option-copy small { color: rgba(255,245,242,.64); font-size: 10px; line-height: 1.35; }
+.video-quality-status { display: flex; align-items: center; gap: 6px; margin: 10px 1px 0; color: rgba(255,245,242,.72); font-size: 10px; line-height: 1.45; }
+.video-diagnostics-toggle { display: flex; justify-content: space-between; align-items: center; width: 100%; margin-top: 10px; padding: 10px 2px 2px; border: 0; border-top: 1px solid rgba(255,255,255,.11); color: #e8ca91; background: transparent; font-size: 11px; font-weight: 750; cursor: pointer; }
+.video-diagnostics { display: grid; gap: 9px; margin-top: 9px; }
+.video-diagnostics > div { display: grid; gap: 3px; padding: 9px 10px; border: 1px solid rgba(255,255,255,.1); border-radius: 10px; background: rgba(255,255,255,.045); }
+.video-diagnostics > div > span { color: rgba(255,245,242,.7); font-size: 10px; font-weight: 700; }
+.video-diagnostics > div > b { font-size: 15px; font-variant-numeric: tabular-nums; }
+.video-diagnostics > div > small, .video-diagnostics > small { color: rgba(255,245,242,.62); font-size: 10px; line-height: 1.4; }
+.video-diagnostics > small { padding: 0 2px; }
+@media (max-width: 720px) {
+  .room-control-dock .room-control-row-b > .video-quality-control-wrap { box-sizing: border-box; width: 100%; min-width: 0; }
+  .room-control-dock .video-quality-control-wrap > .video-quality-trigger { box-sizing: border-box; width: 100%; min-width: 0; padding-inline: 3px; }
+  .video-quality-menu { position: fixed; left: 12px; right: 12px; bottom: calc(118px + env(safe-area-inset-bottom, 0px)); width: auto; max-height: min(72vh, 570px); overflow-y: auto; }
+  .conference-fullscreen-target.is-fullscreen .video-quality-menu { bottom: calc(82px + env(safe-area-inset-bottom, 0px)); }
+}
+
+/* No Create button (signed out or no permission): drop the centre notch so the bar is not cut out. */
+@media (max-width: 720px) {
+  .mbn-nofab .mbn-bar, .mbn-nofab.mbn-home .mbn-bar, .mbn-nofab.mbn-meetings .mbn-bar, .mbn-nofab.mbn-recordings .mbn-bar { -webkit-mask-image: none; mask-image: none; }
+}
+
+/* Sidebar sign-in card for signed-out visitors */
+.sidebar-signin-card { box-sizing: border-box; width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 14px; margin-bottom: 4px; border: 1.5px dashed var(--line-strong, rgba(143,33,65,.45)); border-radius: 14px; background: rgba(143,33,65,.05); }
+.sidebar-signin-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; color: #fff; background: linear-gradient(145deg, #b53e60, #791d3c); }
+.sidebar-signin-card b { font-size: 13px; line-height: 1.3; }
+.sidebar-signin-card small { font-size: 11px; line-height: 1.45; opacity: .72; }
+.sidebar-signin-button { width: 100%; justify-content: center; margin-top: 4px; }
+@media (min-width: 721px) and (max-width: 1100px) { .sidebar-signin-card { align-items: center; padding: 8px 4px; } .sidebar-signin-card b, .sidebar-signin-card small, .sidebar-signin-button { display: none; } }
+
+/* Recordings: skeleton controls + no tap highlight on audio controls */
+.audio-card-controls-skel { animation: none; }
+.audio-skel-round { flex: 0 0 auto; width: 42px; height: 42px; border-radius: 50%; }
+.audio-skel-track { width: 100%; height: 4px; border-radius: 99px; }
+.audio-skel-time { align-self: flex-end; width: 56px; height: 9px; }
+.audio-card-controls, .audio-card-controls *, .audio-recording-player, .audio-recording-player *, .audio-card-listen { -webkit-tap-highlight-color: transparent; }
+.audio-card-controls button, .audio-recording-player button, .audio-card-controls input[type=range], .audio-recording-player input[type=range], .audio-card-listen { outline: none; touch-action: manipulation; }
+.audio-card-controls button:focus:not(:focus-visible), .audio-recording-player button:focus:not(:focus-visible), .audio-card-controls input:focus:not(:focus-visible), .audio-recording-player input:focus:not(:focus-visible) { outline: none; box-shadow: none; }
+
+/* Meeting room shows only the conference workspace (no top bar, title row or footer note). */
+.conference-main { padding-top: max(10px, env(safe-area-inset-top)); padding-bottom: max(10px, env(safe-area-inset-bottom)); justify-content: center; }
+.conference-stage, .conference-stage.conference-stage { height: calc(var(--app-viewport-height, 100vh) - 28px); min-height: 400px; max-height: none; }
+
+/* Reactions picker opens towards the left so it never clips off the right edge of the screen. */
+.reaction-control-wrap .reaction-picker, .room-control-dock .reaction-control-wrap .reaction-picker { left: auto; right: 0; transform: none; max-width: calc(100vw - 16px); }
+@media (max-width: 720px) { .reaction-control-wrap .reaction-picker, .room-control-dock .reaction-control-wrap .reaction-picker { left: auto; right: 0; transform: none; } }
+
+/* Messages count badge always above the People button (its own stacking layer sits higher). */
+.room-control-dock .message-control { z-index: 24; }
+.room-control-dock .message-control > i { z-index: 40; }
+.room-control-dock .people-control { z-index: 18; }

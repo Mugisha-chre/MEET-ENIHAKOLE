@@ -2,14 +2,14 @@ import { createPortal } from "react-dom";
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type RefObject, type FormEvent, type ReactNode, type TouchEvent as ReactTouchEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { LiveKitRoom, ParticipantTile, RoomAudioRenderer, isTrackReference, useChat, useIsMuted, useLocalParticipant, useParticipants, useRoomContext, useTracks, VideoTrack, type TrackReference } from "@livekit/components-react";
-import { ConnectionState, DisconnectReason, MediaDeviceFailure, ParticipantEvent, Room, RoomEvent, Track, VideoPreset, type Participant, type RemoteParticipant, type RoomOptions } from "livekit-client";
+import { ConnectionState, DisconnectReason, MediaDeviceFailure, ParticipantEvent, Room, RoomEvent, Track, VideoPresets, VideoQuality, type Participant, type RemoteParticipant, type RoomOptions, type VideoCaptureOptions } from "livekit-client";
 import {
   ArrowDownRight, ArrowLeft, ArrowRight, AudioLines, CalendarClock, CalendarDays, Check,
   CheckCircle2, CircleHelp, Clock3, Copy, DoorOpen, HeartHandshake, Home,
   Link2, LoaderCircle, LogIn, LogOut, Menu, Mic, Plus, Share2, ShieldCheck,
   Sparkles, Users, Video, VideoIcon, VideoOff, X, Sun, Moon, MessageCircle,
   Hand, Send, MonitorUp, MicOff, Maximize2, Minimize2, ChevronLeft, ChevronRight, Smile, ChevronDown, Download,
-  MousePointer2, MoveUpRight, Eraser, Eye, EyeOff, PenLine, Undo2,
+  MousePointer2, MoveUpRight, Eraser, Eye, EyeOff, PenLine, Undo2, Settings2,
   FileText, Bold, Italic, Underline, List, ListOrdered, Heading1, Heading2, IndentIncrease, IndentDecrease,
 } from "lucide-react";
 import { api, ApiError, clearAuthToken, getRegisteredAuthToken, getGuestProfile, saveAuthToken, saveGuestAuthToken, type MeetingNotesPayload } from "./api";
@@ -37,6 +37,123 @@ const AppContext = createContext<AppContextValue | null>(null);
 const THEME_STORAGE_KEY = "meet-enihakole-theme-choice";
 // Recording UI is enabled for host-controlled, consent-gated audio-only capture.
 const RECORDING_UI_ENABLED = true;
+
+type VideoQualityMode = "auto" | "standard" | "480p" | "hd" | "fullhd";
+type VideoQualityHeight = 360 | 480 | 720 | 1080;
+const VIDEO_QUALITY_STORAGE_KEY = "meet-enihakole-video-quality";
+const VIDEO_QUALITY_OPTIONS: Array<{ value: VideoQualityMode; label: string; detail: string; height: VideoQualityHeight }> = [
+  { value: "auto", label: "Auto", detail: "Adapts to device and network", height: 720 },
+  { value: "standard", label: "Standard · 360p", detail: "Lower data and CPU usage", height: 360 },
+  { value: "480p", label: "Balanced · 480p", detail: "Clear video with moderate data use", height: 480 },
+  { value: "hd", label: "HD · 720p", detail: "High-definition video", height: 720 },
+  { value: "fullhd", label: "Full HD · 1080p", detail: "Requires a capable camera and connection", height: 1080 },
+];
+
+function readVideoQualityChoice(): VideoQualityMode {
+  try {
+    const stored = localStorage.getItem(VIDEO_QUALITY_STORAGE_KEY);
+    return VIDEO_QUALITY_OPTIONS.some((option) => option.value === stored) ? stored as VideoQualityMode : "auto";
+  } catch { return "auto"; }
+}
+
+function videoCaptureResolution(height: VideoQualityHeight) {
+  if (height === 1080) return VideoPresets.h1080.resolution;
+  if (height === 720) return VideoPresets.h720.resolution;
+  if (height === 360) return VideoPresets.h360.resolution;
+  return { width: 854, height: 480, frameRate: 24 };
+}
+function videoCaptureOptionsForTrack(
+  track: { mediaStreamTrack: MediaStreamTrack },
+  height: VideoQualityHeight,
+): VideoCaptureOptions {
+  // Keep the participant's selected physical camera when changing resolution.
+  // Omitting deviceId during restartTrack can make the browser reacquire the
+  // system-default camera instead of the one chosen in the device menu.
+  const deviceId = track.mediaStreamTrack.getSettings().deviceId;
+  return {
+    resolution: videoCaptureResolution(height),
+    ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+  };
+}
+
+function videoPublishingQuality(mode: VideoQualityMode): VideoQuality {
+  if (mode === "standard") return VideoQuality.LOW;
+  if (mode === "480p" || mode === "hd") return VideoQuality.MEDIUM;
+  return VideoQuality.HIGH;
+}
+
+interface VideoStatsSnapshot {
+  width: number;
+  height: number;
+  fps: number;
+  bitrateBps: number;
+  packetLossPercent: number | null;
+  roundTripMs: number | null;
+  limitation: string;
+}
+
+interface VideoStatsCounter { bytes: number; sampledAt: number }
+
+async function readVideoStatsSnapshot(
+  track: { getRTCStatsReport?: () => Promise<RTCStatsReport | undefined>; mediaStreamTrack?: MediaStreamTrack },
+  direction: "outbound" | "inbound",
+  previous?: VideoStatsCounter,
+): Promise<{ snapshot: VideoStatsSnapshot; counter?: VideoStatsCounter } | null> {
+  try {
+    const report = await track.getRTCStatsReport?.();
+    if (!report) return null;
+    const rows = Array.from(report.values()) as unknown as Array<Record<string, unknown>>;
+    const isVideo = (row: Record<string, unknown>) => row.kind === "video" || row.mediaType === "video";
+    const mediaStats = rows.filter((row) => row.type === (direction === "outbound" ? "outbound-rtp" : "inbound-rtp") && isVideo(row) && row.isRemote !== true);
+    const primary = mediaStats.sort((a, b) => {
+      const aPixels = Number(a.frameWidth ?? 0) * Number(a.frameHeight ?? 0);
+      const bPixels = Number(b.frameWidth ?? 0) * Number(b.frameHeight ?? 0);
+      return bPixels - aPixels || Number(b.bytesSent ?? b.bytesReceived ?? 0) - Number(a.bytesSent ?? a.bytesReceived ?? 0);
+    })[0];
+    const remoteInbound = rows.find((row) => row.type === "remote-inbound-rtp" && isVideo(row) && row.id === primary?.remoteId)
+      ?? rows.find((row) => row.type === "remote-inbound-rtp" && isVideo(row));
+    const inboundLoss = direction === "inbound" ? primary : remoteInbound;
+    const packetsLost = Number(inboundLoss?.packetsLost);
+    const packetsReceived = Number(inboundLoss?.packetsReceived);
+    const fractionLost = Number(inboundLoss?.fractionLost);
+    const packetLossPercent = Number.isFinite(fractionLost) && fractionLost >= 0 && fractionLost <= 1
+      ? fractionLost * 100
+      : Number.isFinite(packetsLost) && Number.isFinite(packetsReceived) && packetsLost >= 0 && packetsReceived > 0
+        ? (packetsLost / (packetsLost + packetsReceived)) * 100
+        : null;
+    const now = Date.now();
+    const byteField = direction === "outbound" ? "bytesSent" : "bytesReceived";
+    const bytes = mediaStats.reduce((total, row) => total + Number(row[byteField] ?? 0), 0);
+    const elapsed = previous ? now - previous.sampledAt : 0;
+    const bitrateBps = previous && elapsed > 0 && bytes >= previous.bytes ? ((bytes - previous.bytes) * 8 * 1000) / elapsed : 0;
+    const settings = track.mediaStreamTrack?.getSettings?.();
+    const width = Number(primary?.frameWidth ?? settings?.width ?? 0);
+    const height = Number(primary?.frameHeight ?? settings?.height ?? 0);
+    const fps = Number(primary?.framesPerSecond ?? 0);
+    const candidate = rows.find((row) => row.type === "candidate-pair" && row.state === "succeeded" && (row.nominated === true || row.selected === true));
+    const roundTripSeconds = Number(remoteInbound?.roundTripTime ?? candidate?.currentRoundTripTime);
+    const limitation = typeof primary?.qualityLimitationReason === "string" ? primary.qualityLimitationReason : "unknown";
+    return {
+      snapshot: {
+        width, height, fps,
+        bitrateBps: Number.isFinite(bitrateBps) ? bitrateBps : 0,
+        packetLossPercent,
+        roundTripMs: Number.isFinite(roundTripSeconds) && roundTripSeconds >= 0 ? roundTripSeconds * 1000 : null,
+        limitation,
+      },
+      counter: Number.isFinite(bytes) && bytes > 0 ? { bytes, sampledAt: now } : undefined,
+    };
+  } catch { return null; }
+}
+
+function formatVideoResolution(stats: VideoStatsSnapshot | null): string {
+  return stats && stats.width > 0 && stats.height > 0 ? `${stats.width} × ${stats.height}` : "Waiting for video";
+}
+
+function formatVideoBitrate(value: number): string {
+  if (!value) return "—";
+  return value >= 1_000_000 ? `${(value / 1_000_000).toFixed(1)} Mbps` : `${Math.round(value / 1000)} kbps`;
+}
 
 function systemTheme(): "light" | "dark" {
   try { return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"; }
@@ -615,6 +732,7 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
           {user?.isAdmin && <Link to="/admin" className={`side-link ${active === "admin" ? "side-link-active" : ""}`}><ShieldCheck size={18} /><span>Admin center</span></Link>}
         </nav>
         <div className="sidebar-bottom">
+          {!user && <div className="sidebar-signin-card"><span className="sidebar-signin-icon"><LogIn size={18}/></span><b>You're not signed in</b><small>Sign in to manage your meetings and recordings.</small><button type="button" className="button button-primary button-small sidebar-signin-button" onClick={() => { setMobileNavOpen(false); openAuth(); }}><LogIn size={15}/> Sign in</button></div>}
           {user && <div className="sidebar-account"><ProfilePhoto className="sidebar-account-photo" src={user.picture} name={user.displayName} size={160}/><span><b title={user.displayName}>{user.displayName}</b><small title={user.email}>{user.email}</small></span><button type="button" className="sidebar-signout" onClick={() => { setMobileNavOpen(false); signOut(); }} title="Sign out" aria-label="Sign out"><LogOut size={16}/><span>Sign out</span></button></div>}
           <button className="side-link quiet-link" onClick={() => window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Help centre will be added in a future release." } }))}><CircleHelp size={18} /><span>Help & support</span></button>
           <div className="sidebar-version">MEET ENIHAKOLE <span>EARLY ACCESS</span></div>
@@ -641,7 +759,7 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
         <main className="main-content">{children}</main>
         <footer className="page-footer"><span>© {new Date().getFullYear()} MEET ENIHAKOLE</span><span>Made for connection, prayer, and community</span></footer>
       </div>
-      <nav className={`mobile-bottom-nav mbn-${active}`} aria-label="Mobile navigation">
+      <nav className={`mobile-bottom-nav mbn-${active} ${(user?.canCreateMeetings || user?.isAdmin) ? "" : "mbn-nofab"}`} aria-label="Mobile navigation">
         <span className="mbn-bar" aria-hidden="true"/>
         <Link to="/" className={active === "home" ? "mobile-nav-active" : ""} aria-current={active === "home" ? "page" : undefined}><Home size={20}/><span>Home</span></Link>
         {(user?.canCreateMeetings || user?.isAdmin) ? <button type="button" className="mbn-fab" aria-label="Create meeting" onClick={() => openSchedule(false)}><Plus size={26} strokeWidth={2.4}/></button> : <Link to="/recordings" className={active === "recordings" ? "mobile-nav-active" : ""} aria-current={active === "recordings" ? "page" : undefined}><AudioLines size={20}/><span>Recorded</span></Link>}
@@ -1256,17 +1374,14 @@ function MeetingRoomPage({ slug, isActive }: { slug: string; isActive: boolean }
     >
       {!isActive && <BackgroundMeetingDock title={session.meeting.title} disconnected={disconnected} onReturn={() => navigate(`/room/${encodeURIComponent(slug)}`)} onLeave={leaveRoom}/>}
       <div className={`conference-page ${!isActive ? "conference-page-audio-host" : ""}`} aria-hidden={!isActive}>
-        <header className="conference-topbar"><Link to={`/meeting/${slug}`} className="conference-brand"><span className="brand-mark"><AudioLines size={19}/></span><span><b>MEET ENIHAKOLE</b><small>{session.meeting.title}</small></span></Link><div className="conference-room-status">IN THE ROOM{session.role === "host" && <><span className="conference-divider"/> HOST</>}</div><div className="conference-header-actions"><ThemeToggle/><button className="button button-soft button-small" onClick={leaveRoom}><ArrowLeft size={15}/> Leave room</button></div></header>
         {endError && <div className="room-alert" role="alert">{endError}</div>}
         {disconnected && <div className="room-alert" role="status">You have disconnected from the call. <button onClick={leaveRoom}>Return to meeting</button></div>}
         <main className="conference-main">
-          <div className="conference-title-row"><div><p className="section-overline">ENIHAKOLE CHOIR · LIVE CONFERENCE</p><h1>{session.meeting.title}</h1></div><div className="conference-tools"><span className="encrypted-pill"><ShieldCheck size={14}/> Secure connection</span>{session.role === "host" && <button className="button button-danger button-small" onClick={() => endForEveryone()} disabled={ending}>{ending ? <LoaderCircle size={15} className="spin"/> : <X size={15}/>} End for everyone</button>}</div></div>
           <div className="conference-stage">
             <ConferenceWorkspace meeting={session.meeting} role={session.role} onLeave={leaveRoom} onEndForEveryone={() => endForEveryone()} ending={ending} isActive={isActive}/>
             {!preparedRoom && <RoomReadyOverlay expected={(session.participants ?? []).map((person) => person.identity)}/>}
           </div>
           {confirmEnd && <ConfirmEndModal busy={ending} onCancel={() => setConfirmEnd(false)} onConfirm={() => void confirmEndForEveryone()}/>}
-          <div className="conference-bottom-note"><span><ShieldCheck size={15}/> {session.meeting.visibility === "public" ? "This gathering is publicly listed." : "This meeting uses an unlisted invitation link."}</span><span>For the clearest call, use headphones and a stable connection.</span></div>
         </main>
       </div>
     </LiveKitRoom>
@@ -1340,6 +1455,8 @@ function MeetingEndedScreen({ title, isHost, destinationLabel, onBack }: { title
 }
 
 const ROOM_OPTIONS: RoomOptions = {
+  // Adaptive Stream selects a receiver layer from the rendered tile size;
+  // Dynacast prevents the SFU requesting layers that nobody currently needs.
   adaptiveStream: true,
   dynacast: true,
   // Do not treat pagehide/beforeunload as an explicit leave. Browsers may
@@ -1348,16 +1465,27 @@ const ROOM_OPTIONS: RoomOptions = {
   // A full tab/browser termination still ends the web runtime and cannot be
   // kept alive by this option.
   disconnectOnPageLeave: false,
-  videoCaptureDefaults: { resolution: { width: 1280, height: 720, frameRate: 30 } },
+  // Auto starts at 720p. The quality controller can restart this same camera
+  // track at 360p/480p/1080p without replacing the LiveKit room or track.
+  videoCaptureDefaults: { resolution: VideoPresets.h720.resolution },
   // Voice path tuned for minimum delay: mono capture with the lowest capture latency hint, no pre-processing buffering beyond the browser's own echo/noise handling.
   audioCaptureDefaults: { channelCount: 1, latency: 0, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
   publishDefaults: {
     // DTX pauses sending during silence and costs the first syllable a restart delay; keeping the stream continuous makes speech start instantly. RED adds redundancy so a lost packet never needs a resend wait.
     dtx: false, red: true, forceStereo: false,
     audioPreset: { maxBitrate: 32_000, priority: "high" },
-    videoEncoding: { maxBitrate: 1_500_000, maxFramerate: 30 },
+    // Reserve enough encoder headroom for genuine 1080p when a user selects
+    // Full HD or Auto detects sustainable bandwidth. Camera capture still
+    // determines the real source resolution; this does not upscale video.
+    videoEncoding: VideoPresets.h1080.encoding,
+    // Let the browser balance frame rate and resolution during brief network
+    // pressure; the app's sustained-signal controller handles larger changes.
+    degradationPreference: "balanced",
     screenShareEncoding: { maxBitrate: 3_000_000, maxFramerate: 15 },
-    videoSimulcastLayers: [new VideoPreset(640, 360, 500_000, 20), new VideoPreset(320, 180, 150_000, 15)],
+    // Three useful spatial layers: 1080p primary, plus 720p and 360p.
+    // Each receiver independently requests the layer it can sustain.
+    simulcast: true,
+    videoSimulcastLayers: [VideoPresets.h360, VideoPresets.h720],
   },
 };
 // Rooms that were connected and fully loaded on the meeting page, waiting to be shown by the room page.
@@ -1486,7 +1614,7 @@ function reactionKind(emoji: string): string {
 }
 // Anything a person can press: a tap on these must keep doing its own job and never toggle fullscreen.
 const INTERACTIVE_SELECTOR = ".screen-annotate-layer.is-drawing, .screen-annotate-toolbar, button, a, input, textarea, select, label, summary, [role='button'], [role='dialog'], [data-popover], .room-device-menu, .reaction-picker, .messages-modal-backdrop, .room-alert, .room-message-toast, .room-presence-stack, .modal-backdrop";
-const PARTICIPANTS_PER_SCREEN = 8;
+const PARTICIPANTS_PER_SCREEN = 6;
 const REACTION_SET = ["🙏", "❤️", "👏", "🙌", "😊", "🎉", "✨", "💛", "🕊️", "👍"];
 
 // People we already know about before the room connects (from the join response and our own token), so names and photos are there from the first frame.
@@ -2310,6 +2438,19 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
   const [moderatorRequest, setModeratorRequest] = useState<{ media: "microphone" | "camera"; hostName: string } | null>(null);
   const [moderationBusy, setModerationBusy] = useState<string | null>(null);
   const [spotlightIdentity, setSpotlightIdentity] = useState<string | null>(null);
+  const [videoQualityMode, setVideoQualityMode] = useState<VideoQualityMode>(readVideoQualityChoice);
+  const [videoQualityMenuOpen, setVideoQualityMenuOpen] = useState(false);
+  const [videoDiagnosticsOpen, setVideoDiagnosticsOpen] = useState(false);
+  const [videoProfileBusy, setVideoProfileBusy] = useState(false);
+  const [localVideoStats, setLocalVideoStats] = useState<VideoStatsSnapshot | null>(null);
+  const [remoteVideoStats, setRemoteVideoStats] = useState<VideoStatsSnapshot | null>(null);
+  const [remoteStatsName, setRemoteStatsName] = useState("");
+  const localStatsCounter = useRef<VideoStatsCounter | undefined>(undefined);
+  const remoteStatsCounter = useRef<VideoStatsCounter | undefined>(undefined);
+  const autoCaptureHeight = useRef<VideoQualityHeight>(720);
+  const autoGoodSamples = useRef(0);
+  const autoPoorSamples = useRef(0);
+  const videoProfileKey = useRef("");
   const [mediaModal, setMediaModal] = useState<{ kind: MediaKind; state: MicPromptState } | null>(null);
   const mediaAttemptRef = useRef(0);
   const [messageText, setMessageText] = useState("");
@@ -3127,7 +3268,15 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
   // Turns the device on once it is allowed; anything that goes wrong opens the troubleshooting dialog instead of failing silently.
   async function enableMedia(kind: MediaKind) {
     try {
-      if (kind === "microphone") await localParticipant.setMicrophoneEnabled(true); else await localParticipant.setCameraEnabled(true);
+      if (kind === "microphone") {
+        await localParticipant.setMicrophoneEnabled(true);
+      } else {
+        const selected = VIDEO_QUALITY_OPTIONS.find((option) => option.value === videoQualityMode) ?? VIDEO_QUALITY_OPTIONS[0];
+        const targetHeight = videoQualityMode === "auto" ? 720 : selected.height;
+        await localParticipant.setCameraEnabled(true, { resolution: videoCaptureResolution(targetHeight) });
+        const cameraTrack = localParticipant.getTrackPublication(Track.Source.Camera)?.videoTrack;
+        cameraTrack?.setPublishingQuality(videoPublishingQuality(videoQualityMode));
+      }
       setMediaModal(null);
     } catch (cause) {
       const failure = MediaDeviceFailure.getFailure(cause);
@@ -3168,6 +3317,214 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
       window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Could not switch that device. Check browser permissions and try again." } }));
     }
   }
+
+  function chooseVideoQuality(mode: VideoQualityMode) {
+    setVideoQualityMode(mode);
+    setVideoQualityMenuOpen(false);
+    setVideoProfileBusy(false);
+    autoCaptureHeight.current = mode === "auto" ? 720 : (VIDEO_QUALITY_OPTIONS.find((option) => option.value === mode)?.height ?? 720);
+    autoGoodSamples.current = 0;
+    autoPoorSamples.current = 0;
+    videoProfileKey.current = "";
+    try { localStorage.setItem(VIDEO_QUALITY_STORAGE_KEY, mode); } catch { /* Quality still applies for this meeting. */ }
+  }
+
+  // Apply a manual capture preference to the existing camera track. restartTrack
+  // reacquires the camera at the selected resolution while keeping the LiveKit
+  // publication and participant identity intact.
+  useEffect(() => {
+    if (!isCameraEnabled || videoQualityMode === "auto") {
+      setVideoProfileBusy(false);
+      if (!isCameraEnabled) videoProfileKey.current = "";
+      return;
+    }
+    const publication = localParticipant.getTrackPublication(Track.Source.Camera);
+    const cameraTrack = publication?.videoTrack;
+    if (!cameraTrack) return;
+    const option = VIDEO_QUALITY_OPTIONS.find((item) => item.value === videoQualityMode);
+    if (!option) return;
+    const profileKey = `${cameraTrack.sid ?? cameraTrack.mediaStreamTrack.id}:${videoQualityMode}`;
+    if (videoProfileKey.current === profileKey) return;
+    videoProfileKey.current = profileKey;
+    const currentCaptureHeight = Number(cameraTrack.mediaStreamTrack.getSettings().height ?? 0);
+    if (currentCaptureHeight > 0 && Math.abs(currentCaptureHeight - option.height) <= 40) {
+      // Enabling the camera already applies this selected capture profile; do
+      // not immediately reacquire the same camera a second time.
+      cameraTrack.setPublishingQuality(videoPublishingQuality(videoQualityMode));
+      return;
+    }
+    let cancelled = false;
+    setVideoProfileBusy(true);
+    void cameraTrack.restartTrack(videoCaptureOptionsForTrack(cameraTrack, option.height))
+      .then(() => { if (!cancelled) cameraTrack.setPublishingQuality(videoPublishingQuality(videoQualityMode)); })
+      .catch(() => {
+        if (!cancelled) window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: `This camera could not start at ${option.label}. Choose Auto or a lower resolution.` } }));
+      })
+      .finally(() => { if (!cancelled) setVideoProfileBusy(false); });
+    return () => { cancelled = true; };
+  }, [isCameraEnabled, localParticipant, videoQualityMode]);
+
+  // Auto starts at 720p, steps down when real sender statistics show sustained
+  // pressure, and only steps up to 1080p after several stable samples. The
+  // Network Information API is optional; unavailable signals never force an
+  // upscale. A single participant's receiver quality never changes other
+  // participants' outgoing streams.
+  useEffect(() => {
+    if (videoQualityMode !== "auto" || !isCameraEnabled) return;
+    let stopped = false;
+    let sampling = false;
+    autoCaptureHeight.current = 720;
+    autoGoodSamples.current = 0;
+    autoPoorSamples.current = 0;
+    const inspectNetwork = async () => {
+      if (sampling || stopped) return;
+      sampling = true;
+      try {
+        const track = localParticipant.getTrackPublication(Track.Source.Camera)?.videoTrack;
+        if (!track) return;
+        const currentCaptureHeight = Number(track.mediaStreamTrack.getSettings().height ?? 0);
+        if (currentCaptureHeight > 0 && Math.abs(currentCaptureHeight - 720) > 80) {
+          await track.restartTrack(videoCaptureOptionsForTrack(track, 720));
+          if (stopped) return;
+          autoCaptureHeight.current = 720;
+          return;
+        }
+        const report = await track.getRTCStatsReport();
+        if (!report || stopped) return;
+        const rows = Array.from(report.values()) as unknown as Array<Record<string, unknown>>;
+        const isVideo = (row: Record<string, unknown>) => row.kind === "video" || row.mediaType === "video";
+        const outbound = rows
+          .filter((row) => row.type === "outbound-rtp" && isVideo(row) && row.isRemote !== true)
+          .sort((a, b) => Number(b.frameWidth ?? 0) * Number(b.frameHeight ?? 0) - Number(a.frameWidth ?? 0) * Number(a.frameHeight ?? 0))[0];
+        const remoteInbound = rows.find((row) => row.type === "remote-inbound-rtp" && isVideo(row) && row.id === outbound?.remoteId)
+          ?? rows.find((row) => row.type === "remote-inbound-rtp" && isVideo(row));
+        const candidate = rows.find((row) => row.type === "candidate-pair" && row.state === "succeeded" && (row.nominated === true || row.selected === true));
+        const network = (navigator as Navigator & { connection?: { downlink?: number; rtt?: number; effectiveType?: string; saveData?: boolean } }).connection;
+        const cores = navigator.hardwareConcurrency || 0;
+        const memory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory || 0;
+        const constrainedDevice = (cores > 0 && cores <= 4) || (memory > 0 && memory < 4);
+        const networkType = network?.effectiveType || "";
+        const constrainedNetwork = network?.saveData === true || ["slow-2g", "2g", "3g"].includes(networkType);
+        const availableBps = Number(candidate?.availableOutgoingBitrate ?? 0);
+        const rttSeconds = Number(remoteInbound?.roundTripTime ?? candidate?.currentRoundTripTime ?? (network?.rtt ? network.rtt / 1000 : 0));
+        const packetLoss = Number(remoteInbound?.fractionLost ?? -1);
+        const limitation = typeof outbound?.qualityLimitationReason === "string" ? outbound.qualityLimitationReason : "unknown";
+        const cpuLimited = limitation === "cpu";
+        const bandwidthLimited = limitation === "bandwidth";
+        const severePressure = cpuLimited || (packetLoss >= 0.08) || (availableBps > 0 && availableBps < 850_000) || (rttSeconds > 0.65);
+        const moderatePressure = constrainedNetwork || bandwidthLimited || (packetLoss >= 0.04) || (availableBps > 0 && availableBps < 1_800_000) || (rttSeconds > 0.42);
+        const cameraCapabilities = track.mediaStreamTrack.getCapabilities?.();
+        const maxCameraWidth = typeof cameraCapabilities?.width === "object" ? cameraCapabilities.width.max : Number(cameraCapabilities?.width ?? 0);
+        const maxCameraHeight = typeof cameraCapabilities?.height === "object" ? cameraCapabilities.height.max : Number(cameraCapabilities?.height ?? 0);
+        const canCaptureFullHd = maxCameraWidth >= 1920 && maxCameraHeight >= 1080;
+        const hasStrongEvidence = !constrainedDevice && !constrainedNetwork && !cpuLimited && !bandwidthLimited
+          && canCaptureFullHd && availableBps >= 6_000_000 && (rttSeconds === 0 || rttSeconds < 0.22)
+          && (packetLoss < 0 || packetLoss < 0.02);
+        if (severePressure || moderatePressure) {
+          autoPoorSamples.current += 1;
+          autoGoodSamples.current = 0;
+        } else if (hasStrongEvidence) {
+          autoGoodSamples.current += 1;
+          autoPoorSamples.current = 0;
+        } else {
+          autoGoodSamples.current = 0;
+          autoPoorSamples.current = 0;
+        }
+
+        let target: VideoQualityHeight = autoCaptureHeight.current;
+        if (autoPoorSamples.current >= 2) {
+          target = severePressure || constrainedDevice ? 360 : 480;
+        } else if (autoGoodSamples.current >= 3) {
+          if (target < 720) target = 720;
+          else if (target === 720 && hasStrongEvidence) target = 1080;
+        }
+        if (target !== autoCaptureHeight.current) {
+          await track.restartTrack(videoCaptureOptionsForTrack(track, target));
+          if (stopped) return;
+          track.setPublishingQuality(VideoQuality.HIGH);
+          autoCaptureHeight.current = target;
+          autoGoodSamples.current = 0;
+          autoPoorSamples.current = 0;
+          window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: `Auto video quality adjusted to ${target}p for connection stability.` } }));
+        }
+      } catch { /* Stats can be temporarily unavailable during browser/network transitions. */ }
+      finally { sampling = false; }
+    };
+    void inspectNetwork();
+    const timer = window.setInterval(() => { void inspectNetwork(); }, 4500);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, [isCameraEnabled, localParticipant, videoQualityMode]);
+
+  // Per-viewer quality preference: Auto leaves sizing to Adaptive Stream;
+  // fixed preferences cap only this receiver's subscriptions.
+  useEffect(() => {
+    const quality = videoQualityMode === "auto" || videoQualityMode === "fullhd" ? VideoQuality.HIGH
+      : videoQualityMode === "hd" || videoQualityMode === "480p" ? VideoQuality.MEDIUM : VideoQuality.LOW;
+    participants.forEach((participant) => {
+      if (participant.isLocal) return;
+      // useParticipants exposes the shared Participant base type; the local
+      // guard makes the remote publication API safe to access here.
+      const remoteParticipant = participant as RemoteParticipant;
+      const publication = remoteParticipant.getTrackPublication(Track.Source.Camera);
+      if (publication?.isSubscribed && publication.simulcasted) publication.setVideoQuality(quality);
+    });
+  }, [participants, trackRefs, videoQualityMode]);
+
+  // Diagnostics are sampled only while the panel is open; this keeps normal
+  // meetings free of a permanent polling loop and shows actual encoded/decoded
+  // resolution rather than the selected preference.
+  const remoteStatsTrack = trackRefs
+    .filter((item): item is TrackReference => isTrackReference(item) && !item.participant.isLocal && Boolean(item.publication?.track) && !item.publication?.isMuted)
+    .sort((a, b) => Number(b.participant.identity === topSpeaker || b.participant.isSpeaking) - Number(a.participant.identity === topSpeaker || a.participant.isSpeaking))[0];
+  const activeLocalCameraTrack = localParticipant.getTrackPublication(Track.Source.Camera)?.videoTrack;
+  let cameraCapabilityWidth = 0;
+  let cameraCapabilityHeight = 0;
+  if (isCameraEnabled && activeLocalCameraTrack) {
+    try {
+      const capabilities = activeLocalCameraTrack.mediaStreamTrack.getCapabilities?.();
+      cameraCapabilityWidth = typeof capabilities?.width === "object" ? Number(capabilities.width.max ?? 0) : Number(capabilities?.width ?? 0);
+      cameraCapabilityHeight = typeof capabilities?.height === "object" ? Number(capabilities.height.max ?? 0) : Number(capabilities?.height ?? 0);
+    } catch { /* Some mobile browsers do not expose camera capabilities. */ }
+  }
+  const cameraSupportsQuality = (height: VideoQualityHeight) => !isCameraEnabled || !activeLocalCameraTrack
+    || cameraCapabilityHeight <= 0 || cameraCapabilityWidth <= 0
+    || (cameraCapabilityHeight >= height && (height < 1080 || cameraCapabilityWidth >= 1920));
+  useEffect(() => {
+    if (!videoQualityMenuOpen || !videoDiagnosticsOpen) return;
+    let stopped = false;
+    let sampling = false;
+    localStatsCounter.current = undefined;
+    remoteStatsCounter.current = undefined;
+    const sample = async () => {
+      if (sampling || stopped) return;
+      sampling = true;
+      try {
+        const localTrack = localParticipant.getTrackPublication(Track.Source.Camera)?.videoTrack;
+        const remoteTrack = remoteStatsTrack?.publication?.track;
+        const [localResult, remoteResult] = await Promise.all([
+          localTrack ? readVideoStatsSnapshot(localTrack, "outbound", localStatsCounter.current) : Promise.resolve(null),
+          remoteTrack ? readVideoStatsSnapshot(remoteTrack, "inbound", remoteStatsCounter.current) : Promise.resolve(null),
+        ]);
+        if (stopped) return;
+        if (localResult) {
+          setLocalVideoStats(localResult.snapshot);
+          localStatsCounter.current = localResult.counter;
+        } else setLocalVideoStats(null);
+        if (remoteResult) {
+          setRemoteVideoStats(remoteResult.snapshot);
+          remoteStatsCounter.current = remoteResult.counter;
+          setRemoteStatsName(remoteStatsTrack?.participant.name || remoteStatsTrack?.participant.identity || "Participant");
+        } else {
+          setRemoteVideoStats(null);
+          setRemoteStatsName("");
+        }
+      } finally { sampling = false; }
+    };
+    void sample();
+    const timer = window.setInterval(() => { void sample(); }, 2000);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, [videoDiagnosticsOpen, videoQualityMenuOpen, localParticipant, remoteStatsTrack?.publication?.track, remoteStatsTrack?.participant.identity]);
+
   const screenBusy = useRef(false);
   async function toggleScreenShare(switching = false) {
     const notify = (message: string) => window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message } }));
@@ -3365,6 +3722,31 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
           <button className={`room-control-button ${handRaised ? "control-selected" : ""}`} onClick={() => void toggleHand()} title={handRaised ? "Lower your hand" : "Raise your hand"}><Hand size={18}/><span>{handRaised ? "Lower hand" : "Raise hand"}</span></button>
         </div>
         <div className="room-control-group room-control-row-b">
+          <div className="video-quality-control-wrap">
+            <button type="button" className={`room-control-button video-quality-trigger ${videoQualityMenuOpen ? "control-selected" : ""}`} onClick={() => { setVideoQualityMenuOpen((open) => !open); setDeviceMenu(null); }} aria-expanded={videoQualityMenuOpen} aria-haspopup="dialog" title="Choose camera video quality">
+              <Settings2 size={18}/><span>Quality</span>
+            </button>
+            {videoQualityMenuOpen && <section className="video-quality-menu" role="dialog" aria-label="Video quality settings">
+              <header><div><b>Video quality</b><small>Choose how clearly your camera is sent and received</small></div><button type="button" onClick={() => setVideoQualityMenuOpen(false)} aria-label="Close video quality settings"><X size={16}/></button></header>
+              <div className="video-quality-options" role="group" aria-label="Video quality preference">
+                {VIDEO_QUALITY_OPTIONS.map((option) => {
+                  const supported = option.value === "auto" || cameraSupportsQuality(option.height);
+                  return <button type="button" key={option.value} className={`${videoQualityMode === option.value ? "is-selected" : ""} ${!supported ? "is-unavailable" : ""}`} aria-pressed={videoQualityMode === option.value} disabled={!supported} onClick={() => chooseVideoQuality(option.value)} title={!supported ? "The active camera does not report support for this resolution" : option.detail}>
+                    <span className="video-quality-option-copy"><b>{option.label}</b><small>{!supported ? "Not supported by the active camera" : option.detail}</small></span>
+                    {videoQualityMode === option.value && <Check size={16}/>}
+                  </button>;
+                })}
+              </div>
+              {videoProfileBusy && <p className="video-quality-status"><LoaderCircle size={13} className="spin"/> Updating camera profile…</p>}
+              {videoQualityMode === "auto" && <p className="video-quality-status">Auto starts at 720p and changes resolution only after sustained network/device signals.</p>}
+              <button type="button" className="video-diagnostics-toggle" onClick={() => setVideoDiagnosticsOpen((open) => !open)} aria-expanded={videoDiagnosticsOpen}>{videoDiagnosticsOpen ? "Hide live diagnostics" : "Show live diagnostics"}<ChevronDown size={14}/></button>
+              {videoDiagnosticsOpen && <div className="video-diagnostics" aria-live="polite">
+                <div><span>Your outgoing video</span><b>{formatVideoResolution(localVideoStats)}</b><small>{localVideoStats?.fps ? `${localVideoStats.fps} fps` : "Frame rate pending"} · {formatVideoBitrate(localVideoStats?.bitrateBps ?? 0)}</small><small>{localVideoStats?.packetLossPercent != null ? `${localVideoStats.packetLossPercent.toFixed(1)}% packet loss` : `Encoder: ${localVideoStats?.limitation ?? "Waiting"}`}{localVideoStats?.roundTripMs != null ? ` · ${Math.round(localVideoStats.roundTripMs)} ms RTT` : ""}</small></div>
+                <div><span>Incoming video{remoteStatsName ? ` · ${remoteStatsName}` : " · active speaker"}</span><b>{formatVideoResolution(remoteVideoStats)}</b><small>{remoteVideoStats?.fps ? `${remoteVideoStats.fps} fps` : "Frame rate pending"} · {formatVideoBitrate(remoteVideoStats?.bitrateBps ?? 0)}</small><small>{remoteVideoStats?.packetLossPercent != null ? `${remoteVideoStats.packetLossPercent.toFixed(1)}% packet loss` : "Receiver statistics pending"}</small></div>
+                <small>Values come from WebRTC sender/receiver reports. Resolution appears after encoded/decoded frames are available.</small>
+              </div>}
+            </section>}
+          </div>
           <button className={`room-control-button message-control ${messagesOpen ? "control-selected" : ""}`} onClick={() => { setMessagesOpen(true); setPeopleOpen(false); setDirectContact(null); setNotesOpen(false); }} title="Open room messages"><MessageCircle size={18}/><span>Messages</span>{chatMessages.length > 0 && <i>{chatMessages.length}</i>}</button>
           <button className={`room-control-button people-control ${peopleOpen ? "control-selected" : ""}`} onClick={() => { setPeopleViewTab("people"); setPeopleOpen(true); setMessagesOpen(false); setDirectContact(null); setNotesOpen(false); }} title="See who is in the meeting"><Users size={18}/><span>People</span><i>{participants.length}</i></button>
           {RECORDING_UI_ENABLED && role === "host" && <button className={`room-control-button recording-control ${recordingState?.status === "recording" ? "recording-control-active" : ""}`} onClick={() => recordingState?.status === "recording" ? void stopRecording() : recordingState?.status === "uploading" || recordingState?.status === "consent_pending" ? undefined : recordingState?.status === "failed" && recordingState.canRetry ? void retryRecordingUpload() : void startRecording()} disabled={recordingBusy || recordingState?.status === "uploading" || recordingState?.status === "consent_pending"} title={recordingState?.status === "recording" ? "Stop audio recording" : recordingState?.status === "failed" && recordingState.canRetry ? "Retry audio upload" : "Start audio-only recording"}>{recordingBusy ? <LoaderCircle size={18} className="spin"/> : <span className="meeting-recording-dot"/>}<span>{recordingState?.status === "recording" ? "Stop" : recordingState?.status === "uploading" ? "Saving" : recordingState?.status === "consent_pending" ? "Consent" : recordingState?.status === "failed" && recordingState.canRetry ? "Retry upload" : "Record"}</span></button>}
