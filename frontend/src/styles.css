@@ -2685,7 +2685,7 @@ body { min-height: var(--app-viewport-height, 100vh); }
 :root[data-theme="light"] .conference-fullscreen-target[data-theme="light"] .conference-media-area { background:#fbf7f4; }
 :root[data-theme="light"] .conference-fullscreen-target[data-theme="light"] .room-top-stack .room-fullscreen-meeting-title { color:#482d38; background:rgba(255,253,250,.94); border-color:#e8d9de; }
 :root[data-theme="light"] .conference-fullscreen-target[data-theme="light"] .active-count-pill { color:#553644; background:#fffdfa; border-color:#e4d5da; box-shadow:0 3px 14px rgba(73,38,52,.1); }
-:root[data-theme="light"] .conference-fullscreen-target[data-theme="light"] .raised-hand-chip { color:#4a2b37; background:#f5e4c5; border-color:#e6cfa4; }
+:root[data-theme="light"] .conference-fullscreen-target[data-theme="light"] .raised-hand-chip { color:#4a2b37; background:#f5e4c5; border-color:#e6cfa4; box-shadow:none; }
 :root[data-theme="light"] .conference-fullscreen-target[data-theme="light"] .room-control-dock { background:#fffdfa; border-color:#e7d9dd; box-shadow:0 -8px 28px rgba(78,43,56,.08); }
 :root[data-theme="light"] .conference-fullscreen-target[data-theme="light"] .room-control-button,
 :root[data-theme="light"] .conference-fullscreen-target[data-theme="light"] .room-control-dropdown,
@@ -3230,3 +3230,14 @@ html[data-theme="light"] .room-control-dock .room-control-button.control-selecte
 .room-control-dock .message-control { z-index: 24; }
 .room-control-dock .message-control > i { z-index: 40; }
 .room-control-dock .people-control { z-index: 18; }
+
+
+/* Keep the shared toolbar separators single-pixel: these controls intentionally
+   join their neighbours, so their left edge must not draw a second border. */
+.room-control-dock .share-screen-control,
+.room-control-dock .raise-hand-control,
+.room-control-dock .people-control,
+.room-control-dock .recording-control,
+.room-control-dock .notes-control,
+.room-control-dock .reaction-trigger,
+.room-control-dock .fullscreen-control { border-left: 0; }

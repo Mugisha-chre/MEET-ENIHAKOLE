@@ -1999,6 +1999,147 @@ function useBackgroundCall(room: ReturnType<typeof useRoomContext>, title: strin
     // Media Session metadata/actions may be exposed on lock screens. They are
     // an integration only, not a background-execution guarantee.
     const session = navigator.mediaSession;
+    let meetingPipWindow: Window | null = null;
+    let meetingPipVideo: HTMLVideoElement | null = null;
+
+    const closeMeetingPictureInPicture = () => {
+      const currentWindow = meetingPipWindow;
+      meetingPipWindow = null;
+      if (meetingPipVideo) {
+        meetingPipVideo.pause();
+        meetingPipVideo.srcObject = null;
+        meetingPipVideo = null;
+      }
+      if (currentWindow && !currentWindow.closed) {
+        try { currentWindow.close(); } catch { /* The browser may already have closed the PiP window. */ }
+      }
+      if (document.pictureInPictureElement && typeof document.exitPictureInPicture === "function") {
+        void document.exitPictureInPicture().catch(() => undefined);
+      }
+    };
+
+    // Chrome/Edge can invoke the Media Session `enterpictureinpicture` action
+    // automatically when the user switches away from an active video-call tab.
+    // A Document PiP window is used so audio-only calls still have a useful
+    // compact meeting surface; its video is a second renderer for the same
+    // MediaStream, so the LiveKit-owned participant tiles remain untouched.
+    const enterMeetingPictureInPicture = async () => {
+      if (!active || room.state !== ConnectionState.Connected) return;
+      const pipApi = (window as Window & {
+        documentPictureInPicture?: {
+          window?: Window | null;
+          requestWindow?: (options?: { width?: number; height?: number }) => Promise<Window>;
+        };
+      }).documentPictureInPicture;
+      if (meetingPipWindow && !meetingPipWindow.closed) {
+        try { meetingPipWindow.focus(); } catch { /* Focusing is optional. */ }
+        return;
+      }
+      if (pipApi?.window && !pipApi.window.closed) {
+        try { pipApi.window.focus(); } catch { /* The browser may keep its existing PiP window focused. */ }
+        return;
+      }
+
+      const videoCandidates = Array.from(document.querySelectorAll<HTMLVideoElement>(
+        '.conference-fullscreen-target .screen-share-view video, .conference-fullscreen-target .participant-card video',
+      ));
+      const sourceVideo = videoCandidates.find((video) =>
+        video.srcObject && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth > 0 && video.videoHeight > 0,
+      ) ?? videoCandidates.find((video) => Boolean(video.srcObject));
+
+      try {
+        if (pipApi?.requestWindow) {
+          const pip = await pipApi.requestWindow({ width: 360, height: 240 });
+          meetingPipWindow = pip;
+          pip.document.title = `${title} · MEET ENIHAKOLE`;
+          const style = pip.document.createElement('style');
+          style.textContent = `
+            * { box-sizing: border-box; }
+            html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+            body { color: #fff7f4; background: #160e12; font: 13px system-ui, -apple-system, Segoe UI, sans-serif; }
+            .meet-pip { height: 100%; display: flex; flex-direction: column; padding: 10px; gap: 8px; }
+            .meet-pip-video { flex: 1 1 auto; min-height: 0; width: 100%; object-fit: contain; border-radius: 9px; background: #050405; }
+            .meet-pip-audio { flex: 1 1 auto; min-height: 0; display: grid; place-items: center; border-radius: 9px; color: #e8ca91; background: radial-gradient(circle at center, #38212b, #21151b 68%); font-size: 14px; font-weight: 750; }
+            .meet-pip-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 34px; }
+            .meet-pip-copy { min-width: 0; display: grid; gap: 2px; }
+            .meet-pip-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 750; }
+            .meet-pip-status { color: #bcaab0; font-size: 10px; }
+            .meet-pip-actions { display: flex; flex: 0 0 auto; gap: 5px; }
+            .meet-pip-actions button { border: 1px solid #60404d; border-radius: 7px; padding: 6px 8px; color: #fff7f4; background: #39232d; font: 700 10px system-ui, sans-serif; cursor: pointer; }
+            .meet-pip-actions button:last-child { color: #fff; border-color: #8f2141; background: #8f2141; }
+          `;
+          pip.document.head.appendChild(style);
+
+          const shell = pip.document.createElement('main');
+          shell.className = 'meet-pip';
+          if (sourceVideo?.srcObject) {
+            const preview = pip.document.createElement('video');
+            preview.className = 'meet-pip-video';
+            preview.autoplay = true;
+            preview.playsInline = true;
+            preview.muted = true; // RoomAudioRenderer continues to provide the meeting audio.
+            preview.srcObject = sourceVideo.srcObject;
+            meetingPipVideo = preview;
+            shell.appendChild(preview);
+            void preview.play().catch(() => undefined);
+          } else {
+            const audioSurface = pip.document.createElement('div');
+            audioSurface.className = 'meet-pip-audio';
+            audioSurface.textContent = 'Your meeting is still connected';
+            shell.appendChild(audioSurface);
+          }
+
+          const footer = pip.document.createElement('footer');
+          footer.className = 'meet-pip-footer';
+          const copy = pip.document.createElement('div');
+          copy.className = 'meet-pip-copy';
+          const meetingTitle = pip.document.createElement('span');
+          meetingTitle.className = 'meet-pip-title';
+          meetingTitle.textContent = title;
+          const status = pip.document.createElement('span');
+          status.className = 'meet-pip-status';
+          status.textContent = 'Meeting continues · Live connection';
+          copy.append(meetingTitle, status);
+
+          const actions = pip.document.createElement('div');
+          actions.className = 'meet-pip-actions';
+          const micButton = pip.document.createElement('button');
+          const updateMicButton = () => { micButton.textContent = room.localParticipant.isMicrophoneEnabled ? 'Mute' : 'Unmute'; };
+          updateMicButton();
+          micButton.addEventListener('click', () => {
+            void room.localParticipant.setMicrophoneEnabled(!room.localParticipant.isMicrophoneEnabled)
+              .then(updateMicButton)
+              .catch(() => { status.textContent = 'Could not change microphone · Return to the meeting'; });
+          });
+          const returnButton = pip.document.createElement('button');
+          returnButton.textContent = 'Return';
+          returnButton.addEventListener('click', () => {
+            try { window.focus(); } catch { /* Focus depends on browser policy. */ }
+            closeMeetingPictureInPicture();
+          });
+          actions.append(micButton, returnButton);
+          footer.append(copy, actions);
+          shell.appendChild(footer);
+          pip.document.body.replaceChildren(shell);
+          pip.addEventListener('pagehide', () => {
+            if (meetingPipWindow === pip) meetingPipWindow = null;
+            if (meetingPipVideo) {
+              meetingPipVideo.srcObject = null;
+              meetingPipVideo = null;
+            }
+          }, { once: true });
+          return;
+        }
+      } catch {
+        closeMeetingPictureInPicture();
+        // Native video PiP is a useful fallback in browsers without Document PiP.
+      }
+
+      if (sourceVideo && typeof sourceVideo.requestPictureInPicture === 'function' && document.pictureInPictureElement !== sourceVideo) {
+        try { await sourceVideo.requestPictureInPicture(); } catch { /* Browser settings or platform support may prevent automatic PiP. */ }
+      }
+    };
+
     if (session) {
       const setHandler = (action: string, handler: (() => void) | null) => {
         try { (session.setActionHandler as (name: string, callback: (() => void) | null) => void).call(session, action, handler); }
@@ -2022,6 +2163,7 @@ function useBackgroundCall(room: ReturnType<typeof useRoomContext>, title: strin
       setHandler("togglemicrophone", () => {
         void room.localParticipant.setMicrophoneEnabled(!room.localParticipant.isMicrophoneEnabled).catch(() => undefined);
       });
+      setHandler("enterpictureinpicture", () => { void enterMeetingPictureInPicture(); });
     }
 
     const resumeAudio = () => {
@@ -2067,7 +2209,10 @@ function useBackgroundCall(room: ReturnType<typeof useRoomContext>, title: strin
     };
 
     const onVisible = () => {
-      if (document.visibilityState === "visible") resumeAudio();
+      if (document.visibilityState === "visible") {
+        resumeAudio();
+        closeMeetingPictureInPicture();
+      }
     };
     const onRoomRestored = () => {
       if (session) { try { session.playbackState = "playing"; } catch { /* Optional media integration. */ } }
@@ -2075,6 +2220,7 @@ function useBackgroundCall(room: ReturnType<typeof useRoomContext>, title: strin
     };
     const onRoomDisconnected = () => {
       if (session) { try { session.playbackState = "none"; } catch { /* Optional media integration. */ } }
+      closeMeetingPictureInPicture();
     };
     const onUserGesture = () => {
       // LiveKit documents startAudio() as a user-gesture operation when the
@@ -2130,8 +2276,10 @@ function useBackgroundCall(room: ReturnType<typeof useRoomContext>, title: strin
         };
         clearHandler("hangup");
         clearHandler("togglemicrophone");
+        clearHandler("enterpictureinpicture");
         try { session.metadata = null; session.playbackState = "none"; } catch { /* Ignore unsupported cleanup. */ }
       }
+      closeMeetingPictureInPicture();
       if (audioSession && previousAudioSessionType !== undefined) {
         try { audioSession.type = previousAudioSessionType; } catch { /* Optional platform integration. */ }
       }
@@ -3718,8 +3866,8 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
         <div className="room-control-group room-control-row-a">
           <div className="room-split-control"><button className={`room-control-button room-split-main ${!isMicrophoneEnabled ? "control-disabled" : ""}`} onClick={() => void toggleMedia("microphone")} title={isMicrophoneEnabled ? "Turn microphone off" : "Turn microphone on"}>{isMicrophoneEnabled ? <Mic size={18}/> : <MicOff size={18}/>}<span>{isMicrophoneEnabled ? "Mic" : "Unmute"}</span></button><button data-popover="audioinput" className="room-control-dropdown" onClick={() => setDeviceMenu(deviceMenu === "audioinput" ? null : "audioinput")} aria-label="Choose microphone" title="Choose microphone"><ChevronDown size={14}/></button>{deviceMenu === "audioinput" && <div data-popover="audioinput" className="room-device-menu">{inputDevices.filter((device) => device.kind === "audioinput").map((device) => <button key={device.deviceId} onClick={() => void chooseDevice("audioinput", device.deviceId)}>{device.label || `Microphone ${device.deviceId.slice(0, 5)}`}</button>)}{inputDevices.filter((device) => device.kind === "audioinput").length === 0 && <span>No microphones found</span>}</div>}</div>
           <div className="room-split-control"><button className={`room-control-button room-split-main ${!isCameraEnabled ? "control-disabled" : ""}`} onClick={() => void toggleMedia("camera")} title={isCameraEnabled ? "Turn camera off" : "Turn camera on"}>{isCameraEnabled ? <VideoIcon size={18}/> : <VideoOff size={18}/>}<span>{isCameraEnabled ? "Camera" : "Camera off"}</span></button><button data-popover="videoinput" className="room-control-dropdown" onClick={() => setDeviceMenu(deviceMenu === "videoinput" ? null : "videoinput")} aria-label="Choose camera" title="Choose camera"><ChevronDown size={14}/></button>{deviceMenu === "videoinput" && <div data-popover="videoinput" className="room-device-menu">{inputDevices.filter((device) => device.kind === "videoinput").map((device) => <button key={device.deviceId} onClick={() => void chooseDevice("videoinput", device.deviceId)}>{device.label || `Camera ${device.deviceId.slice(0, 5)}`}</button>)}{inputDevices.filter((device) => device.kind === "videoinput").length === 0 && <span>No cameras found</span>}</div>}</div>
-          <button className={`room-control-button ${isScreenShareEnabled ? "control-selected" : ""}`} onClick={() => void toggleScreenShare()} title={isScreenShareEnabled ? "Stop sharing screen" : "Share screen"}><MonitorUp size={18}/><span>{isScreenShareEnabled ? "Stop share" : "Share"}</span></button>
-          <button className={`room-control-button ${handRaised ? "control-selected" : ""}`} onClick={() => void toggleHand()} title={handRaised ? "Lower your hand" : "Raise your hand"}><Hand size={18}/><span>{handRaised ? "Lower hand" : "Raise hand"}</span></button>
+          <button className={`room-control-button share-screen-control ${isScreenShareEnabled ? "control-selected" : ""}`} onClick={() => void toggleScreenShare()} title={isScreenShareEnabled ? "Stop sharing screen" : "Share screen"}><MonitorUp size={18}/><span>{isScreenShareEnabled ? "Stop share" : "Share"}</span></button>
+          <button className={`room-control-button raise-hand-control ${handRaised ? "control-selected" : ""}`} onClick={() => void toggleHand()} title={handRaised ? "Lower your hand" : "Raise your hand"}><Hand size={18}/><span>{handRaised ? "Lower hand" : "Raise hand"}</span></button>
         </div>
         <div className="room-control-group room-control-row-b">
           <div className="video-quality-control-wrap">
@@ -3751,7 +3899,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
           <button className={`room-control-button people-control ${peopleOpen ? "control-selected" : ""}`} onClick={() => { setPeopleViewTab("people"); setPeopleOpen(true); setMessagesOpen(false); setDirectContact(null); setNotesOpen(false); }} title="See who is in the meeting"><Users size={18}/><span>People</span><i>{participants.length}</i></button>
           {RECORDING_UI_ENABLED && role === "host" && <button className={`room-control-button recording-control ${recordingState?.status === "recording" ? "recording-control-active" : ""}`} onClick={() => recordingState?.status === "recording" ? void stopRecording() : recordingState?.status === "uploading" || recordingState?.status === "consent_pending" ? undefined : recordingState?.status === "failed" && recordingState.canRetry ? void retryRecordingUpload() : void startRecording()} disabled={recordingBusy || recordingState?.status === "uploading" || recordingState?.status === "consent_pending"} title={recordingState?.status === "recording" ? "Stop audio recording" : recordingState?.status === "failed" && recordingState.canRetry ? "Retry audio upload" : "Start audio-only recording"}>{recordingBusy ? <LoaderCircle size={18} className="spin"/> : <span className="meeting-recording-dot"/>}<span>{recordingState?.status === "recording" ? "Stop" : recordingState?.status === "uploading" ? "Saving" : recordingState?.status === "consent_pending" ? "Consent" : recordingState?.status === "failed" && recordingState.canRetry ? "Retry upload" : "Record"}</span></button>}
           <button className={`room-control-button notes-control ${notesOpen ? "control-selected" : ""}`} onClick={() => { setNotesOpen(true); setMessagesOpen(false); setPeopleOpen(false); setDirectContact(null); }} title="Open collaborative meeting notes"><FileText size={18}/><span>Notes</span></button>
-          <div className="reaction-control-wrap"><button data-popover="reactions" className={`room-control-button ${reactionsOpen ? "control-selected" : ""}`} onClick={() => setReactionsOpen((open) => !open)} title="Send an emoji or sticker reaction"><Smile size={18}/><span>React</span></button>{reactionsOpen && <div data-popover="reactions" className="reaction-picker" role="dialog" aria-label="Choose a reaction">{REACTION_SET.map((emoji) => <button key={emoji} onClick={() => void react(emoji)} aria-label={`Send ${emoji}`}>{emoji}</button>)}</div>}</div>
+          <div className="reaction-control-wrap"><button data-popover="reactions" className={`room-control-button reaction-trigger ${reactionsOpen ? "control-selected" : ""}`} onClick={() => setReactionsOpen((open) => !open)} title="Send an emoji or sticker reaction"><Smile size={18}/><span>React</span></button>{reactionsOpen && <div data-popover="reactions" className="reaction-picker" role="dialog" aria-label="Choose a reaction">{REACTION_SET.map((emoji) => <button key={emoji} onClick={() => void react(emoji)} aria-label={`Send ${emoji}`}>{emoji}</button>)}</div>}</div>
         <div className="room-control-side"><button className="room-icon-button room-theme-toggle" onClick={toggleTheme} aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`} title={`Switch to ${theme === "light" ? "dark" : "light"} mode`}>{theme === "light" ? <Moon size={17}/> : <Sun size={17}/>}</button><button className="room-icon-button fullscreen-control" onClick={() => void toggleFullscreen()} aria-label={fullScreen ? "Exit fullscreen" : "Enter fullscreen"} title={fullScreen ? "Exit fullscreen" : "Fullscreen"}>{fullScreen ? <Minimize2 size={18}/> : <Maximize2 size={18}/>}</button>{role === "host" && <button className="room-icon-button room-end-button" onClick={onEndForEveryone} disabled={ending} title="End for everyone" aria-label="End for everyone"><X size={18}/></button>}<button className="room-leave-button" onClick={onLeave}><DoorOpen size={17}/><span>Leave</span></button></div></div>
       </div>
     </div>
