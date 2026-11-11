@@ -4,11 +4,11 @@ import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } fr
 import { LiveKitRoom, ParticipantTile, RoomAudioRenderer, isTrackReference, useChat, useIsMuted, useLocalParticipant, useParticipants, useRoomContext, useTracks, VideoTrack, type TrackReference } from "@livekit/components-react";
 import { ConnectionState, DisconnectReason, MediaDeviceFailure, ParticipantEvent, Room, RoomEvent, Track, VideoPresets, VideoQuality, type Participant, type RemoteParticipant, type RoomOptions, type VideoCaptureOptions } from "livekit-client";
 import {
-  ArrowDownRight, ArrowLeft, ArrowRight, AudioLines, CalendarClock, CalendarDays, Check,
+  ArrowLeft, ArrowRight, AudioLines, CalendarClock, CalendarDays, Check,
   CheckCircle2, CircleHelp, Clock3, Copy, DoorOpen, HeartHandshake, Home,
   Link2, LoaderCircle, LogIn, LogOut, Menu, Mic, Plus, Share2, ShieldCheck,
   Sparkles, Users, Video, VideoIcon, VideoOff, X, Sun, Moon, MessageCircle,
-  Hand, Send, MonitorUp, MicOff, Maximize2, Minimize2, ChevronLeft, ChevronRight, Smile, ChevronDown, Download,
+  PictureInPicture2, Hand, Send, MonitorUp, MicOff, Maximize2, Minimize2, ChevronLeft, ChevronRight, Smile, ChevronDown, Download,
   MousePointer2, MoveUpRight, Eraser, Eye, EyeOff, PenLine, Undo2, Settings2,
   FileText, Bold, Italic, Underline, List, ListOrdered, Heading1, Heading2, IndentIncrease, IndentDecrease,
 } from "lucide-react";
@@ -365,7 +365,7 @@ export default function App() {
     if (!user) return;
     void api.sessionHeartbeat().catch(() => undefined);
     const heartbeat = window.setInterval(() => {
-      if (document.visibilityState === "visible") void api.sessionHeartbeat().catch(() => undefined);
+      if (document.visibilityState === "visible" || document.pictureInPictureElement) void api.sessionHeartbeat().catch(() => undefined);
     }, 60_000);
     return () => window.clearInterval(heartbeat);
   }, [user?.id]);
@@ -727,13 +727,13 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
         <div className="sidebar-label">WORKSPACE</div>
         <nav className="side-navigation" aria-label="Main navigation">
           <Link to="/" className={`side-link ${active === "home" ? "side-link-active" : ""}`}><Home size={18} /><span>Home</span></Link>
-          <Link to="/meetings" className={`side-link ${active === "meetings" ? "side-link-active" : ""}`}><CalendarDays size={18} /><span>Meetings & prayers</span></Link>
-          {RECORDING_UI_ENABLED && <Link to="/recordings" className={`side-link ${active === "recordings" ? "side-link-active" : ""}`}><AudioLines size={18} /><span>Recorded meetings</span></Link>}
+          <Link to="/meetings" className={`side-link ${active === "meetings" ? "side-link-active" : ""}`}><HeartHandshake size={18} /><span>Prayers</span></Link>
+          {RECORDING_UI_ENABLED && <Link to="/recordings" className={`side-link ${active === "recordings" ? "side-link-active" : ""}`}><AudioLines size={18} /><span>Recorded prayers</span></Link>}
           {user?.isAdmin && <Link to="/admin" className={`side-link ${active === "admin" ? "side-link-active" : ""}`}><ShieldCheck size={18} /><span>Admin center</span></Link>}
         </nav>
         <div className="sidebar-bottom">
           {user && <div className="sidebar-account"><ProfilePhoto className="sidebar-account-photo" src={user.picture} name={user.displayName} size={160}/><span><b title={user.displayName}>{user.displayName}</b><small title={user.email}>{user.email}</small></span><button type="button" className="sidebar-signout" onClick={() => { setMobileNavOpen(false); signOut(); }} title="Sign out" aria-label="Sign out"><LogOut size={16}/><span>Sign out</span></button></div>}
-          {!user && <div className="sidebar-signin-card"><span className="sidebar-signin-icon" aria-hidden="true"><LogIn size={18}/></span><span className="sidebar-signin-copy"><b>You're not signed in</b><small>Sign in to manage your meetings, recordings and profile.</small></span><button type="button" className="sidebar-signin-button" onClick={() => { setMobileNavOpen(false); openAuth(); }}><LogIn size={15}/><span>Sign in</span></button></div>}
+          {!user && <div className="sidebar-signin-card"><span className="sidebar-signin-icon" aria-hidden="true"><LogIn size={18}/></span><span className="sidebar-signin-copy"><b>You're not signed in</b><small>Sign in to manage your prayers, recordings and profile.</small></span><button type="button" className="sidebar-signin-button" onClick={() => { setMobileNavOpen(false); openAuth(); }}><LogIn size={15}/><span>Sign in</span></button></div>}
           <button className="side-link quiet-link" onClick={() => window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Help centre will be added in a future release." } }))}><CircleHelp size={18} /><span>Help & support</span></button>
           <div className="sidebar-version">MEET ENIHAKOLE <span>EARLY ACCESS</span></div>
         </div>
@@ -742,9 +742,9 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
       <div className="main-shell">
         <header className="topbar">
           <button className="icon-button mobile-menu-button" aria-label="Open navigation" onClick={() => setMobileNavOpen(!mobileNavOpen)}><Menu size={20} /></button>
-          <div className="breadcrumb"><span>ENIHAKOLE CHOIR</span><span className="breadcrumb-slash">/</span><strong>{active === "meetings" ? "My meetings" : active === "recordings" ? "Recordings" : active === "admin" ? "System admin" : "Workspace"}</strong></div>
+          <div className="breadcrumb"><span>ENIHAKOLE CHOIR</span><span className="breadcrumb-slash">/</span><strong>{active === "meetings" ? "Prayers" : active === "recordings" ? "Recordings" : active === "admin" ? "System admin" : "Workspace"}</strong></div>
           <div className="topbar-actions">
-            <button className="topbar-help" onClick={() => window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Open Meetings to discover Online Prayers, or use a private invitation link to enter an ordinary meeting." } }))}><CircleHelp size={16} /><span>Need help?</span></button>
+            <button className="topbar-help" onClick={() => window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Open Prayers to join an Online Prayer, or use the invitation link you were sent." } }))}><CircleHelp size={16} /><span>Need help?</span></button>
             <ThemeToggle />
             {user ? (
               <div className="profile-menu">
@@ -759,18 +759,22 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
         <main className="main-content">{children}</main>
         <footer className="page-footer"><span>© {new Date().getFullYear()} MEET ENIHAKOLE</span><span>Made for connection, prayer, and community</span></footer>
       </div>
-      <nav className={`mobile-bottom-nav mbn-${active} ${(user?.canCreateMeetings || user?.isAdmin) ? "mbn-has-fab" : "mbn-nofab"}`} aria-label="Mobile navigation">
+      <nav className={`mobile-bottom-nav mbn-${active} mbn-has-fab`} aria-label="Mobile navigation">
         <span className="mbn-bar" aria-hidden="true"/>
         <Link to="/" className={active === "home" ? "mobile-nav-active" : ""} aria-current={active === "home" ? "page" : undefined}><Home size={20}/><span>Home</span></Link>
-        {(user?.canCreateMeetings || user?.isAdmin) ? <button type="button" className="mbn-fab" aria-label="Create meeting" onClick={() => openSchedule(false)}><Plus size={26} strokeWidth={2.4}/></button> : <Link to="/recordings" className={active === "recordings" ? "mobile-nav-active" : ""} aria-current={active === "recordings" ? "page" : undefined}><AudioLines size={20}/><span>Recorded</span></Link>}
-        <Link to="/meetings" className={active === "meetings" ? "mobile-nav-active" : ""} aria-current={active === "meetings" ? "page" : undefined}><CalendarDays size={20}/><span>Meetings</span></Link>
+        {(user?.canCreateMeetings || user?.isAdmin)
+          ? <button type="button" className="mbn-fab" aria-label="Create meeting" onClick={() => openSchedule(false)}><Plus size={26} strokeWidth={2.4}/></button>
+          : <Link to="/meetings" className={`mbn-fab mbn-fab-link ${active === "meetings" ? "mbn-fab-active" : ""}`} aria-label="Prayers" aria-current={active === "meetings" ? "page" : undefined}><HeartHandshake size={26} strokeWidth={2.4}/><span className="mbn-fab-label">Prayers</span></Link>}
+        {(user?.canCreateMeetings || user?.isAdmin)
+          ? <Link to="/meetings" className={active === "meetings" ? "mobile-nav-active" : ""} aria-current={active === "meetings" ? "page" : undefined}><HeartHandshake size={20}/><span>Prayers</span></Link>
+          : <Link to="/recordings" className={active === "recordings" ? "mobile-nav-active" : ""} aria-current={active === "recordings" ? "page" : undefined}><AudioLines size={20}/><span>Recorded</span></Link>}
       </nav>
     </div>
   );
 }
 
 function Dashboard() {
-  const { user, meetings, publicMeetings, loadingMeetings, openSchedule } = useAppContext();
+  const { user, meetings, publicMeetings, loadingMeetings } = useAppContext();
   const navigate = useNavigate();
   const upcoming = [...meetings, ...publicMeetings]
     .filter((meeting) => meeting.meetingType === "prayer")
@@ -779,15 +783,12 @@ function Dashboard() {
     .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime())
     .slice(0, 3);
   const liveCount = upcoming.filter((meeting) => meeting.status === "live").length;
-  const nextMeeting = upcoming[0];
 
   return (
     <div className="dashboard-page page-enter">
       <section className="welcome-row">
         <div>
-          <p className="eyebrow"><span className="eyebrow-dot" /> YOUR CHOIR'S ONLINE GATHERING SPACE</p>
           <h1>{user ? `Welcome back, ${user.displayName.split(" ")[0]}.` : "Gather in faith. Wherever you are."}</h1>
-          <p className="welcome-copy">A quieter, simpler way to pray, rehearse, and stay connected with your choir.</p>
         </div>
         <div className="welcome-decoration" aria-hidden="true"><span className="decor-ring decor-ring-one"/><span className="decor-ring decor-ring-two"/><span className="decor-center"><AudioLines size={36}/></span><span className="decor-star decor-star-one">✦</span><span className="decor-star decor-star-two">✧</span></div>
       </section>
@@ -799,8 +800,8 @@ function Dashboard() {
           <h2>Make room for<br /><em>what matters.</em></h2>
           <p>Bring every voice into one room. No complicated setup — just open your link and be there.</p>
           <div className="hero-actions">
-            <Link className="button button-cream" to="/meetings"><CalendarDays size={17}/> Go to Meetings <ArrowRight size={16}/></Link>
-            <Link className="hero-secondary" to="/recordings"><AudioLines size={17}/> Recorded Meetings</Link>
+            <Link className="button button-cream" to="/meetings"><HeartHandshake size={17}/> Go to Prayers <ArrowRight size={16}/></Link>
+            <Link className="hero-secondary" to="/recordings"><AudioLines size={17}/> Recorded Prayers</Link>
           </div>
         </div>
         <div className="hero-art" aria-hidden="true">
@@ -810,24 +811,13 @@ function Dashboard() {
       </section>
 
       <section className="section-block">
-        <div className="section-heading"><div><p className="section-overline">YOUR SPACE</p><h2>At a glance</h2></div><button className="text-action" onClick={() => navigate("/meetings")}>View my meetings <ArrowRight size={15}/></button></div>
+        <div className="section-heading"><div><p className="section-overline">YOUR SPACE</p><h2>At a glance</h2></div><button className="text-action" onClick={() => navigate("/meetings")}>View prayers <ArrowRight size={15}/></button></div>
         <div className="stats-grid">
           <div className="stat-card"><span className="stat-icon stat-burgundy"><CalendarDays size={19}/></span><div><span className="stat-label">Upcoming Online Prayers</span><strong>{loadingMeetings ? "—" : upcoming.filter((m) => m.status === "scheduled").length.toString().padStart(2, "0")}</strong><small>Ready when you are</small></div><span className="stat-sheen"/></div>
           <div className="stat-card"><span className="stat-icon stat-gold"><Video size={19}/></span><div><span className="stat-label">Live right now</span><strong>{loadingMeetings ? "—" : String(liveCount).padStart(2, "0")}</strong><small>{liveCount ? "Join the conversation" : "Your room is waiting"}</small></div><span className="stat-sheen"/></div>
           <div className="stat-card"><span className="stat-icon stat-rose"><Users size={19}/></span><div><span className="stat-label">Your community</span><strong>ENIHAKOLE</strong><small>Stronger when connected</small></div><span className="stat-sheen"/></div>
         </div>
       </section>
-
-      <section className="section-block meetings-section">
-        <div className="section-heading"><div><p className="section-overline">DON'T MISS A MOMENT</p><h2>{nextMeeting?.status === "live" ? "Happening now" : "Coming together soon"}</h2></div>{(user?.canCreateMeetings || user?.isAdmin) && <button className="button button-outline button-small" onClick={() => openSchedule(false)}><Plus size={15}/> Create a gathering</button>}</div>
-        {loadingMeetings ? <div className="loading-surface"><LoaderCircle className="spin" size={24}/><span>Finding your next gathering…</span></div> : upcoming.length ? (
-          <div className="meeting-card-grid">{upcoming.map((meeting) => <MeetingCard key={meeting.slug} meeting={meeting} />)}</div>
-        ) : (
-          <div className="empty-state"><div className="empty-icon"><CalendarClock size={23}/></div><div><h3>No upcoming Online Prayers</h3><p>Public Online Prayers will appear here when they are scheduled. Ordinary meetings remain available only through their invitation links.</p></div><Link className="button button-primary" to="/meetings">Explore Meetings <ArrowRight size={16}/></Link></div>
-        )}
-      </section>
-
-      <section className="tip-strip"><div className="tip-icon"><ShieldCheck size={18}/></div><div><strong>A better gathering starts with a simple link.</strong><p>Share the meeting invitation in your choir's WhatsApp group. Guests can join without creating an account.</p></div><ArrowDownRight size={19} className="tip-arrow"/></section>
     </div>
   );
 }
@@ -841,7 +831,7 @@ function MeetingCard({ meeting }: { meeting: Meeting }) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1800);
     } catch {
-      window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Copy this invitation from the meeting details page." } }));
+      window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Copy this invitation from the prayer details page." } }));
     }
   }
   return (
@@ -877,9 +867,9 @@ function MeetingsPage() {
   useEffect(() => { void refreshMeetings(); }, [refreshMeetings]);
   return (
     <div className="meetings-page page-enter">
-      <div className="page-title-row"><div><p className="eyebrow"><span className="eyebrow-dot"/> YOUR CALENDAR, TOGETHER</p><h1>Meetings & Online Prayers</h1><p className="welcome-copy">Discover public Online Prayers. Private meetings are opened through their invitation links.</p></div>{(user?.canCreateMeetings || user?.isAdmin) && <button className="button button-primary" onClick={() => openSchedule(false)}><Plus size={17}/> Create a gathering</button>}</div>
-      <div className="filter-bar"><div className="segmented-filter">{(["upcoming", "past", "all"] as const).map((value) => <button key={value} className={filter === value ? "filter-active" : ""} onClick={() => setFilter(value)}>{value === "upcoming" ? "Upcoming" : value === "past" ? "Past meetings" : "All meetings"}</button>)}</div><span className="meeting-count">{list.length} {list.length === 1 ? "meeting" : "meetings"}</span></div>
-      {loadingMeetings ? <div className="loading-surface"><LoaderCircle className="spin" size={24}/><span>Loading meetings…</span></div> : list.length ? <div className="meeting-card-grid">{list.map((meeting) => <MeetingCard key={meeting.slug} meeting={meeting}/>)}</div> : <div className="empty-state empty-large"><div className="empty-icon"><CalendarDays size={23}/></div><div><h3>{filter === "past" ? "No past meetings yet" : "A fresh page for your next gathering"}</h3><p>Public Online Prayers will appear here. Ordinary Meetings are private and can only be opened using their invitation link.</p></div><Link className="button button-primary" to="/recordings"><AudioLines size={16}/> Recorded Meetings</Link></div>}
+      <div className="page-title-row"><div><h1>Prayers</h1></div>{(user?.canCreateMeetings || user?.isAdmin) && <button className="button button-primary" onClick={() => openSchedule(false)}><Plus size={17}/> Create a gathering</button>}</div>
+      <div className="filter-bar"><div className="segmented-filter">{(["upcoming", "past", "all"] as const).map((value) => <button key={value} className={filter === value ? "filter-active" : ""} onClick={() => setFilter(value)}>{value === "upcoming" ? "Upcoming" : value === "past" ? "Past prayers" : "All prayers"}</button>)}</div><span className="meeting-count">{list.length} {list.length === 1 ? "prayer" : "prayers"}</span></div>
+      {loadingMeetings ? <div className="loading-surface"><LoaderCircle className="spin" size={24}/><span>Loading prayers…</span></div> : list.length ? <div className="meeting-card-grid">{list.map((meeting) => <MeetingCard key={meeting.slug} meeting={meeting}/>)}</div> : <div className="empty-state empty-large"><div className="empty-icon"><CalendarDays size={23}/></div><div><h3>{filter === "past" ? "No past prayers yet" : "A fresh page for your next gathering"}</h3><p>Online Prayers will appear here when they are scheduled.</p></div><Link className="button button-primary" to="/recordings"><AudioLines size={16}/> Recorded Prayers</Link></div>}
     </div>
   );
 }
@@ -1149,7 +1139,7 @@ function MeetingPage() {
             {!user && !ended && <div className="join-google"><p>Continue with Google (recommended) or join with your name as a temporary guest. Guest access is limited to this meeting.</p><GoogleContinueButton oneTap onCredential={(credential) => void googleCredential(credential)}/>{!getGuestProfile(slug) ? <div className="guest-access-form"><div className="guest-access-divider"><span>OR</span></div><label htmlFor="guest-full-name">Continue as Guest</label><input id="guest-full-name" value={guestName} onChange={(event) => setGuestName(event.target.value)} placeholder="First and last name" autoComplete="name" maxLength={80}/><small>Use your full name. No account or email is required.</small><button type="button" className="button button-soft button-full" onClick={() => void continueAsGuest()} disabled={joining || guestName.trim().split(/\s+/).filter(Boolean).length < 2}>{joining ? "Preparing guest access…" : "Continue as Guest"}</button></div> : <div className="join-identity guest-identity"><ProfilePhoto name={getGuestProfile(slug)?.displayName || guestName} className="join-identity-photo"/><span><b>{getGuestProfile(slug)?.displayName}</b><small>Temporary guest · this meeting only</small></span></div>}</div>}
             {!ended && <div className="join-preferences"><MediaToggle on={cameraOn} onChange={setCameraOn} onIcon={<Video size={16}/>} offIcon={<VideoOff size={16}/>} onLabel="Camera is on" offLabel="Camera is off" onHint="Join with video" offHint="Join without video"/><MediaToggle on={micOn} onChange={setMicOn} onIcon={<Mic size={16}/>} offIcon={<MicOff size={16}/>} onLabel="Microphone is on" offLabel="Microphone is off" onHint="Join with audio" offHint="Join muted"/></div>}
             {error && <div className="inline-error" role="alert">{error}{error.includes("Sign in") && <button type="button" className="error-link" onClick={openAuth}>Sign in</button>}</div>}
-            {ended ? <div className="meeting-ended-actions"><Link to="/meetings" className="button button-soft button-full"><ArrowLeft size={16}/> Back to meetings</Link>{(meeting.isOwner || meeting.isParticipant) && <button type="button" className="button button-primary button-full" onClick={() => setPastNotesOpen(true)}><FileText size={16}/> View meeting notes</button>}{pastRecordingLoading && <div className="meeting-audio-loading"><LoaderCircle size={17} className="spin"/> Checking for an audio recording…</div>}{pastRecording && <section className="meeting-ended-audio"><div><AudioLines size={20}/><span><b>Audio recording</b><small>{pastRecording.recording.meetingTitle}</small></span></div><AudioRecordingPlayer src={pastRecording.playbackUrl} title={pastRecording.recording.meetingTitle}/><small>Available until {formatDate(pastRecording.expiresAt)}</small></section>}{pastRecordingError && !pastRecordingLoading && !pastRecording && <p className="meeting-audio-unavailable">{pastRecordingError}</p>}</div> : (user || getGuestProfile(slug)) && <><button className={`button button-primary button-full join-submit ${notYetOpen ? "join-submit-locked" : ""}`} type="submit" disabled={joining || notYetOpen}>{joining ? <LoaderCircle size={17} className="spin"/> : notYetOpen ? <Clock3 size={17}/> : meeting.isOwner ? <Video size={17}/> : <DoorOpen size={17}/>} {joining ? "Joining…" : notYetOpen ? "Not Yet Open" : meeting.status === "scheduled" ? "Open gathering" : "Join gathering"}<ArrowRight size={16}/></button>{notYetOpen && <div className="meeting-not-yet-open" role="status"><Clock3 size={16}/><span><b>Opens {formatDate(meeting.startsAt, { weekday: "short" }, meeting.timezone)}</b><small>{formatTime(meeting.startsAt, meeting.timezone)} · {meeting.timezone || "Scheduled time"}</small></span></div>}</>}
+            {ended ? <div className="meeting-ended-actions"><Link to="/meetings" className="button button-soft button-full"><ArrowLeft size={16}/> {meeting.meetingType === "prayer" ? "Back to prayers" : "Back to meetings"}</Link>{(meeting.isOwner || meeting.isParticipant) && <button type="button" className="button button-primary button-full" onClick={() => setPastNotesOpen(true)}><FileText size={16}/> View meeting notes</button>}{pastRecordingLoading && <div className="meeting-audio-loading"><LoaderCircle size={17} className="spin"/> Checking for an audio recording…</div>}{pastRecording && <section className="meeting-ended-audio"><div><AudioLines size={20}/><span><b>Audio recording</b><small>{pastRecording.recording.meetingTitle}</small></span></div><AudioRecordingPlayer src={pastRecording.playbackUrl} title={pastRecording.recording.meetingTitle}/><small>Available until {formatDate(pastRecording.expiresAt)}</small></section>}{pastRecordingError && !pastRecordingLoading && !pastRecording && <p className="meeting-audio-unavailable">{pastRecordingError}</p>}</div> : (user || getGuestProfile(slug)) && <><button className={`button button-primary button-full join-submit ${notYetOpen ? "join-submit-locked" : ""}`} type="submit" disabled={joining || notYetOpen}>{joining ? <LoaderCircle size={17} className="spin"/> : notYetOpen ? <Clock3 size={17}/> : meeting.isOwner ? <Video size={17}/> : <DoorOpen size={17}/>} {joining ? "Joining…" : notYetOpen ? "Not Yet Open" : meeting.status === "scheduled" ? "Open gathering" : "Join gathering"}<ArrowRight size={16}/></button>{notYetOpen && <div className="meeting-not-yet-open" role="status"><Clock3 size={16}/><span><b>Opens {formatDate(meeting.startsAt, { weekday: "short" }, meeting.timezone)}</b><small>{formatTime(meeting.startsAt, meeting.timezone)} · {meeting.timezone || "Scheduled time"}</small></span></div>}</>}
             <p className="join-footnote"><ShieldCheck size={13}/> Your camera and microphone are only requested when you enter the room.</p>
           </form>
         </section>
@@ -1955,6 +1945,204 @@ function preventLiveKitFreezeDisconnect(room: Room) {
 }
 
 /**
+ * Picture-in-Picture for the live room. When the person leaves the page (switches
+ * app or tab) the call is shown in a floating PiP window, which keeps the page
+ * treated as "in use" by the browser so audio, video and the LiveKit connection stay
+ * live. The PiP window plays the real screen-share / active-speaker video track
+ * (attached through LiveKit so adaptive-stream keeps that layer flowing), and falls
+ * back to a name card when nobody has a camera on.
+ */
+type PipVideoElement = HTMLVideoElement & {
+  webkitSetPresentationMode?: (mode: string) => void;
+  webkitPresentationMode?: string;
+  autoPictureInPicture?: boolean;
+};
+type PipSource = { track: Track | null; name: string; key: string };
+
+function isPictureInPictureSupported(): boolean {
+  if (typeof document === "undefined") return false;
+  const probe = document.createElement("video") as PipVideoElement;
+  return Boolean(document.pictureInPictureEnabled) || typeof probe.webkitSetPresentationMode === "function";
+}
+
+function useRoomPictureInPicture(room: Room, title: string) {
+  const [supported] = useState(isPictureInPictureSupported);
+  const [active, setActive] = useState(false);
+  const controls = useRef<{ enter: (automatic: boolean) => Promise<boolean>; exit: () => Promise<void> } | null>(null);
+
+  useEffect(() => {
+    if (!supported) return;
+    const video = document.createElement("video") as PipVideoElement;
+    video.muted = true; video.autoplay = true; video.playsInline = true;
+    video.setAttribute("playsinline", ""); video.setAttribute("aria-hidden", "true"); video.tabIndex = -1;
+    video.disablePictureInPicture = false;
+    video.autoPictureInPicture = true; // Safari: float automatically when the page is left.
+    video.className = "room-pip-source";
+    document.body.appendChild(video);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 640; canvas.height = 360;
+    let canvasStream: MediaStream | null = null;
+    let canvasTimer = 0;
+    let scheduleTimer = 0;
+    let current: PipSource | null = null;
+    let enteredAutomatically = false;
+    let disposed = false;
+
+    const isPip = () => document.pictureInPictureElement === video || (video as PipVideoElement).webkitPresentationMode === "picture-in-picture";
+
+    const usableTrack = (participant: Participant, source: Track.Source): Track | null => {
+      const publication = participant.getTrackPublication(source);
+      const track = publication?.track;
+      if (!track || publication.isMuted || track.mediaStreamTrack?.readyState === "ended") return null;
+      return track;
+    };
+    const pickSource = (): PipSource => {
+      const remotes = Array.from(room.remoteParticipants.values());
+      const label = (participant: Participant) => participant.name || participant.identity || "Participant";
+      for (const participant of remotes) {
+        const track = usableTrack(participant, Track.Source.ScreenShare);
+        if (track) return { track, name: label(participant), key: `${track.mediaStreamTrack?.id ?? track.sid}` };
+      }
+      const speakers = room.activeSpeakers.filter((participant) => !participant.isLocal);
+      for (const participant of [...speakers, ...remotes]) {
+        const track = usableTrack(participant, Track.Source.Camera);
+        if (track) return { track, name: label(participant), key: `${track.mediaStreamTrack?.id ?? track.sid}` };
+      }
+      const person = speakers[0] ?? remotes[0];
+      if (person) return { track: null, name: label(person), key: `card:${person.identity}` };
+      const own = usableTrack(room.localParticipant, Track.Source.Camera);
+      if (own) return { track: own, name: "You", key: `${own.mediaStreamTrack?.id ?? own.sid}` };
+      return { track: null, name: title, key: "card:room" };
+    };
+
+    const drawCard = (name: string) => {
+      const g = canvas.getContext("2d");
+      if (!g) return;
+      const w = canvas.width; const h = canvas.height;
+      g.fillStyle = "#1b1117"; g.fillRect(0, 0, w, h);
+      const gradient = g.createLinearGradient(w / 2 - 70, h / 2 - 110, w / 2 + 70, h / 2 + 30);
+      gradient.addColorStop(0, "#a92b4e"); gradient.addColorStop(1, "#7a1a37");
+      g.fillStyle = gradient; g.beginPath(); g.arc(w / 2, h / 2 - 40, 70, 0, Math.PI * 2); g.fill();
+      const initials = name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase() ?? "").join("") || "E";
+      g.fillStyle = "#fff"; g.textAlign = "center"; g.textBaseline = "middle";
+      g.font = "700 56px system-ui, sans-serif"; g.fillText(initials, w / 2, h / 2 - 38);
+      g.font = "600 26px system-ui, sans-serif"; g.fillStyle = "#f5e9ec";
+      g.fillText(name.length > 28 ? `${name.slice(0, 27)}…` : name, w / 2, h / 2 + 62);
+      g.font = "500 16px system-ui, sans-serif"; g.fillStyle = "#c9aab4";
+      g.fillText("MEET ENIHAKOLE · Live", w / 2, h / 2 + 96);
+    };
+
+    const apply = () => {
+      if (disposed) return;
+      const next = pickSource();
+      if (current && current.key === next.key) return;
+      if (current?.track) { try { current.track.detach(video); } catch { /* Track already gone. */ } }
+      window.clearInterval(canvasTimer); canvasTimer = 0;
+      current = next;
+      if (next.track) {
+        next.track.attach(video);
+      } else {
+        drawCard(next.name);
+        if (!canvasStream) canvasStream = canvas.captureStream(2);
+        video.srcObject = canvasStream;
+        // Keep the card producing frames so the floating window never freezes.
+        canvasTimer = window.setInterval(() => drawCard(next.name), 1000);
+      }
+      void video.play().catch(() => undefined);
+    };
+    const schedule = () => {
+      window.clearTimeout(scheduleTimer);
+      scheduleTimer = window.setTimeout(apply, 250);
+    };
+
+    const waitForFrame = () => new Promise<void>((resolve) => {
+      if (video.readyState >= 1) { resolve(); return; }
+      const done = () => { video.removeEventListener("loadedmetadata", done); window.clearTimeout(timer); resolve(); };
+      const timer = window.setTimeout(done, 1500);
+      video.addEventListener("loadedmetadata", done);
+    });
+
+    const enter = async (automatic: boolean) => {
+      if (disposed || room.state !== ConnectionState.Connected) return false;
+      if (isPip()) return true;
+      try {
+        apply();
+        video.classList.add("room-pip-source-live");
+        await waitForFrame();
+        await video.play().catch(() => undefined);
+        if (document.pictureInPictureEnabled && typeof video.requestPictureInPicture === "function") await video.requestPictureInPicture();
+        else if (typeof video.webkitSetPresentationMode === "function") video.webkitSetPresentationMode("picture-in-picture");
+        else return false;
+        enteredAutomatically = automatic;
+        return true;
+      } catch {
+        // Needs a user gesture or the browser blocked it: the call itself keeps running normally.
+        video.classList.remove("room-pip-source-live");
+        return false;
+      }
+    };
+    const exit = async () => {
+      try {
+        if (document.pictureInPictureElement === video) await document.exitPictureInPicture();
+        else if (video.webkitPresentationMode === "picture-in-picture") video.webkitSetPresentationMode?.("inline");
+      } catch { /* Already closed. */ }
+    };
+    controls.current = { enter, exit };
+
+    const onEnter = () => {
+      setActive(true);
+      try { if (navigator.mediaSession) navigator.mediaSession.playbackState = "playing"; } catch { /* Optional. */ }
+    };
+    const onLeave = () => { setActive(false); enteredAutomatically = false; video.classList.remove("room-pip-source-live"); };
+    const onSafariMode = () => { if (video.webkitPresentationMode === "picture-in-picture") onEnter(); else onLeave(); };
+    video.addEventListener("enterpictureinpicture", onEnter);
+    video.addEventListener("leavepictureinpicture", onLeave);
+    video.addEventListener("webkitpresentationmodechanged", onSafariMode);
+
+    // Leaving the page: float the call (works without a tap where the browser allows automatic PiP).
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") void enter(true);
+      else if (enteredAutomatically && isPip()) void exit();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    const session = navigator.mediaSession;
+    try { session?.setActionHandler("enterpictureinpicture" as MediaSessionAction, () => { void enter(true); }); }
+    catch { /* This browser has no automatic-PiP media action. */ }
+
+    const events = [RoomEvent.ActiveSpeakersChanged, RoomEvent.TrackSubscribed, RoomEvent.TrackUnsubscribed, RoomEvent.TrackMuted, RoomEvent.TrackUnmuted, RoomEvent.ParticipantConnected, RoomEvent.ParticipantDisconnected, RoomEvent.LocalTrackPublished, RoomEvent.LocalTrackUnpublished, RoomEvent.Connected, RoomEvent.Reconnected] as const;
+    events.forEach((event) => room.on(event, schedule));
+    apply(); // Warm start: the floating window opens instantly with a ready picture.
+
+    return () => {
+      disposed = true;
+      controls.current = null;
+      window.clearTimeout(scheduleTimer); window.clearInterval(canvasTimer);
+      events.forEach((event) => room.off(event, schedule));
+      document.removeEventListener("visibilitychange", onVisibility);
+      try { session?.setActionHandler("enterpictureinpicture" as MediaSessionAction, null); } catch { /* Optional. */ }
+      video.removeEventListener("enterpictureinpicture", onEnter);
+      video.removeEventListener("leavepictureinpicture", onLeave);
+      video.removeEventListener("webkitpresentationmodechanged", onSafariMode);
+      if (isPip()) { void exit(); }
+      if (current?.track) { try { current.track.detach(video); } catch { /* Already detached. */ } }
+      video.srcObject = null;
+      canvasStream?.getTracks().forEach((track) => track.stop());
+      video.remove();
+      setActive(false);
+    };
+  }, [room, supported, title]);
+
+  const toggle = useCallback(async () => {
+    if (!controls.current) return;
+    if (active) await controls.current.exit();
+    else if (!(await controls.current.enter(false))) window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Picture-in-picture isn't available in this browser right now." } }));
+  }, [active]);
+
+  return { supported, active, toggle };
+}
+
+/**
  * Keeps an active LiveKit call usable when the browser backgrounds the page.
  * WebRTC media capture and active real-time connections receive browser-managed
  * treatment, but a page can still be suspended or terminated by the OS. We do
@@ -2021,6 +2209,9 @@ function useBackgroundCall(room: ReturnType<typeof useRoomContext>, title: strin
       setHandler("hangup", () => leaveRef.current());
       setHandler("togglemicrophone", () => {
         void room.localParticipant.setMicrophoneEnabled(!room.localParticipant.isMicrophoneEnabled).catch(() => undefined);
+      });
+      setHandler("togglecamera", () => {
+        void room.localParticipant.setCameraEnabled(!room.localParticipant.isCameraEnabled).catch(() => undefined);
       });
     }
 
@@ -2505,6 +2696,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
   notesSavingRef.current = notesSaving;
   const localVoiceActivity = useVoiceActivity(localParticipant);
   useBackgroundCall(room, meeting.title, onLeave);
+  const pip = useRoomPictureInPicture(room, meeting.title);
   // Keep the receive-side jitter buffer as small as the browser safely allows so other people's voices play back with minimal delay.
   useEffect(() => {
     const tune = (track: { kind?: string; setPlayoutDelay?: (seconds: number) => void }) => { if (track.kind === Track.Kind.Audio) { try { track.setPlayoutDelay?.(0.02); } catch { /* unsupported browser: default buffering */ } } };
@@ -3693,6 +3885,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
         <div className="room-fullscreen-meeting-title" title={meeting.title}>{meeting.title}</div>
         <div className="active-count-pill" role="status" aria-live="polite" title="People currently in this meeting"><Users size={14}/><b>{participants.length}</b><span>{participants.length === 1 ? "person" : "people"} in the meeting</span></div>
         {RECORDING_UI_ENABLED && recordingState && <div className={`meeting-recording-banner meeting-recording-${recordingState.status}`} role="status" aria-live="polite"><span className="meeting-recording-dot"/><b>{recordingState.status === "recording" ? "Recording" : recordingState.status === "consent_pending" ? "Waiting for recording consent" : recordingState.status === "uploading" ? "Saving recording" : recordingState.status === "ready" ? "Recording saved" : recordingState.status === "failed" ? "Recording upload failed" : recordingState.status === "declined" ? "Recording declined" : "Recording"}</b>{recordingState.status === "consent_pending" && <small>{recordingState.consents.filter((item) => item.decision === "accepted").length}/{recordingState.consents.length} approved</small>}{recordingState.status === "uploading" && <><small>{recordingState.uploadProgressPercent || 0}% uploaded</small><span className="meeting-recording-progress"><i style={{ width: `${Math.max(0, Math.min(100, recordingState.uploadProgressPercent || 0))}%` }}/></span></>}</div>}
+        {pip.supported && <button type="button" className={`room-pip-button ${pip.active ? "room-pip-button-active" : ""}`} onClick={() => void pip.toggle()} aria-pressed={pip.active} title={pip.active ? "Close the floating window" : "Keep the call floating while you use other apps"}><PictureInPicture2 size={14}/><span>{pip.active ? "Close PiP" : "PiP"}</span></button>}
         {participants.filter((participant) => raisedHands[participant.identity]).map((participant) => <div className="raised-hand-chip" key={participant.identity} title={`${participantName(participant) || "Participant"} raised a hand`}><Hand size={13}/><span>{participantName(participant) || "Participant"}{participant.identity === localIdentity ? " (You)" : ""}</span></div>)}
       </div>
       <div className={`participant-grid-wrap ${screenShare ? "has-screen-share" : ""}`}>
@@ -3718,8 +3911,8 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
         <div className="room-control-group room-control-row-a">
           <div className="room-split-control"><button className={`room-control-button room-split-main ${!isMicrophoneEnabled ? "control-disabled" : ""}`} onClick={() => void toggleMedia("microphone")} title={isMicrophoneEnabled ? "Turn microphone off" : "Turn microphone on"}>{isMicrophoneEnabled ? <Mic size={18}/> : <MicOff size={18}/>}<span>{isMicrophoneEnabled ? "Mic" : "Unmute"}</span></button><button data-popover="audioinput" className="room-control-dropdown" onClick={() => setDeviceMenu(deviceMenu === "audioinput" ? null : "audioinput")} aria-label="Choose microphone" title="Choose microphone"><ChevronDown size={14}/></button>{deviceMenu === "audioinput" && <div data-popover="audioinput" className="room-device-menu">{inputDevices.filter((device) => device.kind === "audioinput").map((device) => <button key={device.deviceId} onClick={() => void chooseDevice("audioinput", device.deviceId)}>{device.label || `Microphone ${device.deviceId.slice(0, 5)}`}</button>)}{inputDevices.filter((device) => device.kind === "audioinput").length === 0 && <span>No microphones found</span>}</div>}</div>
           <div className="room-split-control"><button className={`room-control-button room-split-main ${!isCameraEnabled ? "control-disabled" : ""}`} onClick={() => void toggleMedia("camera")} title={isCameraEnabled ? "Turn camera off" : "Turn camera on"}>{isCameraEnabled ? <VideoIcon size={18}/> : <VideoOff size={18}/>}<span>{isCameraEnabled ? "Camera" : "Camera off"}</span></button><button data-popover="videoinput" className="room-control-dropdown" onClick={() => setDeviceMenu(deviceMenu === "videoinput" ? null : "videoinput")} aria-label="Choose camera" title="Choose camera"><ChevronDown size={14}/></button>{deviceMenu === "videoinput" && <div data-popover="videoinput" className="room-device-menu">{inputDevices.filter((device) => device.kind === "videoinput").map((device) => <button key={device.deviceId} onClick={() => void chooseDevice("videoinput", device.deviceId)}>{device.label || `Camera ${device.deviceId.slice(0, 5)}`}</button>)}{inputDevices.filter((device) => device.kind === "videoinput").length === 0 && <span>No cameras found</span>}</div>}</div>
-          <button className={`room-control-button ${isScreenShareEnabled ? "control-selected" : ""}`} onClick={() => void toggleScreenShare()} title={isScreenShareEnabled ? "Stop sharing screen" : "Share screen"}><MonitorUp size={18}/><span>{isScreenShareEnabled ? "Stop share" : "Share"}</span></button>
-          <button className={`room-control-button ${handRaised ? "control-selected" : ""}`} onClick={() => void toggleHand()} title={handRaised ? "Lower your hand" : "Raise your hand"}><Hand size={18}/><span>{handRaised ? "Lower hand" : "Raise hand"}</span></button>
+          <button className={`room-control-button no-left-border ${isScreenShareEnabled ? "control-selected" : ""}`} onClick={() => void toggleScreenShare()} title={isScreenShareEnabled ? "Stop sharing screen" : "Share screen"}><MonitorUp size={18}/><span>{isScreenShareEnabled ? "Stop share" : "Share"}</span></button>
+          <button className={`room-control-button no-left-border ${handRaised ? "control-selected" : ""}`} onClick={() => void toggleHand()} title={handRaised ? "Lower your hand" : "Raise your hand"}><Hand size={18}/><span>{handRaised ? "Lower hand" : "Raise hand"}</span></button>
         </div>
         <div className="room-control-group room-control-row-b">
           <div className="video-quality-control-wrap">
@@ -3747,12 +3940,12 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
               </div>}
             </section>}
           </div>
-          <button className={`room-control-button message-control ${messagesOpen ? "control-selected" : ""}`} onClick={() => { setMessagesOpen(true); setPeopleOpen(false); setDirectContact(null); setNotesOpen(false); }} title="Open room messages"><MessageCircle size={18}/><span>Messages</span>{chatMessages.length > 0 && <i>{chatMessages.length}</i>}</button>
-          <button className={`room-control-button people-control ${peopleOpen ? "control-selected" : ""}`} onClick={() => { setPeopleViewTab("people"); setPeopleOpen(true); setMessagesOpen(false); setDirectContact(null); setNotesOpen(false); }} title="See who is in the meeting"><Users size={18}/><span>People</span><i>{participants.length}</i></button>
-          {RECORDING_UI_ENABLED && role === "host" && <button className={`room-control-button recording-control ${recordingState?.status === "recording" ? "recording-control-active" : ""}`} onClick={() => recordingState?.status === "recording" ? void stopRecording() : recordingState?.status === "uploading" || recordingState?.status === "consent_pending" ? undefined : recordingState?.status === "failed" && recordingState.canRetry ? void retryRecordingUpload() : void startRecording()} disabled={recordingBusy || recordingState?.status === "uploading" || recordingState?.status === "consent_pending"} title={recordingState?.status === "recording" ? "Stop audio recording" : recordingState?.status === "failed" && recordingState.canRetry ? "Retry audio upload" : "Start audio-only recording"}>{recordingBusy ? <LoaderCircle size={18} className="spin"/> : <span className="meeting-recording-dot"/>}<span>{recordingState?.status === "recording" ? "Stop" : recordingState?.status === "uploading" ? "Saving" : recordingState?.status === "consent_pending" ? "Consent" : recordingState?.status === "failed" && recordingState.canRetry ? "Retry upload" : "Record"}</span></button>}
-          <button className={`room-control-button notes-control ${notesOpen ? "control-selected" : ""}`} onClick={() => { setNotesOpen(true); setMessagesOpen(false); setPeopleOpen(false); setDirectContact(null); }} title="Open collaborative meeting notes"><FileText size={18}/><span>Notes</span></button>
-          <div className="reaction-control-wrap"><button data-popover="reactions" className={`room-control-button ${reactionsOpen ? "control-selected" : ""}`} onClick={() => setReactionsOpen((open) => !open)} title="Send an emoji or sticker reaction"><Smile size={18}/><span>React</span></button>{reactionsOpen && <div data-popover="reactions" className="reaction-picker" role="dialog" aria-label="Choose a reaction">{REACTION_SET.map((emoji) => <button key={emoji} onClick={() => void react(emoji)} aria-label={`Send ${emoji}`}>{emoji}</button>)}</div>}</div>
-        <div className="room-control-side"><button className="room-icon-button room-theme-toggle" onClick={toggleTheme} aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`} title={`Switch to ${theme === "light" ? "dark" : "light"} mode`}>{theme === "light" ? <Moon size={17}/> : <Sun size={17}/>}</button><button className="room-icon-button fullscreen-control" onClick={() => void toggleFullscreen()} aria-label={fullScreen ? "Exit fullscreen" : "Enter fullscreen"} title={fullScreen ? "Exit fullscreen" : "Fullscreen"}>{fullScreen ? <Minimize2 size={18}/> : <Maximize2 size={18}/>}</button>{role === "host" && <button className="room-icon-button room-end-button" onClick={onEndForEveryone} disabled={ending} title="End for everyone" aria-label="End for everyone"><X size={18}/></button>}<button className="room-leave-button" onClick={onLeave}><DoorOpen size={17}/><span>Leave</span></button></div></div>
+          <button className={`room-control-button no-left-border message-control ${messagesOpen ? "control-selected" : ""}`} onClick={() => { setMessagesOpen(true); setPeopleOpen(false); setDirectContact(null); setNotesOpen(false); }} title="Open room messages"><MessageCircle size={18}/><span>Messages</span>{chatMessages.length > 0 && <i>{chatMessages.length}</i>}</button>
+          <button className={`room-control-button no-left-border people-control ${peopleOpen ? "control-selected" : ""}`} onClick={() => { setPeopleViewTab("people"); setPeopleOpen(true); setMessagesOpen(false); setDirectContact(null); setNotesOpen(false); }} title="See who is in the meeting"><Users size={18}/><span>People</span><i>{participants.length}</i></button>
+          {RECORDING_UI_ENABLED && role === "host" && <button className={`room-control-button no-left-border recording-control ${recordingState?.status === "recording" ? "recording-control-active" : ""}`} onClick={() => recordingState?.status === "recording" ? void stopRecording() : recordingState?.status === "uploading" || recordingState?.status === "consent_pending" ? undefined : recordingState?.status === "failed" && recordingState.canRetry ? void retryRecordingUpload() : void startRecording()} disabled={recordingBusy || recordingState?.status === "uploading" || recordingState?.status === "consent_pending"} title={recordingState?.status === "recording" ? "Stop audio recording" : recordingState?.status === "failed" && recordingState.canRetry ? "Retry audio upload" : "Start audio-only recording"}>{recordingBusy ? <LoaderCircle size={18} className="spin"/> : <span className="meeting-recording-dot"/>}<span>{recordingState?.status === "recording" ? "Stop" : recordingState?.status === "uploading" ? "Saving" : recordingState?.status === "consent_pending" ? "Consent" : recordingState?.status === "failed" && recordingState.canRetry ? "Retry upload" : "Record"}</span></button>}
+          <button className={`room-control-button no-left-border notes-control ${notesOpen ? "control-selected" : ""}`} onClick={() => { setNotesOpen(true); setMessagesOpen(false); setPeopleOpen(false); setDirectContact(null); }} title="Open collaborative meeting notes"><FileText size={18}/><span>Notes</span></button>
+          <div className="reaction-control-wrap"><button data-popover="reactions" className={`room-control-button no-left-border ${reactionsOpen ? "control-selected" : ""}`} onClick={() => setReactionsOpen((open) => !open)} title="Send an emoji or sticker reaction"><Smile size={18}/><span>React</span></button>{reactionsOpen && <div data-popover="reactions" className="reaction-picker" role="dialog" aria-label="Choose a reaction">{REACTION_SET.map((emoji) => <button key={emoji} onClick={() => void react(emoji)} aria-label={`Send ${emoji}`}>{emoji}</button>)}</div>}</div>
+        <div className="room-control-side"><button className="room-icon-button room-theme-toggle" onClick={toggleTheme} aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`} title={`Switch to ${theme === "light" ? "dark" : "light"} mode`}>{theme === "light" ? <Moon size={17}/> : <Sun size={17}/>}</button><button className="room-icon-button fullscreen-control no-left-border" onClick={() => void toggleFullscreen()} aria-label={fullScreen ? "Exit fullscreen" : "Enter fullscreen"} title={fullScreen ? "Exit fullscreen" : "Fullscreen"}>{fullScreen ? <Minimize2 size={18}/> : <Maximize2 size={18}/>}</button>{role === "host" && <button className="room-icon-button room-end-button" onClick={onEndForEveryone} disabled={ending} title="End for everyone" aria-label="End for everyone"><X size={18}/></button>}<button className="room-leave-button" onClick={onLeave}><DoorOpen size={17}/><span>Leave</span></button></div></div>
       </div>
     </div>
     {(fullscreenPrompt || moderatorRequest || privateNotice || presenceToasts.length > 0 || messageToast) && <div className="room-bottom-notifications" aria-live="polite">

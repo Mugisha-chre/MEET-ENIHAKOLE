@@ -3244,3 +3244,38 @@ html[data-theme="light"] .room-control-dock .room-control-button.control-selecte
 /* Messages badge sits in front of the People button (and its own badge stays on top). */
 .room-control-dock .room-control-row-b .message-control { z-index: 40; }
 .room-control-dock .room-control-row-b .message-control > i { z-index: 41; }
+
+/* ===== Update round: PiP, raised-hand banner, joined control borders, Prayers centre button ===== */
+/* 1) Picture-in-Picture source: a tiny, invisible, playing video that the browser floats when the page is left. */
+.room-pip-source { position: fixed; left: 0; bottom: 0; z-index: -1; width: 64px; height: 36px; object-fit: cover; opacity: .01; pointer-events: none; }
+.room-pip-source.room-pip-source-live { width: 480px; height: 270px; }
+.room-top-stack .room-pip-button { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; margin-left: auto; padding: 6px 12px; border-radius: 999px; border: 1px solid rgba(255,255,255,.14); color: #f4e8ea; background: rgba(20,12,16,.72); font-size: 11px; font-weight: 750; cursor: pointer; backdrop-filter: blur(8px); pointer-events: auto; -webkit-tap-highlight-color: transparent; }
+.room-top-stack .room-pip-button.room-pip-button-active { color: #3a1e2b; background: #e8ca91; border-color: rgba(255,255,255,.45); }
+:root[data-theme="light"] .room-top-stack .room-pip-button { color: #3b2530; background: rgba(255,255,255,.88); border-color: rgba(60,30,40,.16); }
+:root[data-theme="light"] .room-top-stack .room-pip-button.room-pip-button-active { color: #4a2b37; background: #f5e4c5; border-color: #e6cfa4; }
+@media (max-width: 720px) { .room-top-stack .room-pip-button { padding: 5px 10px; font-size: 10px; } }
+
+/* 2) Light mode: the raised-hand banner at the top carries no box shadow. */
+:root[data-theme="light"] .raised-hand-chip, :root[data-theme="light"] .conference-fullscreen-target[data-theme="light"] .raised-hand-chip { box-shadow: none; }
+
+/* 3) Share / Raise hand / Messages / People / Record / Notes / React / Fullscreen keep no left border: the neighbour's right border is the single divider, so no doubled thick lines. */
+.room-control-dock .no-left-border, .room-control-dock .reaction-control-wrap > .no-left-border { border-left: 0 !important; margin-left: 0 !important; }
+
+/* 4) Prayers button in the centre of the bottom nav for everyone who cannot create: same round button as the + Create button. */
+@media (max-width: 720px) {
+  .mobile-bottom-nav a.mbn-fab { display: grid; place-items: center; place-content: center; align-self: start; justify-self: center; gap: 0; width: 56px; height: 56px; min-height: 56px; margin-top: -22px; padding: 0; border-radius: 50%; color: #fff; letter-spacing: 0; text-decoration: none; background: linear-gradient(145deg, var(--burgundy-bright, #a92b4e), #7a1a37); box-shadow: 0 8px 18px rgba(143,33,65,.5); }
+  :root[data-theme="light"] .mobile-bottom-nav a.mbn-fab { color: #fff; }
+  .mobile-bottom-nav a.mbn-fab svg, .mobile-bottom-nav a.mbn-fab:active svg { opacity: 1; transform: none; }
+  .mobile-bottom-nav a.mbn-fab:active { transform: scale(.88); box-shadow: 0 4px 10px rgba(143,33,65,.45); }
+  .mobile-bottom-nav a.mbn-fab .mbn-fab-label { position: absolute; left: 50%; top: calc(100% + 12px); transform: translateX(-50%); color: #a28d96; font-size: 9.5px; font-weight: 750; letter-spacing: .04em; line-height: 1; white-space: nowrap; transition: color .3s ease; }
+  :root[data-theme="light"] .mobile-bottom-nav a.mbn-fab .mbn-fab-label { color: #76636a; }
+  .mobile-bottom-nav a.mbn-fab.mbn-fab-active .mbn-fab-label { color: #fff; }
+  :root[data-theme="light"] .mobile-bottom-nav a.mbn-fab.mbn-fab-active .mbn-fab-label { color: #8f2141; }
+}
+@media (min-width: 721px) { .mobile-bottom-nav a.mbn-fab { display: none; } }
+/* Phones: the wrapped grid rows borrow their outer-left line from the row itself, so a button starting a row never looks open and no neighbour pair ever shows a doubled line. */
+@media (max-width: 720px) {
+  .room-control-dock .room-control-row-b { border-left: 1px solid rgba(234,210,217,.15); }
+  :root[data-theme="light"] .room-control-dock .room-control-row-b { border-left-color: #e6d8dc; }
+  .room-control-dock .room-control-row-b .room-control-button, .room-control-dock .room-control-row-b .room-icon-button, .room-control-dock .room-control-row-b .room-leave-button, .room-control-dock .room-control-row-b .room-end-button { border-left: 0 !important; margin-left: 0 !important; }
+}
