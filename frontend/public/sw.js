@@ -1,6 +1,6 @@
 /* MEET ENIHAKOLE service worker: offline fallback + static asset caching.
    API calls, media and live-meeting traffic are never cached. */
-const VERSION = "v1";
+const VERSION = "v2";
 const STATIC_CACHE = `meet-enihakole-static-${VERSION}`;
 const PRECACHE = ["/offline.html", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png", "/favicon.png"];
 
