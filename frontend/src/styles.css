@@ -3396,3 +3396,114 @@ html[data-theme="light"] .room-control-dock .room-control-button.control-selecte
   .help-modal { width: 100%; max-height: 92dvh; border-radius: 20px 20px 0 0; }
   .help-steps { padding-left: 16px; }
 }
+
+/* ===== Round 21: sidebar tap states, dark active link, prayer skeletons, help animation, recordings icon, room mockup, round call controls ===== */
+
+/* A) Sidebar: no stuck border / hover on the previously tapped link, and the dark active link matches the light one. */
+.side-link:focus:not(:focus-visible) { outline: none; }
+.side-link:not(.side-link-active):focus, .side-link:not(.side-link-active):active { border-color: transparent; box-shadow: none; }
+@media (hover: none) {
+  .side-link:not(.side-link-active):hover { background: transparent; color: #aa99a0; border-color: transparent; }
+  :root[data-theme="light"] .side-link:not(.side-link-active):hover { background: transparent; color: #755d65; }
+}
+.side-link.side-link-active, .side-link.side-link-active:hover, .side-link.side-link-active:focus { color: #fff; border-color: #6e1830; background: linear-gradient(95deg, #7a1a37, #8f2141); box-shadow: 0 6px 16px rgba(122, 26, 55, .22); }
+.side-link.side-link-active svg, .side-link.side-link-active:hover svg { color: #fff; }
+
+/* B) Prayer cards: skeleton stays visible until the thumbnail has decoded, then the picture fades in. */
+.meeting-card .meeting-cover { background: #2b1a23; }
+.meeting-cover-img { background: transparent; opacity: 0; transition: opacity .28s ease; }
+.meeting-cover-img.is-loaded { opacity: 1; }
+.meet-skel { animation-duration: .95s; background-image: linear-gradient(100deg, rgba(255,255,255,.05) 20%, rgba(255,255,255,.2) 50%, rgba(255,255,255,.05) 80%); background-size: 250% 100%; }
+:root[data-theme="light"] .meet-skel { background-image: linear-gradient(100deg, rgba(110,40,60,.05) 20%, rgba(110,40,60,.15) 50%, rgba(110,40,60,.05) 80%); background-size: 250% 100%; }
+.meeting-card-skeleton { pointer-events: none; }
+:root[data-theme="light"] .meeting-card .meeting-cover { background: #efe3e6; }
+
+/* C) Recordings: the headphones icon in the empty state is always white on its burgundy disc. */
+.management-empty .recordings-empty-icon, :root[data-theme="light"] .management-empty .recordings-empty-icon { color: #fff; }
+.management-empty .recordings-empty-icon svg, :root[data-theme="light"] .management-empty .recordings-empty-icon svg { color: #fff; stroke: #fff; }
+
+/* D) Help guides: smooth height animation instead of jumping open. */
+.help-steps-wrap { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows .34s cubic-bezier(.22,1,.36,1), opacity .26s ease; }
+.help-guide-open .help-steps-wrap { grid-template-rows: 1fr; opacity: 1; }
+.help-steps-inner { min-height: 0; overflow: hidden; }
+.help-guide { transition: border-color .25s ease, background-color .25s ease; }
+.help-guide-chevron { transition: transform .34s cubic-bezier(.22,1,.36,1); }
+@media (prefers-reduced-motion: reduce) { .help-steps-wrap, .help-guide-chevron { transition-duration: .01s; } }
+
+/* E) Desktop mockup: tiles and avatars mirror the real meeting room. */
+.art-window { width: min(100%, 340px); }
+.art-video-grid { gap: 7px; padding: 9px; }
+.art-person { position: relative; aspect-ratio: 1.38; border-radius: 11px; display: grid; place-items: center; overflow: hidden; border: 1px solid rgba(248,233,234,.13); background: #2b1c23 !important; font-family: inherit; font-size: inherit; isolation: isolate; }
+.art-avatar { display: grid; place-items: center; width: 46%; max-width: 62px; aspect-ratio: 1; border-radius: 50%; border: 2px solid rgba(255,255,255,.18); box-shadow: 0 6px 22px rgba(0,0,0,.35); background: linear-gradient(145deg, #71404f, #3b212c); color: #f9e9e3; font-weight: 800; }
+.art-person .art-avatar b { width: auto; height: auto; display: block; border: 0; border-radius: 0; background: none; color: inherit; font-size: clamp(13px, 2.6vw, 19px); letter-spacing: .02em; }
+.art-person-two .art-avatar { background: linear-gradient(145deg, #3f5a63, #243238); }
+.art-person-three .art-avatar { background: linear-gradient(145deg, #8a6d3c, #4a3a1d); }
+.art-person-four .art-avatar { background: linear-gradient(145deg, #7a3550, #45202e); }
+.art-person-name { position: absolute; z-index: 2; left: 6px; bottom: 6px; max-width: 72%; padding: 2px 8px; border-radius: 999px; background: rgba(11,6,9,.55); backdrop-filter: blur(4px); }
+.art-person-name b { display: block; overflow: hidden; color: #fff; font-size: 8px; font-weight: 700; letter-spacing: .04em; text-overflow: ellipsis; white-space: nowrap; }
+.art-person-host { position: absolute; z-index: 2; top: 6px; left: 6px; padding: 1px 5px; border-radius: 4px; color: #3a1e2b; background: #e8ca91; font-size: 6.5px; font-style: normal; font-weight: 800; letter-spacing: .12em; }
+.art-person-mic { position: absolute; z-index: 2; right: 6px; bottom: 6px; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; color: #fff; background: rgba(166,46,76,.92); }
+.art-controls { gap: 9px; padding: 4px 0 12px; }
+.art-controls span { width: 30px; height: 30px; border-radius: 50%; color: #fff; background: #4a4a4c; }
+.art-controls .art-end { background: #ee1c47; }
+
+/* F) Meeting room call controls: round, icon-only, two rows at most; the rest lives behind the "..." sheet. */
+.room-control-dock.rd-dock { flex-direction: row; align-items: center; justify-content: center; gap: 0; padding: 10px 12px max(12px, env(safe-area-inset-bottom, 0px)); border-top: 0; background: transparent; overflow: visible; }
+.rd-pill { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border-radius: 34px; background: #232324; box-shadow: 0 14px 34px rgba(0,0,0,.4); max-width: 100%; box-sizing: border-box; }
+.rd-row { display: flex; align-items: center; justify-content: center; gap: 12px; }
+.rd-slot { position: relative; display: grid; place-items: center; }
+.rd-btn { position: relative; display: grid; place-items: center; flex: 0 0 auto; width: 56px; height: 56px; padding: 0; border: 0; border-radius: 50%; color: #fff; background: #4a4a4c; cursor: pointer; transition: background-color .2s ease, color .2s ease, transform .15s ease, box-shadow .2s ease; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+.rd-btn:active { transform: scale(.92); }
+.rd-btn:focus:not(:focus-visible) { outline: none; }
+.rd-btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.rd-btn:disabled { opacity: .5; cursor: not-allowed; }
+.rd-btn.is-on { color: #1c1c1e; background: #fff; }
+.rd-btn.is-danger { color: #fff; background: #ee1c47; }
+@media (hover: hover) { .rd-btn:not(.is-on):not(.is-danger):hover { background: #5b5b5e; } .rd-btn.is-on:hover { background: #f1f1f3; } .rd-btn.is-danger:hover { background: #ff2d58; } }
+.rd-badge { position: absolute; top: -3px; right: -3px; min-width: 19px; height: 19px; padding: 0 5px; box-sizing: border-box; display: grid; place-items: center; border-radius: 999px; color: #fff; background: #ee1c47; border: 2px solid #232324; font-size: 10px; font-style: normal; font-weight: 800; line-height: 1; }
+.rd-badge-count { background: #6b6b70; }
+.rd-chevron { position: absolute; z-index: 2; right: -3px; bottom: -3px; display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 2px solid #232324; border-radius: 50%; color: #fff; background: #6b6b70; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.rd-dock .room-device-menu { left: 50%; transform: translateX(-50%); }
+.rd-record-dot { width: 14px; height: 14px; }
+
+.rd-more-backdrop { position: absolute; inset: 0; z-index: 40; display: flex; align-items: flex-end; justify-content: center; padding: 12px; background: rgba(8,4,6,.55); animation: backdrop-in .2s ease; }
+.rd-more-sheet { width: min(100%, 380px); box-sizing: border-box; padding: 14px 16px 18px; border-radius: 28px; color: #fff; background: #232324; box-shadow: 0 20px 50px rgba(0,0,0,.5); animation: modal-in .26s cubic-bezier(.22,1,.36,1); margin-bottom: calc(var(--dock-space, 110px) - 6px); }
+.rd-more-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 36px; margin-bottom: 12px; }
+.rd-more-head b { flex: 1 1 auto; text-align: center; font-size: 14px; letter-spacing: .02em; }
+.rd-more-grip { width: 36px; height: 36px; }
+.rd-more-icon { display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 50%; color: #fff; background: #4a4a4c; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.rd-more-grid { display: grid; grid-template-columns: repeat(4, 56px); justify-content: space-between; gap: 14px 8px; }
+.rd-more-emojis { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+.rd-more-emojis button { display: grid; place-items: center; aspect-ratio: 1; padding: 0; border: 0; border-radius: 50%; background: #4a4a4c; font-size: 24px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.rd-more-emojis button:active { transform: scale(.92); }
+
+.rd-quality-layer { position: absolute; inset: 0; z-index: 41; pointer-events: none; }
+.rd-quality-scrim { position: absolute; inset: 0; pointer-events: auto; background: rgba(8,4,6,.35); }
+.rd-quality-layer .video-quality-menu { position: absolute; pointer-events: auto; left: 50%; right: auto; transform: translateX(-50%); width: min(380px, calc(100% - 24px)); bottom: calc(var(--dock-space, 110px) + 10px); max-height: min(72%, 570px); overflow-y: auto; }
+
+@media (max-width: 380px) { .rd-btn { width: 50px; height: 50px; } .rd-row { gap: 9px; } .rd-pill { padding: 10px 11px; } .rd-more-grid { grid-template-columns: repeat(4, 50px); } .rd-more-grid .rd-btn { width: 50px; height: 50px; } }
+
+/* Desktop: one tidy pill row (still never more than two rows). */
+@media (min-width: 721px) {
+  .rd-pill { flex-direction: row; gap: 12px; padding: 10px 16px; border-radius: 40px; }
+  .rd-more-backdrop { align-items: flex-end; }
+}
+
+/* Light room: soft pill with dark glyphs, selected buttons turn dark. */
+.conference-fullscreen-target[data-theme="light"] .rd-pill { background: #f3eaec; box-shadow: 0 12px 30px rgba(67,36,49,.16); }
+.conference-fullscreen-target[data-theme="light"] .rd-btn { color: #4c303c; background: #e4d6da; }
+.conference-fullscreen-target[data-theme="light"] .rd-btn.is-on { color: #fff; background: #3a2530; }
+.conference-fullscreen-target[data-theme="light"] .rd-btn.is-danger { color: #fff; background: #ee1c47; }
+@media (hover: hover) { .conference-fullscreen-target[data-theme="light"] .rd-btn:not(.is-on):not(.is-danger):hover { background: #d9c8ce; } }
+.conference-fullscreen-target[data-theme="light"] .rd-badge { border-color: #f3eaec; }
+.conference-fullscreen-target[data-theme="light"] .rd-badge-count, .conference-fullscreen-target[data-theme="light"] .rd-chevron { background: #8d7680; color: #fff; border-color: #f3eaec; }
+.conference-fullscreen-target[data-theme="light"] .rd-more-sheet { color: #3a2530; background: #f3eaec; }
+.conference-fullscreen-target[data-theme="light"] .rd-more-icon, .conference-fullscreen-target[data-theme="light"] .rd-more-emojis button { color: #4c303c; background: #e4d6da; }
+.conference-fullscreen-target[data-theme="light"] .rd-more-backdrop { background: rgba(60,30,42,.28); }
+.conference-fullscreen-target[data-theme="light"] .rd-more-grid .rd-btn { color: #4c303c; background: #e4d6da; }
+.conference-fullscreen-target[data-theme="light"] .rd-more-grid .rd-btn.is-on { color: #fff; background: #3a2530; }
+.conference-fullscreen-target[data-theme="light"] .rd-more-grid .rd-btn.is-danger { color: #fff; background: #ee1c47; }
+@media (prefers-reduced-motion: reduce) { .rd-btn, .rd-more-sheet, .rd-more-backdrop { animation: none; transition-duration: .01s; } }
+.art-person .art-person-name b { width: auto; height: auto; display: block; border: 0; border-radius: 0; background: none; color: #fff; place-items: normal; }
+.art-controls { justify-content: flex-start; padding-left: 16px; }
+.art-controls span svg { width: 16px; height: 16px; }

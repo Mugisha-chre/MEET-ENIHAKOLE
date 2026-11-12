@@ -7,7 +7,7 @@ import {
   ArrowLeft, ArrowRight, AudioLines, CalendarClock, CalendarDays, Check,
   CheckCircle2, CircleHelp, Clock3, Copy, DoorOpen, HeartHandshake, Home,
   Link2, LoaderCircle, LogIn, LogOut, Menu, Mic, Plus, Share2, ShieldCheck,
-  Sparkles, Users, Video, VideoIcon, VideoOff, X, Sun, Moon, MessageCircle,
+  Sparkles, Users, Video, VideoOff, X, Sun, Moon, MessageCircle,
   PictureInPicture2, Hand, Send, MonitorUp, MicOff, Maximize2, Minimize2, ChevronLeft, ChevronRight, Smile, ChevronDown, Download,
   MousePointer2, MoveUpRight, Eraser, Eye, EyeOff, PenLine, Undo2, Settings2,
   BookOpen, Smartphone, Headphones, LifeBuoy, Mail,
@@ -740,7 +740,7 @@ function HelpSupportModal({ onClose }: { onClose: () => void }) {
                     <span className="help-guide-text"><b>{guide.title}</b><small>{guide.summary}</small></span>
                     <ChevronDown size={17} className="help-guide-chevron"/>
                   </button>
-                  {open && <ol className="help-steps">{guide.steps.map((step, index) => <li key={index}><span>{index + 1}</span><p>{step}</p></li>)}</ol>}
+                  <div className="help-steps-wrap" aria-hidden={!open} inert={!open}><div className="help-steps-inner"><ol className="help-steps">{guide.steps.map((step, index) => <li key={index}><span>{index + 1}</span><p>{step}</p></li>)}</ol></div></div>
                 </section>
               );
             })}
@@ -811,7 +811,7 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
           <span className="brand-words"><strong>MEET</strong><b>ENIHAKOLE</b><small>GATHER IN FAITH</small></span>
         </Link>
         <div className="sidebar-label">WORKSPACE</div>
-        <nav className="side-navigation" aria-label="Main navigation">
+        <nav className="side-navigation" aria-label="Main navigation" onClick={(event) => { const link = (event.target as HTMLElement).closest(".side-link") as HTMLElement | null; if (link) link.blur(); }}>
           <Link to="/" className={`side-link ${active === "home" ? "side-link-active" : ""}`}><Home size={18} /><span>Home</span></Link>
           <Link to="/meetings" className={`side-link ${active === "meetings" ? "side-link-active" : ""}`}><HeartHandshake size={18} /><span>Prayers</span></Link>
           {RECORDING_UI_ENABLED && <Link to="/recordings" className={`side-link ${active === "recordings" ? "side-link-active" : ""}`}><AudioLines size={18} /><span>Recorded prayers</span></Link>}
@@ -892,7 +892,7 @@ function Dashboard() {
           </div>
         </div>
         <div className="hero-art" aria-hidden="true">
-          <div className="art-window"><div className="art-window-top"><span/><span/><span/><i>ENIHAKOLE · PRAYER ROOM</i></div><div className="art-video-grid"><span className="art-person art-person-one"><b>✦</b></span><span className="art-person art-person-two"><b>♪</b></span><span className="art-person art-person-three"><b>◌</b></span><span className="art-person art-person-four"><b>+</b></span></div><div className="art-controls"><span><Mic size={12}/></span><span><Video size={12}/></span><span className="art-end"><X size={12}/></span></div></div>
+          <div className="art-window"><div className="art-window-top"><span/><span/><span/><i>ENIHAKOLE · PRAYER ROOM</i></div><div className="art-video-grid">{[["GM", "Grace M.", "one", true], ["DK", "David K.", "two", false], ["AU", "Aline U.", "three", false], ["EN", "Eric N.", "four", false]].map(([initials, name, tone, host]) => <span key={String(tone)} className={`art-person art-person-${tone}`}>{host && <em className="art-person-host">HOST</em>}<span className="art-avatar"><b>{initials}</b></span><span className="art-person-name"><b>{name}</b></span>{tone === "three" && <span className="art-person-mic"><MicOff size={9}/></span>}</span>)}</div><div className="art-controls"><span><RdMicIcon/></span><span><RdCameraIcon/></span><span className="art-end"><RdHangupIcon/></span></div></div>
           <div className="art-note"><span className="art-note-icon"><HeartHandshake size={17}/></span><span><b>All together</b><small>One room. Many voices.</small></span><CheckCircle2 size={17} className="art-note-check"/></div>
         </div>
       </section>
@@ -924,7 +924,7 @@ function MeetingCardSkeleton() {
   );
 }
 
-function MeetingCard({ meeting }: { meeting: Meeting }) {
+function MeetingCard({ meeting, priority = false }: { meeting: Meeting; priority?: boolean }) {
   const [copied, setCopied] = useState(false);
   const [coverLoaded, setCoverLoaded] = useState(false);
   const shareUrl = `${window.location.origin}/share/${encodeURIComponent(meeting.slug)}`;
@@ -940,7 +940,7 @@ function MeetingCard({ meeting }: { meeting: Meeting }) {
   return (
     <article className="meeting-card">
       <Link to={`/meeting/${meeting.slug}`} className="meeting-cover">
-        {!coverLoaded && <span className="meet-skel meet-skel-cover meet-skel-cover-fill" aria-hidden="true"/>}<img className="meeting-cover-img" src={meetingImage(meeting)} alt="" loading="lazy" decoding="async" draggable={false} onLoad={() => setCoverLoaded(true)} onError={() => setCoverLoaded(true)} ref={(node) => { if (node?.complete && !coverLoaded) setCoverLoaded(true); }}/>
+        {!coverLoaded && <span className="meet-skel meet-skel-cover meet-skel-cover-fill" aria-hidden="true"/>}<img className={`meeting-cover-img ${coverLoaded ? "is-loaded" : ""}`} src={meetingImage(meeting)} alt="" loading={priority ? "eager" : "lazy"} decoding="async" fetchPriority={priority ? "high" : "auto"} draggable={false} onLoad={() => setCoverLoaded(true)} onError={() => setCoverLoaded(true)} ref={(node) => { if (node?.complete && !coverLoaded) setCoverLoaded(true); }}/>
         <span className={`meeting-status ${meeting.status === "live" ? "meeting-status-live" : ""}`}><span/>{getMeetingStateLabel(meeting)}</span>
         <span className="cover-open"><ArrowRight size={16}/></span>
       </Link>
@@ -975,7 +975,7 @@ function MeetingsPage() {
     setFilter(value);
     setFiltering(true);
     window.clearTimeout(filterTimer.current);
-    filterTimer.current = window.setTimeout(() => setFiltering(false), 650);
+    filterTimer.current = window.setTimeout(() => setFiltering(false), 260);
   }
   useEffect(() => () => window.clearTimeout(filterTimer.current), []);
   useEffect(() => { void refreshMeetings(); }, [refreshMeetings]);
@@ -984,7 +984,7 @@ function MeetingsPage() {
     <div className="meetings-page page-enter">
       <div className="page-title-row"><div><h1>Prayers</h1></div>{(user?.canCreateMeetings || user?.isAdmin) && <button className="button button-primary" onClick={() => openSchedule(false)}><Plus size={17}/> Create a gathering</button>}</div>
       <div className="filter-bar"><div className="segmented-filter">{(["upcoming", "past", "all"] as const).map((value) => <button key={value} className={filter === value ? "filter-active" : ""} onClick={() => changeFilter(value)}>{value === "upcoming" ? "Upcoming" : value === "past" ? "Past prayers" : "All prayers"}</button>)}</div><span className="meeting-count">{showSkeleton ? "Loading…" : `${list.length} ${list.length === 1 ? "prayer" : "prayers"}`}</span></div>
-      {showSkeleton ? <div className="meeting-card-grid" aria-busy="true" aria-label="Loading prayers">{Array.from({ length: 6 }, (_, index) => <MeetingCardSkeleton key={index}/>)}</div> : list.length ? <div className="meeting-card-grid">{list.map((meeting) => <MeetingCard key={meeting.slug} meeting={meeting}/>)}</div> : <div className="empty-state empty-large"><div className="empty-icon"><CalendarDays size={23}/></div><div><h3>{filter === "past" ? "No past prayers yet" : "A fresh page for your next gathering"}</h3><p>Online Prayers will appear here when they are scheduled.</p></div><Link className="button button-primary" to="/recordings"><AudioLines size={16}/> Recorded Prayers</Link></div>}
+      {showSkeleton ? <div className="meeting-card-grid" aria-busy="true" aria-label="Loading prayers">{Array.from({ length: 6 }, (_, index) => <MeetingCardSkeleton key={index}/>)}</div> : list.length ? <div className="meeting-card-grid">{list.map((meeting, index) => <MeetingCard key={meeting.slug} meeting={meeting} priority={index < 6}/>)}</div> : <div className="empty-state empty-large"><div className="empty-icon"><CalendarDays size={23}/></div><div><h3>{filter === "past" ? "No past prayers yet" : "A fresh page for your next gathering"}</h3><p>Online Prayers will appear here when they are scheduled.</p></div><Link className="button button-primary" to="/recordings"><AudioLines size={16}/> Recorded Prayers</Link></div>}
     </div>
   );
 }
@@ -1762,6 +1762,23 @@ function participantPicture(metadata?: string, identity?: string): string {
     if (typeof picture === "string" && picture.startsWith("https://")) return picture;
   } catch { /* Fall back to what we knew before connecting. */ }
   return (identity && knownPeople.get(identity)?.picture) || "";
+}
+
+/** Call-control icons and round button, drawn to match the reference call bar (solid white glyphs on round buttons). */
+function RdDotsIcon() { return <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2.1"/><circle cx="12" cy="12" r="2.1"/><circle cx="19" cy="12" r="2.1"/></svg>; }
+function RdCameraIcon({ off = false }: { off?: boolean }) {
+  return <svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" aria-hidden="true"><defs><mask id="rd-cam-cut"><rect width="24" height="24" fill="#fff"/>{off && <path d="M3.5 3.5 20.5 20.5" stroke="#000" strokeWidth="4.6" strokeLinecap="round"/>}</mask></defs><g mask="url(#rd-cam-cut)"><rect x="2" y="5.5" width="13.5" height="13" rx="3"/><path d="M16.8 10.4 21 7.7c.7-.45 1.5.05 1.5.9v6.8c0 .85-.8 1.35-1.5.9l-4.2-2.7z"/></g>{off && <path d="M3.5 3.5 20.5 20.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>}</svg>;
+}
+function RdMicIcon({ off = false }: { off?: boolean }) {
+  return <svg viewBox="0 0 24 24" width="26" height="26" fill="none" aria-hidden="true"><defs><mask id="rd-mic-cut"><rect width="24" height="24" fill="#fff"/>{off && <path d="M3.5 3.5 20.5 20.5" stroke="#000" strokeWidth="4.6" strokeLinecap="round"/>}</mask></defs><g mask="url(#rd-mic-cut)" stroke="currentColor" strokeLinecap="round" strokeWidth="2"><rect x="8.5" y="2.5" width="7" height="12" rx="3.5" fill="currentColor" stroke="none"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3.2M8.6 21.2h6.8"/></g>{off && <path d="M3.5 3.5 20.5 20.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>}</svg>;
+}
+function RdSpeakerIcon({ off = false }: { off?: boolean }) {
+  return <svg viewBox="0 0 24 24" width="26" height="26" fill="none" aria-hidden="true"><defs><mask id="rd-spk-cut"><rect width="24" height="24" fill="#fff"/>{off && <path d="M3.5 3.5 20.5 20.5" stroke="#000" strokeWidth="4.6" strokeLinecap="round"/>}</mask></defs><g mask="url(#rd-spk-cut)"><path d="M3 9.6h3.6L11.6 5c.6-.5 1.4-.1 1.4.7v12.6c0 .8-.8 1.2-1.4.7l-5-4.6H3c-.6 0-1-.4-1-1v-3.8c0-.6.4-1 1-1z" fill="currentColor"/>{!off && <path d="M16 8.6a5 5 0 0 1 0 6.8M18.6 5.8a9 9 0 0 1 0 12.4" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>}</g>{off && <path d="M3.5 3.5 20.5 20.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>}</svg>;
+}
+function RdShareIcon() { return <svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" aria-hidden="true"><path fillRule="evenodd" d="M5 4h14a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3h-4.4l.9 2h1.1a1 1 0 1 1 0 2H8.4a1 1 0 1 1 0-2h1.1l.9-2H5a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3zm0 2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1z"/><circle cx="12" cy="9.2" r="2"/><path d="M8 15c0-2 1.8-3 4-3s4 1 4 3z"/></svg>; }
+function RdHangupIcon() { return <svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor" aria-hidden="true"><path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08a.96.96 0 0 1-.29-.7c0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28a11.27 11.27 0 0 0-2.67-1.85.996.996 0 0 1-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/></svg>; }
+function RdButton({ icon, label, onClick, on = false, danger = false, disabled = false, badge = null, ...aria }: { icon: ReactNode; label: string; onClick?: () => void; on?: boolean; danger?: boolean; disabled?: boolean; badge?: ReactNode; "aria-haspopup"?: "dialog"; "aria-expanded"?: boolean }) {
+  return <button type="button" className={`rd-btn ${on ? "is-on" : ""} ${danger ? "is-danger" : ""}`} onClick={onClick} disabled={disabled} title={label} aria-label={label} {...aria}>{icon}{badge}</button>;
 }
 
 function ParticipantAvatar({ trackRef, participant }: { trackRef: Parameters<typeof useIsMuted>[0]; participant: Participant }) {
@@ -2761,6 +2778,9 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
   const mediaAttemptRef = useRef(0);
   const [messageText, setMessageText] = useState("");
   const [reactionsOpen, setReactionsOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [moreView, setMoreView] = useState<"actions" | "reactions">("actions");
+  const [speakerOff, setSpeakerOff] = useState(false);
   const [raisedHands, setRaisedHands] = useState<Record<string, boolean>>({});
   const [handRaised, setHandRaised] = useState(false);
   const [reactions, setReactions] = useState<FloatingReaction[]>([]);
@@ -3995,7 +4015,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
 
   return <div className={`conference-fullscreen-target ${fullScreen ? "is-fullscreen" : ""} ${pseudoFull ? "is-pseudo-fullscreen" : ""} ${fullScreen && controlsVisible ? "controls-shown" : ""}`} data-theme={theme} ref={fullScreenRef} style={{ "--dock-space": fullScreen ? (controlsVisible ? `${dockHeight}px` : "0px") : `${dockHeight || 110}px` } as CSSProperties}>
     <div className="conference-media-area">
-      <RoomAudioRenderer />
+      <RoomAudioRenderer muted={speakerOff} />
       <div className="room-top-stack">
         <div className="room-fullscreen-meeting-title" title={meeting.title}>{meeting.title}</div>
         <div className="active-count-pill" role="status" aria-live="polite" title="People currently in this meeting"><Users size={14}/><b>{participants.length}</b><span>{participants.length === 1 ? "person" : "people"} in the meeting</span></div>
@@ -4022,19 +4042,46 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
         {reactions.length > 0 && <div className="reaction-float-stack" aria-live="polite">{reactions.map((reaction) => <div className="reaction-float" key={reaction.id} style={{ "--x": `${reaction.x}%`, "--rise": `${reaction.rise}%`, "--rs": reaction.scale } as CSSProperties}><span className={`reaction-emoji reaction-emoji-${reactionKind(reaction.emoji)}`}>{reaction.emoji}</span><b>{reaction.name}</b></div>)}</div>}
         {pages > 1 && <div className="participant-pagination"><span>Screen {currentPage + 1} of {pages} · {visualParticipants.length} participants</span><div><button className="room-icon-button" onClick={() => setPage(Math.max(0, currentPage - 1))} disabled={currentPage === 0} aria-label="Previous participant screen"><ChevronLeft size={18}/></button><button className="room-icon-button" onClick={() => setPage(Math.min(pages - 1, currentPage + 1))} disabled={currentPage >= pages - 1} aria-label="Next participant screen"><ChevronRight size={18}/></button></div></div>}
       </div>
-      <div className={`room-control-dock ${!fullScreen || controlsVisible ? "dock-open" : "dock-hidden"}`} ref={dockRef} aria-hidden={fullScreen && !controlsVisible}>
-        <div className="room-control-group room-control-row-a">
-          <div className="room-split-control"><button className={`room-control-button room-split-main ${!isMicrophoneEnabled ? "control-disabled" : ""}`} onClick={() => void toggleMedia("microphone")} title={isMicrophoneEnabled ? "Turn microphone off" : "Turn microphone on"}>{isMicrophoneEnabled ? <Mic size={18}/> : <MicOff size={18}/>}<span>{isMicrophoneEnabled ? "Mic" : "Unmute"}</span></button><button data-popover="audioinput" className="room-control-dropdown" onClick={() => setDeviceMenu(deviceMenu === "audioinput" ? null : "audioinput")} aria-label="Choose microphone" title="Choose microphone"><ChevronDown size={14}/></button>{deviceMenu === "audioinput" && <div data-popover="audioinput" className="room-device-menu">{inputDevices.filter((device) => device.kind === "audioinput").map((device) => <button key={device.deviceId} onClick={() => void chooseDevice("audioinput", device.deviceId)}>{device.label || `Microphone ${device.deviceId.slice(0, 5)}`}</button>)}{inputDevices.filter((device) => device.kind === "audioinput").length === 0 && <span>No microphones found</span>}</div>}</div>
-          <div className="room-split-control"><button className={`room-control-button room-split-main ${!isCameraEnabled ? "control-disabled" : ""}`} onClick={() => void toggleMedia("camera")} title={isCameraEnabled ? "Turn camera off" : "Turn camera on"}>{isCameraEnabled ? <VideoIcon size={18}/> : <VideoOff size={18}/>}<span>{isCameraEnabled ? "Camera" : "Camera off"}</span></button><button data-popover="videoinput" className="room-control-dropdown" onClick={() => setDeviceMenu(deviceMenu === "videoinput" ? null : "videoinput")} aria-label="Choose camera" title="Choose camera"><ChevronDown size={14}/></button>{deviceMenu === "videoinput" && <div data-popover="videoinput" className="room-device-menu">{inputDevices.filter((device) => device.kind === "videoinput").map((device) => <button key={device.deviceId} onClick={() => void chooseDevice("videoinput", device.deviceId)}>{device.label || `Camera ${device.deviceId.slice(0, 5)}`}</button>)}{inputDevices.filter((device) => device.kind === "videoinput").length === 0 && <span>No cameras found</span>}</div>}</div>
-          <button className={`room-control-button no-left-border ${isScreenShareEnabled ? "control-selected" : ""}`} onClick={() => void toggleScreenShare()} title={isScreenShareEnabled ? "Stop sharing screen" : "Share screen"}><MonitorUp size={18}/><span>{isScreenShareEnabled ? "Stop share" : "Share"}</span></button>
-          <button className={`room-control-button no-left-border ${handRaised ? "control-selected" : ""}`} onClick={() => void toggleHand()} title={handRaised ? "Lower your hand" : "Raise your hand"}><Hand size={18}/><span>{handRaised ? "Lower hand" : "Raise hand"}</span></button>
+      <div className={`room-control-dock rd-dock ${!fullScreen || controlsVisible ? "dock-open" : "dock-hidden"}`} ref={dockRef} aria-hidden={fullScreen && !controlsVisible}>
+        <div className="rd-pill" role="toolbar" aria-label="Call controls">
+          <div className="rd-row">
+            <div className="rd-slot">
+              <RdButton label={isMicrophoneEnabled ? "Turn microphone off" : "Turn microphone on"} on={isMicrophoneEnabled} onClick={() => void toggleMedia("microphone")} icon={<RdMicIcon off={!isMicrophoneEnabled}/>}/>
+              <button type="button" data-popover="audioinput" className="rd-chevron" onClick={() => setDeviceMenu(deviceMenu === "audioinput" ? null : "audioinput")} aria-label="Choose microphone" title="Choose microphone"><ChevronDown size={11} strokeWidth={3}/></button>
+              {deviceMenu === "audioinput" && <div data-popover="audioinput" className="room-device-menu">{inputDevices.filter((device) => device.kind === "audioinput").map((device) => <button key={device.deviceId} onClick={() => void chooseDevice("audioinput", device.deviceId)}>{device.label || `Microphone ${device.deviceId.slice(0, 5)}`}</button>)}{inputDevices.filter((device) => device.kind === "audioinput").length === 0 && <span>No microphones found</span>}</div>}
+            </div>
+            <div className="rd-slot">
+              <RdButton label={isCameraEnabled ? "Turn camera off" : "Turn camera on"} on={isCameraEnabled} onClick={() => void toggleMedia("camera")} icon={<RdCameraIcon off={!isCameraEnabled}/>}/>
+              <button type="button" data-popover="videoinput" className="rd-chevron" onClick={() => setDeviceMenu(deviceMenu === "videoinput" ? null : "videoinput")} aria-label="Choose camera" title="Choose camera"><ChevronDown size={11} strokeWidth={3}/></button>
+              {deviceMenu === "videoinput" && <div data-popover="videoinput" className="room-device-menu">{inputDevices.filter((device) => device.kind === "videoinput").map((device) => <button key={device.deviceId} onClick={() => void chooseDevice("videoinput", device.deviceId)}>{device.label || `Camera ${device.deviceId.slice(0, 5)}`}</button>)}{inputDevices.filter((device) => device.kind === "videoinput").length === 0 && <span>No cameras found</span>}</div>}
+            </div>
+            <div className="rd-slot"><RdButton label={speakerOff ? "Turn speaker on" : "Turn speaker off"} on={!speakerOff} onClick={() => setSpeakerOff((value) => !value)} icon={<RdSpeakerIcon off={speakerOff}/>}/></div>
+            <div className="rd-slot"><RdButton label={isScreenShareEnabled ? "Stop sharing screen" : "Share screen"} on={isScreenShareEnabled} onClick={() => void toggleScreenShare()} icon={<RdShareIcon/>}/></div>
+          </div>
+          <div className="rd-row">
+            <div className="rd-slot"><RdButton label="Open room messages" on={messagesOpen} onClick={() => { setMessagesOpen(true); setPeopleOpen(false); setDirectContact(null); setNotesOpen(false); }} icon={<MessageCircle size={24} strokeWidth={2.2}/>} badge={chatMessages.length > 0 ? <i className="rd-badge">{chatMessages.length > 99 ? "99+" : chatMessages.length}</i> : null}/></div>
+            <div className="rd-slot"><RdButton label="See who is in the meeting" on={peopleOpen} onClick={() => { setPeopleViewTab("people"); setPeopleOpen(true); setMessagesOpen(false); setDirectContact(null); setNotesOpen(false); }} icon={<Users size={24} strokeWidth={2.2}/>} badge={<i className="rd-badge rd-badge-count">{participants.length}</i>}/></div>
+            <div className="rd-slot"><RdButton label="More actions" on={moreOpen} onClick={() => { setMoreOpen((open) => !open); setMoreView("actions"); setDeviceMenu(null); }} icon={<RdDotsIcon/>} aria-haspopup="dialog" aria-expanded={moreOpen}/></div>
+            <div className="rd-slot"><RdButton label="Leave the meeting" danger onClick={onLeave} icon={<RdHangupIcon/>}/></div>
+          </div>
         </div>
-        <div className="room-control-group room-control-row-b">
-          <div className="video-quality-control-wrap">
-            <button type="button" className={`room-control-button video-quality-trigger ${videoQualityMenuOpen ? "control-selected" : ""}`} onClick={() => { setVideoQualityMenuOpen((open) => !open); setDeviceMenu(null); }} aria-expanded={videoQualityMenuOpen} aria-haspopup="dialog" title="Choose camera video quality">
-              <Settings2 size={18}/><span>Quality</span>
-            </button>
-            {videoQualityMenuOpen && <section className="video-quality-menu" role="dialog" aria-label="Video quality settings">
+      </div>
+      {moreOpen && <div className="rd-more-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setMoreOpen(false); }}>
+        <section className="rd-more-sheet" role="dialog" aria-modal="true" aria-label="More call actions">
+          <header className="rd-more-head">{moreView === "reactions" ? <button type="button" className="rd-more-icon" onClick={() => setMoreView("actions")} aria-label="Back to actions"><ArrowLeft size={18}/></button> : <span className="rd-more-grip" aria-hidden="true"/>}<b>{moreView === "reactions" ? "Send a reaction" : "More"}</b><button type="button" className="rd-more-icon" onClick={() => setMoreOpen(false)} aria-label="Close"><X size={18}/></button></header>
+          {moreView === "reactions" ? <div className="rd-more-emojis" role="group" aria-label="Choose a reaction">{REACTION_SET.map((emoji) => <button type="button" key={emoji} onClick={() => { void react(emoji); setMoreOpen(false); }} aria-label={`Send ${emoji}`}>{emoji}</button>)}</div> : <div className="rd-more-grid">
+            <RdButton label={handRaised ? "Lower your hand" : "Raise your hand"} on={handRaised} onClick={() => { void toggleHand(); setMoreOpen(false); }} icon={<Hand size={24} strokeWidth={2.2}/>}/>
+            <RdButton label="Send a reaction" onClick={() => setMoreView("reactions")} icon={<Smile size={24} strokeWidth={2.2}/>}/>
+            <RdButton label="Open collaborative meeting notes" onClick={() => { setMoreOpen(false); setNotesOpen(true); setMessagesOpen(false); setPeopleOpen(false); setDirectContact(null); }} icon={<FileText size={24} strokeWidth={2.2}/>}/>
+            <RdButton label="Choose camera video quality" on={videoQualityMenuOpen} onClick={() => { setMoreOpen(false); setVideoQualityMenuOpen(true); setDeviceMenu(null); }} icon={<Settings2 size={24} strokeWidth={2.2}/>}/>
+            {RECORDING_UI_ENABLED && role === "host" && <RdButton label={recordingState?.status === "recording" ? "Stop audio recording" : recordingState?.status === "failed" && recordingState.canRetry ? "Retry audio upload" : "Start audio-only recording"} on={recordingState?.status === "recording"} disabled={recordingBusy || recordingState?.status === "uploading" || recordingState?.status === "consent_pending"} onClick={() => recordingState?.status === "recording" ? void stopRecording() : recordingState?.status === "uploading" || recordingState?.status === "consent_pending" ? undefined : recordingState?.status === "failed" && recordingState.canRetry ? void retryRecordingUpload() : void startRecording()} icon={recordingBusy ? <LoaderCircle size={24} className="spin"/> : <span className="meeting-recording-dot rd-record-dot"/>}/>}
+            <RdButton label={theme === "light" ? "Switch to dark mode" : "Switch to light mode"} onClick={() => { toggleTheme(); setMoreOpen(false); }} icon={theme === "light" ? <Moon size={24} strokeWidth={2.2}/> : <Sun size={24} strokeWidth={2.2}/>}/>
+            <RdButton label={fullScreen ? "Exit fullscreen" : "Enter fullscreen"} onClick={() => { void toggleFullscreen(); setMoreOpen(false); }} icon={fullScreen ? <Minimize2 size={24} strokeWidth={2.2}/> : <Maximize2 size={24} strokeWidth={2.2}/>}/>
+            {role === "host" && <RdButton label="End for everyone" danger disabled={ending} onClick={() => { setMoreOpen(false); onEndForEveryone(); }} icon={<X size={24} strokeWidth={2.4}/>}/>}
+          </div>}
+        </section>
+      </div>}
+      {videoQualityMenuOpen && <div className="rd-quality-layer"><div className="rd-quality-scrim" onClick={() => setVideoQualityMenuOpen(false)}/><section className="video-quality-menu" role="dialog" aria-label="Video quality settings">
               <header><div><b>Video quality</b><small>Choose how clearly your camera is sent and received</small></div><button type="button" onClick={() => setVideoQualityMenuOpen(false)} aria-label="Close video quality settings"><X size={16}/></button></header>
               <div className="video-quality-options" role="group" aria-label="Video quality preference">
                 {VIDEO_QUALITY_OPTIONS.map((option) => {
@@ -4053,15 +4100,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
                 <div><span>Incoming video{remoteStatsName ? ` · ${remoteStatsName}` : " · active speaker"}</span><b>{formatVideoResolution(remoteVideoStats)}</b><small>{remoteVideoStats?.fps ? `${remoteVideoStats.fps} fps` : "Frame rate pending"} · {formatVideoBitrate(remoteVideoStats?.bitrateBps ?? 0)}</small><small>{remoteVideoStats?.packetLossPercent != null ? `${remoteVideoStats.packetLossPercent.toFixed(1)}% packet loss` : "Receiver statistics pending"}</small></div>
                 <small>Values come from WebRTC sender/receiver reports. Resolution appears after encoded/decoded frames are available.</small>
               </div>}
-            </section>}
-          </div>
-          <button className={`room-control-button no-left-border message-control ${messagesOpen ? "control-selected" : ""}`} onClick={() => { setMessagesOpen(true); setPeopleOpen(false); setDirectContact(null); setNotesOpen(false); }} title="Open room messages"><MessageCircle size={18}/><span>Messages</span>{chatMessages.length > 0 && <i>{chatMessages.length}</i>}</button>
-          <button className={`room-control-button no-left-border people-control ${peopleOpen ? "control-selected" : ""}`} onClick={() => { setPeopleViewTab("people"); setPeopleOpen(true); setMessagesOpen(false); setDirectContact(null); setNotesOpen(false); }} title="See who is in the meeting"><Users size={18}/><span>People</span><i>{participants.length}</i></button>
-          {RECORDING_UI_ENABLED && role === "host" && <button className={`room-control-button no-left-border recording-control ${recordingState?.status === "recording" ? "recording-control-active" : ""}`} onClick={() => recordingState?.status === "recording" ? void stopRecording() : recordingState?.status === "uploading" || recordingState?.status === "consent_pending" ? undefined : recordingState?.status === "failed" && recordingState.canRetry ? void retryRecordingUpload() : void startRecording()} disabled={recordingBusy || recordingState?.status === "uploading" || recordingState?.status === "consent_pending"} title={recordingState?.status === "recording" ? "Stop audio recording" : recordingState?.status === "failed" && recordingState.canRetry ? "Retry audio upload" : "Start audio-only recording"}>{recordingBusy ? <LoaderCircle size={18} className="spin"/> : <span className="meeting-recording-dot"/>}<span>{recordingState?.status === "recording" ? "Stop" : recordingState?.status === "uploading" ? "Saving" : recordingState?.status === "consent_pending" ? "Consent" : recordingState?.status === "failed" && recordingState.canRetry ? "Retry upload" : "Record"}</span></button>}
-          <button className={`room-control-button no-left-border notes-control ${notesOpen ? "control-selected" : ""}`} onClick={() => { setNotesOpen(true); setMessagesOpen(false); setPeopleOpen(false); setDirectContact(null); }} title="Open collaborative meeting notes"><FileText size={18}/><span>Notes</span></button>
-          <div className="reaction-control-wrap"><button data-popover="reactions" className={`room-control-button no-left-border ${reactionsOpen ? "control-selected" : ""}`} onClick={() => setReactionsOpen((open) => !open)} title="Send an emoji or sticker reaction"><Smile size={18}/><span>React</span></button>{reactionsOpen && <div data-popover="reactions" className="reaction-picker" role="dialog" aria-label="Choose a reaction">{REACTION_SET.map((emoji) => <button key={emoji} onClick={() => void react(emoji)} aria-label={`Send ${emoji}`}>{emoji}</button>)}</div>}</div>
-        <div className="room-control-side"><button className="room-icon-button room-theme-toggle" onClick={toggleTheme} aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`} title={`Switch to ${theme === "light" ? "dark" : "light"} mode`}>{theme === "light" ? <Moon size={17}/> : <Sun size={17}/>}</button><button className="room-icon-button fullscreen-control no-left-border" onClick={() => void toggleFullscreen()} aria-label={fullScreen ? "Exit fullscreen" : "Enter fullscreen"} title={fullScreen ? "Exit fullscreen" : "Fullscreen"}>{fullScreen ? <Minimize2 size={18}/> : <Maximize2 size={18}/>}</button>{role === "host" && <button className="room-icon-button room-end-button" onClick={onEndForEveryone} disabled={ending} title="End for everyone" aria-label="End for everyone"><X size={18}/></button>}<button className="room-leave-button" onClick={onLeave}><DoorOpen size={17}/><span>Leave</span></button></div></div>
-      </div>
+            </section></div>}
     </div>
     {(fullscreenPrompt || moderatorRequest || privateNotice || presenceToasts.length > 0 || messageToast) && <div className="room-bottom-notifications" aria-live="polite">
       {fullscreenPrompt && !fullScreen && <div className="fullscreen-fallback-prompt" role="status"><span>Fullscreen needs your permission. Tap once to enter.</span><button type="button" onClick={() => void toggleFullscreen()}>Enter fullscreen <Maximize2 size={15}/></button></div>}
