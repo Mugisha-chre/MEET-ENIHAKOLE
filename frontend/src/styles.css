@@ -3652,3 +3652,14 @@ html[data-theme="light"] .room-control-dock .room-control-button.control-selecte
 .guest-modal-avatar-slot { align-self: center; width: 72px; height: 72px; margin-bottom: 14px; display: grid; place-items: center; }
 .guest-modal-avatar { width: 72px; height: 72px; margin: 0; animation: guest-avatar-in .32s ease both; }
 @keyframes guest-avatar-in { from { opacity: 0; transform: scale(.82); } to { opacity: 1; transform: none; } }
+
+
+/* ===== Round 24: active-call banner above the bottom nav, Leave button ===== */
+@media (max-width: 720px) {
+  /* Sits above the bottom navigation and its raised centre button, with a short gap, so neither is covered. */
+  .background-meeting-dock.background-meeting-dock-above-nav { bottom: calc(66px + 22px + 10px + env(safe-area-inset-bottom)); }
+}
+.background-meeting-dock .background-meeting-leave { border-color: #8f2141; color: #8f2141; background: transparent; font-weight: 800; }
+.background-meeting-dock .background-meeting-leave:hover { background: rgba(143,33,65,.08); }
+:root[data-theme="dark"] .background-meeting-dock .background-meeting-leave { border-color: #c2446a; color: #ee8fab; }
+:root[data-theme="dark"] .background-meeting-dock .background-meeting-leave:hover { background: rgba(194,68,106,.14); }

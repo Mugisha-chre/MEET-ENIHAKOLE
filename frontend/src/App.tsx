@@ -609,6 +609,7 @@ function ProfileMenu({ user, onSignOut, onChangeAccount }: { user: User; onSignO
   const [anchor, setAnchor] = useState<{ top: number; right: number } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const close = useCallback(() => setOpen(false), []);
+  useBackClose(open, close);
   const toggle = () => {
     const rect = triggerRef.current?.getBoundingClientRect();
     if (rect) setAnchor({ top: rect.bottom + 10, right: Math.max(12, window.innerWidth - rect.right) });
@@ -758,6 +759,7 @@ const HELP_GUIDES: { id: string; icon: ReactNode; title: string; summary: string
 
 function HelpSupportModal({ onClose }: { onClose: () => void }) {
   const [openId, setOpenId] = useState<string>(HELP_GUIDES[0].id);
+  useBackClose(true, onClose);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     document.addEventListener("keydown", onKey);
@@ -1060,6 +1062,7 @@ function MeetingPage() {
   const [error, setError] = useState("");
   const [mediaPrompt, setMediaPrompt] = useState<{ kind: MediaKind; state: MicPromptState } | null>(null);
   const [pastNotesOpen, setPastNotesOpen] = useState(false);
+  useBackClose(pastNotesOpen, () => setPastNotesOpen(false));
   const [pastNotes, setPastNotes] = useState<MeetingNotesPayload | null>(null);
   const [pastNotesLoading, setPastNotesLoading] = useState(false);
   const [pastNotesError, setPastNotesError] = useState("");
@@ -1300,7 +1303,7 @@ function MeetingPage() {
           <form className="join-form" onSubmit={join}>
             <div className="join-form-heading"><h2>{ended ? `This ${kind} has ended` : notYetOpen ? "Not Yet Open" : meeting.status === "live" ? `Join the ${kind}` : meeting.isOwner ? `Your ${kind} is ready` : "You're in the right place"}</h2><p>{ended ? "This invitation is now closed. Available audio and notes are below." : notYetOpen ? `This ${kind} opens at ${formatTime(meeting.startsAt, meeting.timezone)}. Please check again when it becomes available.` : meeting.status === "live" ? "Enter your details and come on in." : "The room becomes available automatically at its scheduled start time."}</p></div>
             {user && !ended && <div className="join-identity"><ProfilePhoto src={user.picture} name={user.displayName} className="join-identity-photo"/><span><b>{user.displayName}</b><small>{user.email}</small></span><button type="button" className="error-link" onClick={signOut}><LogOut size={12}/> Sign out</button></div>}
-            {!user && !ended && <div className="join-google"><p>Continue with Google (recommended) or join with your name as a temporary guest. Guest access is limited to this meeting.</p><GoogleContinueButton oneTap onCredential={(credential) => void googleCredential(credential)}/><div className="guest-access-form"><div className="guest-access-divider"><span>OR</span></div>{guestModalOpen && createPortal(<GuestNameModal initialName={getGuestProfile(slug)?.displayName || guestName} onClose={() => setGuestModalOpen(false)} onSave={saveGuest}/>, document.body)}{getGuestProfile(slug) ? <div className="join-identity guest-identity"><ProfilePhoto name={getGuestProfile(slug)?.displayName || guestName} className="join-identity-photo"/><span><b>{getGuestProfile(slug)?.displayName}</b><small>Temporary guest · this meeting only</small></span><button type="button" className="guest-change-name" onClick={() => setGuestModalOpen(true)}>Change</button></div> : <button type="button" className="guest-continue-button" onClick={() => setGuestModalOpen(true)}><UserRound size={18}/><span>Continue as Guest</span></button>}</div></div>}
+            {!user && !ended && <div className="join-google"><GoogleContinueButton oneTap onCredential={(credential) => void googleCredential(credential)}/><div className="guest-access-form"><div className="guest-access-divider"><span>OR</span></div>{guestModalOpen && createPortal(<GuestNameModal initialName={getGuestProfile(slug)?.displayName || guestName} onClose={() => setGuestModalOpen(false)} onSave={saveGuest}/>, document.body)}{getGuestProfile(slug) ? <div className="join-identity guest-identity"><ProfilePhoto name={getGuestProfile(slug)?.displayName || guestName} className="join-identity-photo"/><span><b>{getGuestProfile(slug)?.displayName}</b><small>Temporary guest · this meeting only</small></span><button type="button" className="guest-change-name" onClick={() => setGuestModalOpen(true)}>Change</button></div> : <button type="button" className="guest-continue-button" onClick={() => setGuestModalOpen(true)}><UserRound size={18}/><span>Continue as Guest</span></button>}</div></div>}
             {!ended && <div className="join-preferences"><MediaToggle on={cameraOn} onChange={setCameraOn} onIcon={<Video size={16}/>} offIcon={<VideoOff size={16}/>} onLabel="Camera is on" offLabel="Camera is off" onHint="Join with video" offHint="Join without video"/><MediaToggle on={micOn} onChange={setMicOn} onIcon={<Mic size={16}/>} offIcon={<MicOff size={16}/>} onLabel="Microphone is on" offLabel="Microphone is off" onHint="Join with audio" offHint="Join muted"/></div>}
             {error && <div className="inline-error" role="alert">{error}{error.includes("Sign in") && <button type="button" className="error-link" onClick={openAuth}>Sign in</button>}</div>}
             {ended ? <div className="meeting-ended-actions"><Link to="/meetings" className="button button-soft button-full"><ArrowLeft size={16}/> {meeting.meetingType === "prayer" ? "Back to prayers" : "Back to meetings"}</Link>{(meeting.isOwner || meeting.isParticipant) && <button type="button" className="button button-primary button-full" onClick={() => setPastNotesOpen(true)}><FileText size={16}/> View meeting notes</button>}{pastRecording && <section className="meeting-ended-audio"><div><AudioLines size={20}/><span><b>Audio recording</b><small>{pastRecording.recording.meetingTitle}</small></span></div><AudioRecordingPlayer src={pastRecording.playbackUrl} title={pastRecording.recording.meetingTitle}/><small>Available until {formatDate(pastRecording.expiresAt)}</small></section>}{pastRecordingError && !pastRecordingLoading && !pastRecording && <p className="meeting-audio-unavailable">{pastRecordingError}</p>}</div> : <><button className={`button button-primary button-full join-submit ${notYetOpen ? "join-submit-locked" : ""}`} type="submit" disabled={joining || notYetOpen}>{joining ? <LoaderCircle size={17} className="spin"/> : notYetOpen ? <Clock3 size={17}/> : meeting.isOwner ? <Video size={17}/> : <DoorOpen size={17}/>} {joining ? "Joining…" : notYetOpen ? "Not Yet Open" : meeting.status === "scheduled" ? `Open ${kind}` : `Join ${kind}`}<ArrowRight size={16}/></button>{notYetOpen && <div className="meeting-not-yet-open" role="status"><Clock3 size={16}/><span><b>Opens {formatDate(meeting.startsAt, { weekday: "short" }, meeting.timezone)}</b><small>{formatTime(meeting.startsAt, meeting.timezone)} · {meeting.timezone || "Scheduled time"}</small></span></div>}</>}
@@ -1373,6 +1376,7 @@ async function requestMediaAccess(kind: MediaKind): Promise<MicPromptState> {
 }
 
 function MediaPermissionModal({ kind, state, skipLabel, grantedLabel, onRetry, onGranted, onSkip, onClose }: { kind: MediaKind; state: MicPromptState; skipLabel: string; grantedLabel: string; onRetry: () => void; onGranted: () => void; onSkip: () => void; onClose: () => void }) {
+  useBackClose(true, onClose);
   const isCamera = kind === "camera";
   const noun = isCamera ? "camera" : "microphone";
   const Noun = isCamera ? "Camera" : "Microphone";
@@ -1470,7 +1474,7 @@ function MeetingRoomPage({ slug, isActive }: { slug: string; isActive: boolean }
 
   function leaveRoom() {
     window.dispatchEvent(new CustomEvent("meet-room-closed", { detail: { slug } }));
-    navigate(`/meeting/${encodeURIComponent(slug)}`);
+    navigate(`/meeting/${encodeURIComponent(slug)}`, { replace: roomBackGuardOn });
   }
 
   // The host pressed End for everyone: ask first with our own confirmation, never the browser box.
@@ -1543,6 +1547,8 @@ function MeetingRoomPage({ slug, isActive }: { slug: string; isActive: boolean }
 }
 
 function BackgroundMeetingDock({ title, disconnected, onReturn, onLeave }: { title: string; disconnected: boolean; onReturn: () => void; onLeave: () => void }) {
+  const { pathname } = useLocation();
+  const aboveNav = pathname === "/" || pathname === "/meetings" || pathname === "/recordings" || pathname === "/admin";
   const { localParticipant, isMicrophoneEnabled } = useLocalParticipant();
   const participants = useParticipants();
   const [micBusy, setMicBusy] = useState(false);
@@ -1553,7 +1559,7 @@ function BackgroundMeetingDock({ title, disconnected, onReturn, onLeave }: { tit
     catch { window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Could not change microphone state. Return to the call and check permission." } })); }
     finally { setMicBusy(false); }
   }
-  return <aside className="background-meeting-dock" role="region" aria-label="Active meeting controls">
+  return <aside className={`background-meeting-dock ${aboveNav ? "background-meeting-dock-above-nav" : ""}`} role="region" aria-label="Active meeting controls">
     <span className="background-meeting-indicator" aria-hidden="true"/>
     <div className="background-meeting-copy"><strong>{disconnected ? "Connection interrupted" : "Meeting continues"}</strong><span>{title} · {participants.length} participants</span></div>
     <button type="button" className="background-meeting-action" onClick={() => void toggleMicrophone()} disabled={micBusy} aria-label={isMicrophoneEnabled ? "Mute microphone" : "Unmute microphone"} title={isMicrophoneEnabled ? "Mute microphone" : "Unmute microphone"}>{isMicrophoneEnabled ? <Mic size={16}/> : <MicOff size={16}/>}</button>
@@ -1565,6 +1571,7 @@ function BackgroundMeetingDock({ title, disconnected, onReturn, onLeave }: { tit
 
 /** Our own confirmation for ending a meeting. It is drawn inside the fullscreen room when the room is fullscreen, so it is always visible. */
 function ConfirmEndModal({ busy, onCancel, onConfirm }: { busy: boolean; onCancel: () => void; onConfirm: () => void }) {
+  useBackClose(true, () => { if (!busy) onCancel(); });
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape" && !busy) onCancel(); };
     document.addEventListener("keydown", onKey);
@@ -1588,6 +1595,58 @@ function ConfirmEndModal({ busy, onCancel, onConfirm }: { busy: boolean; onCance
 }
 
 /** Shown to everyone the moment the meeting is ended. */
+/** Phone/browser Back closes the open dialog instead of leaving the page. Opening pushes one history entry; closing by any means removes it again. */
+// True while the call room is the visible page and Back is being caught (so leaving can replace that entry).
+let roomBackGuardOn = false;
+const backCloseStack: string[] = [];
+// When one dialog closes and another opens in the same moment, the new entry waits until the old one has finished going back.
+let pendingBacks = 0;
+const afterBack: Array<() => void> = [];
+if (typeof window !== "undefined") {
+  window.addEventListener("popstate", () => {
+    if (pendingBacks <= 0) return;
+    pendingBacks -= 1;
+    if (pendingBacks === 0) window.setTimeout(() => afterBack.splice(0).forEach((run) => run()), 0);
+  });
+}
+function useBackClose(active: boolean, onClose: () => void, keep = false) {
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    if (!active) return;
+    const id = `m${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    let pushed = false;
+    let cancelled = false;
+    const isOurs = () => (window.history.state as { __modal?: string } | null)?.__modal === id;
+    const onPop = () => {
+      // Only the top-most dialog reacts, and only once its own history entry has been popped.
+      if (!pushed || backCloseStack[backCloseStack.length - 1] !== id || isOurs()) return;
+      backCloseStack.pop(); pushed = false;
+      closeRef.current();
+      // A guard (the room) puts its entry back, so every further Back press is caught the same way.
+      if (keep) window.setTimeout(() => { if (!cancelled && !pushed) push(); }, 0);
+    };
+    // Deferred by a tick so React StrictMode's immediate re-mount does not leave a stray entry.
+    const push = () => {
+      if (cancelled) return;
+      try { window.history.pushState({ ...(window.history.state || {}), __modal: id }, ""); backCloseStack.push(id); pushed = true; } catch { /* History unavailable: Back simply behaves as before. */ }
+    };
+    const timer = window.setTimeout(() => { if (pendingBacks > 0) afterBack.push(push); else push(); }, 0);
+    window.addEventListener("popstate", onPop);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      window.removeEventListener("popstate", onPop);
+      if (!pushed) return;
+      const index = backCloseStack.lastIndexOf(id);
+      const wasTop = index === backCloseStack.length - 1;
+      if (index >= 0) backCloseStack.splice(index, 1);
+      // Closed with a button or by tapping outside: remove the extra entry so Back goes to the real previous page.
+      if (wasTop && isOurs()) { pendingBacks += 1; window.history.back(); }
+    };
+  }, [active]);
+}
+
 /** "prayer" or "meeting", so wording always follows the type of the session. */
 const kindOf = (item?: { meetingType?: string } | null) => (item?.meetingType === "prayer" ? "prayer" : "meeting");
 const IDENTITY_NEEDED_MESSAGE = "Choose Google or Guest to continue.";
@@ -2162,6 +2221,7 @@ function useRoomPictureInPicture(room: Room, title: string) {
     video.setAttribute("playsinline", ""); video.setAttribute("aria-hidden", "true"); video.tabIndex = -1;
     video.disablePictureInPicture = false;
     video.autoPictureInPicture = true; // Safari: float automatically when the page is left.
+    video.setAttribute("autopictureinpicture", "");
     video.className = "room-pip-source";
     document.body.appendChild(video);
 
@@ -2218,8 +2278,15 @@ function useRoomPictureInPicture(room: Room, title: string) {
       g.fillText("MEET ENIHAKOLE · Live", w / 2, h / 2 + 96);
     };
 
+    // Tells Chrome this page is a live call (camera/microphone in use) so it may float the call by itself when the user leaves the app.
+    const flagCapture = () => {
+      const media = navigator.mediaSession as (MediaSession & { setMicrophoneActive?: (active: boolean) => void; setCameraActive?: (active: boolean) => void }) | undefined;
+      try { media?.setMicrophoneActive?.(room.localParticipant.isMicrophoneEnabled); } catch { /* Optional hint. */ }
+      try { media?.setCameraActive?.(room.localParticipant.isCameraEnabled); } catch { /* Optional hint. */ }
+    };
     const apply = () => {
       if (disposed) return;
+      flagCapture();
       const next = pickSource();
       if (current && current.key === next.key) return;
       if (current?.track) { try { current.track.detach(video); } catch { /* Track already gone. */ } }
@@ -2287,7 +2354,7 @@ function useRoomPictureInPicture(room: Room, title: string) {
 
     // Leaving the page: float the call (works without a tap where the browser allows automatic PiP).
     const onVisibility = () => {
-      if (document.visibilityState === "hidden") void enter(true);
+      if (document.visibilityState === "hidden") { flagCapture(); void enter(true); }
       else if (enteredAutomatically && isPip()) void exit();
     };
     document.addEventListener("visibilitychange", onVisibility);
@@ -2324,7 +2391,8 @@ function useRoomPictureInPicture(room: Room, title: string) {
     else if (!(await controls.current.enter(false))) window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Picture-in-picture isn't available in this browser right now." } }));
   }, [active]);
 
-  return { supported, active, toggle };
+  const enterAuto = useCallback(async () => (controls.current ? controls.current.enter(true) : false), []);
+  return { supported, active, toggle, enterAuto };
 }
 
 /**
@@ -2832,6 +2900,11 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
   const [messageText, setMessageText] = useState("");
   const [reactionsOpen, setReactionsOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  useBackClose(moreOpen, () => setMoreOpen(false));
+  useBackClose(notesOpen, () => setNotesOpen(false));
+  useBackClose(messagesOpen, () => setMessagesOpen(false));
+  useBackClose(peopleOpen, () => setPeopleOpen(false));
+  useBackClose(Boolean(directContact), () => setDirectContact(null));
   const [moreView, setMoreView] = useState<"actions" | "reactions">("actions");
   const [speakerOff, setSpeakerOff] = useState(false);
   const [raisedHands, setRaisedHands] = useState<Record<string, boolean>>({});
@@ -2885,6 +2958,14 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
   const localVoiceActivity = useVoiceActivity(localParticipant);
   useBackgroundCall(room, meeting.title, onLeave);
   const pip = useRoomPictureInPicture(room, meeting.title);
+  // Back button inside the call: stay in the room and float the call (picture-in-picture) instead of dropping out of it.
+  useEffect(() => { roomBackGuardOn = isActive; return () => { roomBackGuardOn = false; }; }, [isActive]);
+  useBackClose(isActive, () => {
+    if (document.visibilityState === "hidden" || pip.active) return;
+    void (pip.supported ? pip.enterAuto() : Promise.resolve(false)).then((floated) => {
+      if (!floated) window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "You're still in the call. Press Home to float it, or use Leave to exit." } }));
+    });
+  }, true);
   // Keep the receive-side jitter buffer as small as the browser safely allows so other people's voices play back with minimal delay.
   useEffect(() => {
     const tune = (track: { kind?: string; setPlayoutDelay?: (seconds: number) => void }) => { if (track.kind === Track.Kind.Audio) { try { track.setPlayoutDelay?.(0.02); } catch { /* unsupported browser: default buffering */ } } };
@@ -4451,6 +4532,7 @@ function Modal({ children, onClose, wide = true, solidTop = false }: { children:
     paint(true);
     window.setTimeout(() => onCloseRef.current(), 250);
   }, []);
+  useBackClose(true, requestClose);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") onCloseRef.current(); };
