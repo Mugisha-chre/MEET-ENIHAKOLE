@@ -7,7 +7,7 @@ import {
   ArrowLeft, ArrowRight, AudioLines, CalendarClock, CalendarDays, Check,
   CheckCircle2, CircleHelp, Clock3, Copy, DoorOpen, HeartHandshake, Home,
   Link2, LoaderCircle, LogIn, LogOut, Menu, Mic, Plus, Share2, ShieldCheck,
-  Sparkles, Users, Video, VideoOff, X, Sun, Moon, MessageCircle,
+  Sparkles, UserRound, Users, Video, VideoOff, X, Sun, Moon, MessageCircle,
   PictureInPicture2, Hand, Send, MonitorUp, MicOff, Maximize2, Minimize2, ChevronLeft, ChevronRight, Smile, ChevronDown, Download,
   MousePointer2, MoveUpRight, Eraser, Eye, EyeOff, PenLine, Undo2, Settings2,
   BookOpen, Smartphone, Headphones, LifeBuoy, Mail,
@@ -598,6 +598,50 @@ function ThemeToggle() {
   return <button type="button" className="icon-button theme-toggle" onClick={toggleTheme} title={`Switch to ${nextTheme} mode`} aria-label={`Switch to ${nextTheme} mode`} aria-pressed={theme === "dark"}>{theme === "light" ? <Moon size={17}/> : <Sun size={17}/>}</button>;
 }
 
+/** Top bar profile picture: opens a profile card (popover on desktop, bottom sheet on phones) with Change account and Sign out. */
+function ProfileMenu({ user, onSignOut, onChangeAccount }: { user: User; onSignOut: () => void; onChangeAccount: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [anchor, setAnchor] = useState<{ top: number; right: number } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+  const toggle = () => {
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (rect) setAnchor({ top: rect.bottom + 10, right: Math.max(12, window.innerWidth - rect.right) });
+    setOpen((value) => !value);
+  };
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    const onResize = () => setOpen(false);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("resize", onResize);
+    return () => { document.removeEventListener("keydown", onKey); window.removeEventListener("resize", onResize); };
+  }, [open]);
+  return <>
+    <button ref={triggerRef} type="button" className={`profile-trigger ${open ? "profile-trigger-open" : ""}`} onClick={toggle} aria-haspopup="dialog" aria-expanded={open} aria-label="Open profile menu" title={user.displayName}>
+      <ProfilePhoto className="profile-avatar" src={user.picture} name={user.displayName} />
+      <span className="profile-name">{user.displayName}</span>
+      <ChevronDown size={14} className="profile-chevron" aria-hidden="true"/>
+    </button>
+    {open && createPortal(
+      <div className="profile-sheet-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
+        <section className="profile-sheet" role="dialog" aria-modal="true" aria-label="Profile" style={anchor ? ({ "--profile-top": `${anchor.top}px`, "--profile-right": `${anchor.right}px` } as CSSProperties) : undefined}>
+          <span className="profile-sheet-grab" aria-hidden="true"/>
+          <button type="button" className="profile-sheet-close" onClick={close} aria-label="Close profile"><X size={16}/></button>
+          <div className="profile-sheet-head">
+            <ProfilePhoto className="profile-sheet-photo" src={user.picture} name={user.displayName} size={320}/>
+            <b title={user.displayName}>{user.displayName}</b>
+            {user.email && <small title={user.email}>{user.email}</small>}
+          </div>
+          <div className="profile-sheet-actions">
+            <button type="button" className="profile-sheet-action" onClick={() => { close(); onChangeAccount(); }}><Users size={17}/><span>Change account</span></button>
+            <button type="button" className="profile-sheet-action profile-sheet-danger" onClick={() => { close(); onSignOut(); }}><LogOut size={17}/><span>Sign out</span></button>
+          </div>
+        </section>
+      </div>, document.body)}
+  </>;
+}
+
 type PwaPromptEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: "accepted" | "dismissed" }> };
 
 function InstallPwaButton({ inline = false }: { inline?: boolean }) {
@@ -691,7 +735,7 @@ const HELP_GUIDES: { id: string; icon: ReactNode; title: string; summary: string
     "Open Recorded prayers from the sidebar (or Recorded on your phone).",
     "Public prayer recordings and recordings from gatherings you attended appear as cards once the prayer has finished and the audio is ready.",
     "Tap Listen on a card to play it. Use the timeline to skip around and the volume control to adjust the sound.",
-    "Recordings are kept for a limited time, so each card shows when it expires. Use the dots at the top to see when the list is refreshing.",
+    "Recordings are kept for a limited time, so each card shows when it expires. The list updates by itself when a new recording is ready.",
   ] },
   { id: "room", icon: <Video size={18}/>, title: "Inside the prayer room", summary: "Camera, microphone, chat and notes.", steps: [
     "Use the microphone and camera buttons at the bottom of the room to mute or unmute yourself at any time.",
@@ -834,9 +878,7 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
             <ThemeToggle />
             {user ? (
               <div className="profile-menu">
-                <ProfilePhoto className="profile-avatar" src={user.picture} name={user.displayName} />
-                <span className="profile-name">{user.displayName}</span>
-                <button className="icon-button profile-signout" title="Sign out" aria-label="Sign out" onClick={signOut}><LogOut size={17} /></button>
+                <ProfileMenu user={user} onSignOut={signOut} onChangeAccount={() => { signOut(); openAuth(); }} />
               </div>
             ) : <button className="button button-soft button-small" onClick={openAuth}><LogIn size={16} /> Sign in</button>}
             {(user?.canCreateMeetings || user?.isAdmin) && <button className="button button-primary button-small topbar-create" onClick={() => openSchedule(false)}><Plus size={17} /> Create</button>}
@@ -900,8 +942,8 @@ function Dashboard() {
       <section className="section-block">
         <div className="section-heading"><div><p className="section-overline">YOUR SPACE</p><h2>At a glance</h2></div><button className="text-action" onClick={() => navigate("/meetings")}>View prayers <ArrowRight size={15}/></button></div>
         <div className="stats-grid">
-          <div className="stat-card"><span className="stat-icon stat-burgundy"><CalendarDays size={19}/></span><div><span className="stat-label">Upcoming Online Prayers</span><strong>{loadingMeetings ? "—" : upcoming.filter((m) => m.status === "scheduled").length.toString().padStart(2, "0")}</strong></div><span className="stat-sheen"/></div>
-          <div className="stat-card"><span className="stat-icon stat-gold"><Video size={19}/></span><div><span className="stat-label">Live right now</span><strong>{loadingMeetings ? "—" : String(liveCount).padStart(2, "0")}</strong>{liveCount > 0 && <small>Join the conversation</small>}</div><span className="stat-sheen"/></div>
+          <div className="stat-card"><span className="stat-icon stat-burgundy"><CalendarDays size={19}/></span><div><span className="stat-label">Upcoming Online Prayers</span><strong>{loadingMeetings ? "—" : upcoming.filter((m) => m.status === "scheduled").length.toString().padStart(2, "0")}</strong></div><button type="button" className="stat-continue" onClick={() => navigate("/meetings")} aria-label="Continue to Upcoming Online Prayers">Continue<ArrowRight size={14}/></button><span className="stat-sheen"/></div>
+          <div className="stat-card"><span className="stat-icon stat-gold"><Video size={19}/></span><div><span className="stat-label">Live right now</span><strong>{loadingMeetings ? "—" : String(liveCount).padStart(2, "0")}</strong>{liveCount > 0 && <small>Join the conversation</small>}</div><button type="button" className="stat-continue" onClick={() => navigate("/meetings")} aria-label="Continue to live prayers">Continue<ArrowRight size={14}/></button><span className="stat-sheen"/></div>
           <div className="stat-card"><span className="stat-icon stat-rose"><Users size={19}/></span><div><span className="stat-label">Your community</span><strong>ENIHAKOLE</strong></div><span className="stat-sheen"/></div>
         </div>
       </section>
@@ -1006,6 +1048,7 @@ function MeetingPage() {
   const [meeting, setMeeting] = useState<Meeting | null>(() => readCache<Meeting>(cacheKey)?.value ?? [...knownMeetings, ...knownPublic].find((item) => item.slug === slug) ?? null);
   const [cameraOn, setCameraOn] = useState(false);
   const [guestName, setGuestName] = useState(() => getGuestProfile(slug)?.displayName || "");
+  const [guestModalOpen, setGuestModalOpen] = useState(false);
   const [micOn, setMicOn] = useState(true);
   const [loading, setLoading] = useState(() => !readCache(cacheKey) && ![...knownMeetings, ...knownPublic].some((item) => item.slug === slug));
   const [joining, setJoining] = useState(false);
@@ -1203,16 +1246,14 @@ function MeetingPage() {
     } finally { enteringRef.current = false; setJoining(false); }
   }
 
-  async function continueAsGuest() {
+  /** Saves the guest's name for this meeting. The guest then stays visible on this screen and joins with the normal Join button. */
+  async function saveGuest(displayName: string) {
     if (!meeting) return;
     setError("");
-    try {
-      const result = await api.guestSession(slug, guestName);
-      saveGuestAuthToken(result.token, { guestId: result.guestId, displayName: result.displayName, meetingSlug: slug });
-      await continueJoin(micOn, cameraOn);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not prepare your guest access.");
-    }
+    const result = await api.guestSession(slug, displayName);
+    saveGuestAuthToken(result.token, { guestId: result.guestId, displayName: result.displayName, meetingSlug: slug });
+    setGuestName(result.displayName);
+    setGuestModalOpen(false);
   }
 
   async function googleCredential(credential: string) {
@@ -1251,7 +1292,7 @@ function MeetingPage() {
           <form className="join-form" onSubmit={join}>
             <div className="join-form-heading"><h2>{ended ? "This gathering has ended" : notYetOpen ? "Not Yet Open" : meeting.status === "live" ? "Join the gathering" : meeting.isOwner ? "Your gathering is ready" : "You're in the right place"}</h2><p>{ended ? "This invitation is now closed. Available audio and notes are below." : notYetOpen ? `This gathering opens at ${formatTime(meeting.startsAt, meeting.timezone)}. Please check again when it becomes available.` : meeting.status === "live" ? "Enter your details and come on in." : "The room becomes available automatically at its scheduled start time."}</p></div>
             {user && !ended && <div className="join-identity"><ProfilePhoto src={user.picture} name={user.displayName} className="join-identity-photo"/><span><b>{user.displayName}</b><small>{user.email}</small></span><button type="button" className="error-link" onClick={signOut}><LogOut size={12}/> Sign out</button></div>}
-            {!user && !ended && <div className="join-google"><p>Continue with Google (recommended) or join with your name as a temporary guest. Guest access is limited to this meeting.</p><GoogleContinueButton oneTap onCredential={(credential) => void googleCredential(credential)}/>{!getGuestProfile(slug) ? <div className="guest-access-form"><div className="guest-access-divider"><span>OR</span></div><label htmlFor="guest-full-name">Continue as Guest</label><input id="guest-full-name" value={guestName} onChange={(event) => setGuestName(event.target.value)} placeholder="First and last name" autoComplete="name" maxLength={80}/><small>Use your full name. No account or email is required.</small><button type="button" className="button button-soft button-full" onClick={() => void continueAsGuest()} disabled={joining || guestName.trim().split(/\s+/).filter(Boolean).length < 2}>{joining ? "Preparing guest access…" : "Continue as Guest"}</button></div> : <div className="join-identity guest-identity"><ProfilePhoto name={getGuestProfile(slug)?.displayName || guestName} className="join-identity-photo"/><span><b>{getGuestProfile(slug)?.displayName}</b><small>Temporary guest · this meeting only</small></span></div>}</div>}
+            {!user && !ended && <div className="join-google"><p>Continue with Google (recommended) or join with your name as a temporary guest. Guest access is limited to this meeting.</p><GoogleContinueButton oneTap onCredential={(credential) => void googleCredential(credential)}/><div className="guest-access-form"><div className="guest-access-divider"><span>OR</span></div>{guestModalOpen && createPortal(<GuestNameModal initialName={getGuestProfile(slug)?.displayName || guestName} onClose={() => setGuestModalOpen(false)} onSave={saveGuest}/>, document.body)}{getGuestProfile(slug) ? <div className="join-identity guest-identity"><ProfilePhoto name={getGuestProfile(slug)?.displayName || guestName} className="join-identity-photo"/><span><b>{getGuestProfile(slug)?.displayName}</b><small>Temporary guest · this meeting only</small></span><button type="button" className="guest-change-name" onClick={() => setGuestModalOpen(true)}>Change</button></div> : <button type="button" className="guest-continue-button" onClick={() => setGuestModalOpen(true)}><UserRound size={18}/><span>Continue as Guest</span></button>}</div></div>}
             {!ended && <div className="join-preferences"><MediaToggle on={cameraOn} onChange={setCameraOn} onIcon={<Video size={16}/>} offIcon={<VideoOff size={16}/>} onLabel="Camera is on" offLabel="Camera is off" onHint="Join with video" offHint="Join without video"/><MediaToggle on={micOn} onChange={setMicOn} onIcon={<Mic size={16}/>} offIcon={<MicOff size={16}/>} onLabel="Microphone is on" offLabel="Microphone is off" onHint="Join with audio" offHint="Join muted"/></div>}
             {error && <div className="inline-error" role="alert">{error}{error.includes("Sign in") && <button type="button" className="error-link" onClick={openAuth}>Sign in</button>}</div>}
             {ended ? <div className="meeting-ended-actions"><Link to="/meetings" className="button button-soft button-full"><ArrowLeft size={16}/> {meeting.meetingType === "prayer" ? "Back to prayers" : "Back to meetings"}</Link>{(meeting.isOwner || meeting.isParticipant) && <button type="button" className="button button-primary button-full" onClick={() => setPastNotesOpen(true)}><FileText size={16}/> View meeting notes</button>}{pastRecording && <section className="meeting-ended-audio"><div><AudioLines size={20}/><span><b>Audio recording</b><small>{pastRecording.recording.meetingTitle}</small></span></div><AudioRecordingPlayer src={pastRecording.playbackUrl} title={pastRecording.recording.meetingTitle}/><small>Available until {formatDate(pastRecording.expiresAt)}</small></section>}{pastRecordingError && !pastRecordingLoading && !pastRecording && <p className="meeting-audio-unavailable">{pastRecordingError}</p>}</div> : (user || getGuestProfile(slug)) && <><button className={`button button-primary button-full join-submit ${notYetOpen ? "join-submit-locked" : ""}`} type="submit" disabled={joining || notYetOpen}>{joining ? <LoaderCircle size={17} className="spin"/> : notYetOpen ? <Clock3 size={17}/> : meeting.isOwner ? <Video size={17}/> : <DoorOpen size={17}/>} {joining ? "Joining…" : notYetOpen ? "Not Yet Open" : meeting.status === "scheduled" ? "Open gathering" : "Join gathering"}<ArrowRight size={16}/></button>{notYetOpen && <div className="meeting-not-yet-open" role="status"><Clock3 size={16}/><span><b>Opens {formatDate(meeting.startsAt, { weekday: "short" }, meeting.timezone)}</b><small>{formatTime(meeting.startsAt, meeting.timezone)} · {meeting.timezone || "Scheduled time"}</small></span></div>}</>}
@@ -4136,6 +4177,40 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
     {directContact && <div className="messages-modal-backdrop private-chat-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setDirectContact(null); }}><section className="messages-modal private-chat-modal" role="dialog" aria-modal="true" aria-label={`Private conversation with ${directContact.name}`}><header className="messages-modal-header"><button className="room-icon-button" onClick={() => { setDirectContact(null); setPeopleViewTab("private"); setPeopleOpen(true); }} aria-label="Back to private chats"><ArrowLeft size={18}/></button><ProfilePhoto src={directContact.picture} name={directContact.name} size={64} className="private-chat-avatar"/><div className="meeting-panel-heading"><b>{directContact.name}</b><small>Private one-to-one conversation</small></div><button className="room-icon-button" onClick={() => { setDirectContact(null); setPeopleViewTab("private"); setPeopleOpen(true); }} aria-label="Close private messages"><X size={18}/></button></header><nav className="meeting-panel-tabs" aria-label="Meeting tools"><button type="button" className="meeting-panel-tab" onClick={() => { setDirectContact(null); setPeopleViewTab("people"); setPeopleOpen(true); }}>People</button><button type="button" className="meeting-panel-tab meeting-panel-tab-active" aria-current="page" onClick={() => { setDirectContact(null); setPeopleViewTab("private"); setPeopleOpen(true); }}>Private chats</button><button type="button" className="meeting-panel-tab" onClick={() => { setDirectContact(null); setMessagesOpen(true); }}>Messages</button><button type="button" className="meeting-panel-tab" onClick={() => { setDirectContact(null); setNotesOpen(true); }}>Notes</button></nav><div className="messages-modal-body private-chat-body">{privateLoading ? <div className="messages-empty"><LoaderCircle size={23} className="spin"/><span>Loading private conversation…</span></div> : privateMessages.length === 0 ? <div className="messages-empty"><MessageCircle size={25}/><b>No private messages yet</b><span>Only you and {directContact.name} can see this conversation.</span></div> : privateMessages.map((message) => <article className={`chat-message ${message.senderUserId === localUserId ? "chat-message-own" : ""}`} key={message.id}><span className="chat-message-author">{message.senderUserId === localUserId ? "You" : message.senderName}</span><p>{message.message}</p><time>{new Date(message.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></article>)}<div ref={privateChatEndRef}/></div><form className="messages-composer" onSubmit={sendPrivateMessage}><input value={privateDraft} onChange={(event) => setPrivateDraft(event.target.value)} placeholder={`Message ${directContact.name} privately…`} maxLength={2000} aria-label="Private message"/><button className="button button-primary" type="submit" disabled={!privateDraft.trim() || privateSending || privateLoading} aria-label="Send private message">{privateSending ? <LoaderCircle size={17} className="spin"/> : <Send size={17}/>}</button></form></section></div>}
     {role === "host" && <span className="room-host-sr" aria-hidden="true">{meeting.ownerName} is hosting</span>}
   </div>;
+}
+
+/** Asks a guest for first and last name (one field each). Works as a bottom sheet on phones through the shared Modal. */
+function GuestNameModal({ initialName, onClose, onSave }: { initialName: string; onClose: () => void; onSave: (displayName: string) => Promise<void> }) {
+  const parts = initialName.trim().split(/\s+/).filter(Boolean);
+  const [firstName, setFirstName] = useState(parts[0] || "");
+  const [lastName, setLastName] = useState(parts.slice(1).join(" "));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const clean = (value: string) => value.replace(/[<>]/g, "").replace(/\s+/g, " ").trim();
+  const fullName = [clean(firstName), clean(lastName)].filter(Boolean).join(" ");
+  const ready = Boolean(clean(firstName)) && Boolean(clean(lastName));
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!ready || saving) return;
+    setSaving(true); setError("");
+    try { await onSave(fullName); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save your name. Please try again."); setSaving(false); }
+  }
+  return <Modal onClose={onClose} wide={false}>
+    <form className="auth-modal-content guest-modal-content" onSubmit={(event) => void submit(event)} noValidate>
+      <ProfilePhoto name={fullName} className="guest-modal-avatar" size={160}/>
+      <p className="section-overline">CONTINUE AS GUEST</p>
+      <h2>What should we call you?</h2>
+      <p className="modal-subtitle">Your name is shown to everyone in the room. No account or email is required.</p>
+      <div className="guest-modal-fields">
+        <label htmlFor="guest-first-name"><span>First name</span><input id="guest-first-name" value={firstName} onChange={(event) => setFirstName(event.target.value)} placeholder="e.g. Mugisha" autoComplete="given-name" maxLength={40} autoFocus/></label>
+        <label htmlFor="guest-last-name"><span>Last name</span><input id="guest-last-name" value={lastName} onChange={(event) => setLastName(event.target.value)} placeholder="e.g. Chretien" autoComplete="family-name" maxLength={40}/></label>
+      </div>
+      {error && <div className="inline-error" role="alert">{error}</div>}
+      <button type="submit" className="button button-primary button-full guest-modal-save" disabled={!ready || saving}>{saving ? <><LoaderCircle size={16} className="spin"/> Saving…</> : "Save"}</button>
+      <p className="auth-legal"><ShieldCheck size={13}/> Guest access is limited to this meeting.</p>
+    </form>
+  </Modal>;
 }
 
 function AuthModal({ onClose, onAuthenticated }: { onClose: () => void; onAuthenticated: (user: User, token: string) => void }) {

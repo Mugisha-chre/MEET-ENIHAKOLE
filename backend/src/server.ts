@@ -3,6 +3,7 @@ import { createApp } from "./app.js";
 import { connectDB } from "./config/db.js";
 import { startMeetingExpiry } from "./lib/expiry.js";
 import { startRecordingRetention } from "./lib/recordingRetention.js";
+import { startRealtime } from "./lib/realtime.js";
 
 const port = Number(process.env.PORT || 4000);
 const app = createApp();
@@ -18,6 +19,8 @@ async function main(): Promise<void> {
   const server = app.listen(port, "0.0.0.0", () => {
     console.info(`[api] MEET ENIHAKOLE listening on port ${port}`);
   });
+
+  startRealtime(server);
 
   const shutdown = (signal: string) => {
     console.info(`[api] ${signal} received; closing server`);

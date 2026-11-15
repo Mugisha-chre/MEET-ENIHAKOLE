@@ -1,4 +1,5 @@
 import mongoose, { type InferSchemaType } from "mongoose";
+import { notifyRecordingsChanged } from "../lib/realtime.js";
 
 const recordingSchema = new mongoose.Schema(
   {
@@ -43,6 +44,29 @@ const recordingSchema = new mongoose.Schema(
   },
   { timestamps: true, versionKey: false },
 );
+
+// Any real change to a recording (new, status, ready, expired, deleted) pings connected browsers so the Recordings page updates by itself.
+// Upload progress, lease and retry bookkeeping are skipped so the page is not refetched on every progress tick.
+const QUIET_RECORDING_FIELDS = new Set(["uploadProgressPercent", "uploadLeaseUntil", "uploadLeaseId", "uploadAttempts", "nextUploadAttemptAt", "lastError", "stagedAvailable", "deletionLeaseUntil", "deletionAttempts", "nextDeletionAttemptAt", "lastDeletionError", "updatedAt"]);
+function onlyQuietFields(update: unknown): boolean {
+  if (!update || typeof update !== "object") return false;
+  const keys: string[] = [];
+  for (const [key, value] of Object.entries(update as Record<string, unknown>)) {
+    if (key.startsWith("$") && value && typeof value === "object") keys.push(...Object.keys(value as Record<string, unknown>));
+    else if (!key.startsWith("$")) keys.push(key);
+  }
+  return keys.length > 0 && keys.every((key) => QUIET_RECORDING_FIELDS.has(key));
+}
+recordingSchema.post("save", () => notifyRecordingsChanged());
+for (const hook of ["updateOne", "updateMany", "findOneAndUpdate"] as const) {
+  recordingSchema.post(hook, function (this: any) {
+    try { if (onlyQuietFields(this.getUpdate?.())) return; } catch { /* Notify on any doubt. */ }
+    notifyRecordingsChanged();
+  });
+}
+for (const hook of ["deleteOne", "deleteMany", "findOneAndDelete"] as const) {
+  recordingSchema.post(hook, () => notifyRecordingsChanged());
+}
 
 recordingSchema.index({ meeting: 1, createdAt: -1 });
 recordingSchema.index({ hostUserId: 1, status: 1, createdAt: -1 });

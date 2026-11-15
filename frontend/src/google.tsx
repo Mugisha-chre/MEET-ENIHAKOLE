@@ -153,18 +153,28 @@ export function preloadPhotoBriefly(src: string | undefined, size = 512, maxMs =
   return Promise.race([preloadPhoto(src, size), new Promise<void>((resolve) => setTimeout(resolve, maxMs))]);
 }
 
+// Google-style letter avatars: the first letter picks a steady colour (M → blue, S → red, …), so the same person always looks the same.
+const AVATAR_COLORS = ["#8e24aa", "#f4511e", "#d93025", "#00897b", "#1a73e8", "#188038", "#d81b60", "#3949ab"];
+export function avatarColor(name: string): string {
+  const first = Array.from(name.replace(/[<>]/g, "").trim())[0]?.toUpperCase() || "A";
+  const code = first.charCodeAt(0);
+  const index = code >= 65 && code <= 90 ? code - 65 : code;
+  return AVATAR_COLORS[index % AVATAR_COLORS.length];
+}
+
 /** Profile photo in a circle. While it downloads a small spinner shows (never a "?"); initials appear only if there is no photo or it fails. */
 export function ProfilePhoto({ src, name, className = "", size = 256 }: { src?: string; name: string; className?: string; size?: number }) {
   const url = src ? hiResPhoto(src, size) : "";
   const [state, setState] = useState<"loading" | "ready" | "error">(() => !url ? "error" : loadedPhotos.has(url) ? "ready" : "loading");
   useEffect(() => { setState(!url ? "error" : loadedPhotos.has(url) ? "ready" : "loading"); }, [url]);
   const words = name.replace(/[<>]/g, "").trim().split(/\s+/).filter(Boolean);
-  const initials = (words.length === 1 ? Array.from(words[0]).slice(0, 2) : words.length ? [Array.from(words[0])[0], Array.from(words[words.length - 1])[0]] : []).join("").toUpperCase();
+  const letter = Array.from(words[0] || "")[0]?.toUpperCase() || "";
   const markReady = () => { loadedPhotos.add(url); setState("ready"); };
   const spinner = <span className="profile-photo-spinner" aria-hidden="true"><LoaderCircle className="spin"/></span>;
-  return <span className={`profile-photo ${state === "loading" ? "profile-photo-loading" : ""} ${className}`}>
+  const letterAvatar = state === "error" && Boolean(letter);
+  return <span className={`profile-photo ${state === "loading" ? "profile-photo-loading" : ""} ${letterAvatar ? "profile-photo-letter" : ""} ${className}`} style={letterAvatar ? { background: avatarColor(name), color: "#fff" } : undefined}>
     {url && state !== "error" && <img ref={(el) => { if (el?.complete && el.naturalWidth > 0 && state === "loading") markReady(); }} src={url} alt="" loading="eager" decoding="async" referrerPolicy="no-referrer" draggable={false} onLoad={markReady} onError={() => setState("error")} />}
-    {state === "loading" ? spinner : state === "error" ? (initials ? <b>{initials}</b> : spinner) : null}
+    {state === "loading" ? spinner : state === "error" ? (letter ? <b>{letter}</b> : spinner) : null}
   </span>;
 }
 

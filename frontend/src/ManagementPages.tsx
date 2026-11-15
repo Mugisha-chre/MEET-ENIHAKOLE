@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { AudioLines, CalendarCheck, CalendarX, Clock3, Headphones, LoaderCircle, Pause, Play, RefreshCw, ShieldCheck, Volume2, VolumeX } from "lucide-react";
-import { api, getAuthToken } from "./api";
+import { AudioLines, CalendarCheck, CalendarX, Clock3, Headphones, LoaderCircle, Pause, Play, ShieldCheck, Volume2, VolumeX } from "lucide-react";
+import { io, type Socket } from "socket.io-client";
+import { api, getAuthToken, getSocketOrigin } from "./api";
 import { ProfilePhoto } from "./google";
 import { CustomSelect, type SelectOption } from "./CustomSelect";
 import { patchCache, readCache, writeCache } from "./cache";
@@ -78,28 +79,32 @@ export function AudioRecordingPlayer({ src, title }: { src: string; title: strin
 function RecordingCardControls({ src, title, durationHint, onPlayingChange }: { src: string; title: string; durationHint: number; onPlayingChange?: (playing: boolean) => void }) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [playing, setPlaying] = useState(false);
+  // "audible" is true only while sound is really advancing; it stays false while the file is still loading or buffering.
+  const [audible, setAudible] = useState(false);
+  const [buffering, setBuffering] = useState(true);
   const [currentTime, setCurrentTime] = useState(0);
   const [durationValue, setDurationValue] = useState(0);
   const [volume, setVolume] = useState(0.9);
   const [volumeOpen, setVolumeOpen] = useState(false);
   const [playError, setPlayError] = useState("");
-  useEffect(() => { onPlayingChange?.(playing); }, [playing, onPlayingChange]);
+  useEffect(() => { onPlayingChange?.(audible); }, [audible, onPlayingChange]);
   useEffect(() => () => onPlayingChange?.(false), [onPlayingChange]);
   const total = durationValue > 0 ? durationValue : Math.max(0, durationHint || 0);
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
     audio.volume = 0.9;
-    audio.play().then(() => setPlaying(true)).catch(() => setPlayError("Tap play to start listening."));
+    setAudible(false); setBuffering(true);
+    audio.play().catch(() => { setPlaying(false); setBuffering(false); setPlayError("Tap play to start listening."); });
   }, [src]);
   async function toggle() {
     const audio = audioRef.current;
     if (!audio) return;
     setPlayError("");
     if (audio.paused) {
-      try { await audio.play(); setPlaying(true); }
-      catch { setPlayError("Playback was blocked. Tap play again or check your device audio settings."); }
-    } else { audio.pause(); setPlaying(false); }
+      try { await audio.play(); }
+      catch { setPlaying(false); setAudible(false); setPlayError("Playback was blocked. Tap play again or check your device audio settings."); }
+    } else { audio.pause(); setPlaying(false); setAudible(false); }
   }
   function seek(value: number) {
     const audio = audioRef.current;
@@ -114,7 +119,7 @@ function RecordingCardControls({ src, title, durationHint, onPlayingChange }: { 
   }
   const readDuration = (audio: HTMLAudioElement) => setDurationValue(Number.isFinite(audio.duration) ? audio.duration : 0);
   return <div className="audio-card-controls" aria-label={`Audio controls for ${title}`}>
-    <audio ref={audioRef} src={src} preload="auto" onLoadedMetadata={(event) => readDuration(event.currentTarget)} onDurationChange={(event) => readDuration(event.currentTarget)} onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} onError={() => { setPlaying(false); setPlayError("This audio file could not be loaded. Try Listen again."); }}/>
+    <audio ref={audioRef} src={src} preload="auto" onLoadedMetadata={(event) => readDuration(event.currentTarget)} onDurationChange={(event) => readDuration(event.currentTarget)} onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)} onPlay={() => setPlaying(true)} onPlaying={() => { setPlaying(true); setAudible(true); setBuffering(false); setPlayError(""); }} onWaiting={() => { setAudible(false); setBuffering(true); }} onStalled={() => setAudible(false)} onCanPlay={() => setBuffering(false)} onPause={() => { setPlaying(false); setAudible(false); }} onEnded={() => { setPlaying(false); setAudible(false); }} onError={() => { setPlaying(false); setAudible(false); setBuffering(false); setPlayError("This audio file could not be loaded. Try Listen again."); }}/>
     <div className="audio-card-volume">
       <button type="button" className="audio-card-round" onClick={() => setVolumeOpen((open) => !open)} aria-label="Volume" aria-expanded={volumeOpen}>{volume === 0 ? <VolumeX size={18}/> : <Volume2 size={18}/>}</button>
       {volumeOpen && <div className="audio-card-volume-pop"><input aria-label="Playback volume" type="range" min={0} max={1} step={0.05} value={volume} onChange={(event) => changeVolume(Number(event.target.value))} style={{ "--audio-progress": `${volume * 100}%` } as CSSProperties}/></div>}
@@ -123,7 +128,7 @@ function RecordingCardControls({ src, title, durationHint, onPlayingChange }: { 
       <input aria-label="Recording timeline" type="range" min={0} max={Math.max(1, total)} step={0.1} value={Math.min(currentTime, total || 0)} onChange={(event) => seek(Number(event.target.value))} style={{ "--audio-progress": `${total > 0 ? Math.min(100, currentTime / total * 100) : 0}%` } as CSSProperties}/>
       <span>{formatAudioTime(currentTime)} / {formatAudioTime(total)}</span>
     </div>
-    <button type="button" className="audio-card-round" onClick={() => void toggle()} aria-label={playing ? "Pause recording" : "Play recording"}>{playing ? <Pause size={18} fill="currentColor"/> : <Play size={18} fill="currentColor"/>}</button>
+    <button type="button" className="audio-card-round" onClick={() => void toggle()} aria-label={buffering && playing ? "Loading recording" : playing ? "Pause recording" : "Play recording"}>{playing && buffering && !audible ? <LoaderCircle size={18} className="spin"/> : playing ? <Pause size={18} fill="currentColor"/> : <Play size={18} fill="currentColor"/>}</button>
     {playError && <span className="audio-card-error" role="alert">{playError}</span>}
   </div>;
 }
@@ -156,7 +161,6 @@ export function RecordingsPage() {
   const cacheKey = `recordings:${(getAuthToken() || "").slice(-12) || "public"}`;
   const [recordings, setRecordings] = useState<any[]>(() => readCache<any[]>(cacheKey)?.value ?? []);
   const [loading, setLoading] = useState(() => !readCache(cacheKey));
-  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [playbackUrl, setPlaybackUrl] = useState("");
@@ -167,7 +171,6 @@ export function RecordingsPage() {
   const load = useCallback(async () => {
     const cached = readCache<any[]>(cacheKey);
     if (!cached) setLoading(true);
-    setRefreshing(true);
     try {
       const [publicResult, privateResult] = await Promise.all([
         api.publicPrayerRecordings(),
@@ -180,9 +183,26 @@ export function RecordingsPage() {
       setRecordings((current) => sameData(current, unique) ? current : unique);
       setError("");
     } catch (cause) { if (!cached) setError(messageOf(cause, "Could not load audio recordings.")); }
-    finally { setLoading(false); setRefreshing(false); }
+    finally { setLoading(false); }
   }, [cacheKey]);
   useEffect(() => { void load(); }, [load]);
+
+  // Real time: the server pings this page over a socket whenever a recording is added, finished, expired or removed,
+  // and the list is refetched quietly in the background. A slow poll and focus check cover hosts without sockets.
+  useEffect(() => {
+    let socket: Socket | null = null;
+    let debounce = 0;
+    const refetch = () => { window.clearTimeout(debounce); debounce = window.setTimeout(() => void load(), 250); };
+    try {
+      socket = io(getSocketOrigin(), { path: "/socket.io", transports: ["websocket", "polling"], reconnectionDelayMax: 10_000 });
+      socket.on("recordings:changed", refetch);
+      socket.on("connect", refetch);
+    } catch { /* The slow background check below still keeps the list current. */ }
+    const onVisible = () => { if (document.visibilityState === "visible") refetch(); };
+    document.addEventListener("visibilitychange", onVisible);
+    const safety = window.setInterval(() => { if (document.visibilityState === "visible" && !(socket?.connected)) void load(); }, 30_000);
+    return () => { window.clearTimeout(debounce); window.clearInterval(safety); document.removeEventListener("visibilitychange", onVisible); socket?.off(); socket?.disconnect(); };
+  }, [load]);
 
   async function play(item: any) {
     setError("");
@@ -198,7 +218,7 @@ export function RecordingsPage() {
   }
 
   return <div className="management-page page-enter">
-    <div className="management-heading"><div><p className="section-overline">LISTEN BACK TO YOUR GATHERINGS</p><h1>Recorded Prayers</h1><p>Public online prayer recordings and private recordings from gatherings you hosted or attended.</p></div><button className="button button-soft refresh-button" onClick={() => void load()} disabled={refreshing} aria-label={refreshing ? "Refreshing recordings" : "Refresh recordings"}>{refreshing ? <span className="dots-loader" role="status" aria-label="Refreshing"><i/><i/><i/></span> : <><RefreshCw size={15}/> Refresh</>}</button></div>
+    <div className="management-heading"><div><p className="section-overline">LISTEN BACK TO YOUR GATHERINGS</p><h1>Recorded Prayers</h1><p>Public online prayer recordings and private recordings from gatherings you hosted or attended.</p></div></div>
     {error && <div className="inline-error" role="alert">{error}</div>}
     {loading ? <div className="management-recording-grid" aria-busy="true" aria-label="Loading audio recordings">{Array.from({ length: 6 }, (_, index) => <AudioCardSkeleton key={index}/>)}</div> : recordings.length === 0 ? <div className="management-empty recordings-empty"><span className="recordings-empty-art" aria-hidden="true"><span className="recordings-empty-ring"/><span className="recordings-empty-icon"><Headphones size={30}/></span></span><b>No completed audio recordings yet</b><span className="recordings-empty-text">Finished public online prayers and recordings from gatherings you attended will appear here.</span><div className="recordings-empty-hints"><span><AudioLines size={14}/> Public prayers</span><span><ShieldCheck size={14}/> Gatherings you attended</span><span><Clock3 size={14}/> Ready after the prayer ends</span></div></div> : <div className="management-recording-grid">{recordings.map((item) => <LazyMount key={item.id} fallback={<AudioCardSkeleton/>}><article className={`management-recording-card audio-recording-card ${playingId === item.id && audioPlaying ? "audio-card-playing" : ""}`}><div className="audio-card-stage"><span className="audio-card-ring audio-card-ring-1"/><span className="audio-card-ring audio-card-ring-2"/><div className="audio-card-body"><span className="audio-card-icon">{playingId === item.id && audioPlaying ? <span className="audio-card-eq" aria-hidden="true"><i/><i/><i/><i/><i/></span> : <AudioLines size={30}/>}</span><i className="audio-card-kind">{item.public ? "PUBLIC PRAYER" : "PRIVATE AUDIO"}</i><b>{item.meetingTitle}</b><span className="audio-card-host">Hosted by {item.hostName}</span><small>{formatDate(item.startedAt)} · {formatBytes(item.fileSize)}</small><small>{item.participants?.length || 0} participants · Expires {formatDate(item.expiresAt)}</small></div><div className="audio-card-actions">{playingId === item.id && playbackUrl ? <RecordingCardControls key={playbackUrl} src={playbackUrl} title={item.meetingTitle} durationHint={item.durationSeconds} onPlayingChange={handlePlayingChange}/> : <button type="button" className="audio-card-listen" onClick={() => void play(item)} disabled={busyId === item.id}>{busyId === item.id ? <><LoaderCircle size={16} className="spin"/> Opening…</> : "Listen"}</button>}</div></div></article></LazyMount>)}</div>}
   </div>;

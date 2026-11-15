@@ -3507,3 +3507,104 @@ html[data-theme="light"] .room-control-dock .room-control-button.control-selecte
 .art-person .art-person-name b { width: auto; height: auto; display: block; border: 0; border-radius: 0; background: none; color: #fff; place-items: normal; }
 .art-controls { justify-content: flex-start; padding-left: 16px; }
 .art-controls span svg { width: 16px; height: 16px; }
+
+/* ===== Round 22: sidebar active style, profile menu, Prayers button, home continue buttons, guest modal ===== */
+
+/* 1) Sidebar: active link has no border and a roomier, better fitting box. */
+.side-link { min-height: 46px; padding: 0 16px; gap: 13px; }
+.side-link.side-link-active, .side-link.side-link-active:hover, .side-link.side-link-active:focus,
+:root[data-theme="light"] .side-link.side-link-active, :root[data-theme="light"] .side-link.side-link-active:hover { border-color: transparent; border-width: 0; padding: 0 17px; min-height: 46px; box-shadow: 0 6px 16px rgba(122, 26, 55, .22); }
+.side-link:not(.side-link-active) { border-width: 0; padding: 0 17px; }
+@media (max-width: 980px) and (min-width: 721px) {
+  .side-link, .side-link.side-link-active, .side-link:not(.side-link-active), :root[data-theme="light"] .side-link.side-link-active { padding: 0; justify-content: center; }
+}
+@media (max-width: 720px) {
+  .sidebar .side-link, .sidebar .side-link.side-link-active, .sidebar .side-link:not(.side-link-active) { padding: 0 17px; }
+}
+
+/* 2) Top bar profile picture opens a profile card (popover on desktop, bottom sheet on phones). */
+.profile-menu { padding-left: 12px; }
+.profile-trigger { display: flex; align-items: center; gap: 8px; padding: 3px 8px 3px 3px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; transition: background .18s ease, border-color .18s ease; }
+.profile-trigger:hover, .profile-trigger-open { background: rgba(255,255,255,.06); border-color: var(--line); }
+.profile-trigger:focus-visible { outline: 2px solid var(--burgundy-bright); outline-offset: 2px; }
+.profile-trigger .profile-avatar { border-radius: 50%; }
+.profile-chevron { color: var(--quiet); transition: transform .2s ease; }
+.profile-trigger-open .profile-chevron { transform: rotate(180deg); }
+:root[data-theme="light"] .profile-trigger:hover, :root[data-theme="light"] .profile-trigger-open { background: #f8efea; border-color: #eaded8; }
+.profile-sheet-backdrop { position: fixed; inset: 0; z-index: 130; background: transparent; animation: backdrop-in .14s ease both; }
+.profile-sheet { position: fixed; top: var(--profile-top, 72px); right: var(--profile-right, 16px); width: min(320px, calc(100vw - 24px)); display: flex; flex-direction: column; gap: 14px; padding: 20px 16px 16px; border: 1px solid var(--line-strong); border-radius: 18px; background: linear-gradient(150deg, #261a20, #1a1216); color: #f8f1ef; box-shadow: 0 24px 70px rgba(0,0,0,.5); animation: modal-in .18s ease both; }
+.profile-sheet-grab { display: none; }
+.profile-sheet-close { position: absolute; top: 10px; right: 10px; width: 30px; height: 30px; display: grid; place-items: center; border: 0; border-radius: 50%; color: var(--muted); background: transparent; cursor: pointer; }
+.profile-sheet-close:hover { background: rgba(255,255,255,.07); }
+.profile-sheet-head { display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 4px; text-align: center; min-width: 0; }
+.profile-sheet-photo { width: 76px; height: 76px; font-size: 30px; margin-bottom: 8px; border: 2px solid rgba(255,255,255,.12); }
+.profile-sheet-head b { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: Manrope, sans-serif; font-size: 16px; }
+.profile-sheet-head small { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
+.profile-sheet-actions { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+.profile-sheet-action { display: flex; align-items: center; gap: 12px; min-height: 46px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 12px; background: rgba(255,255,255,.04); color: #eadfe1; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; text-align: left; }
+.profile-sheet-action:hover { background: rgba(255,255,255,.08); }
+.profile-sheet-danger { color: #ff9aa8; }
+:root[data-theme="light"] .profile-sheet { background: #fffdfa; color: #38222c; border-color: #eaded8; box-shadow: 0 24px 60px rgba(66,30,42,.18); }
+:root[data-theme="light"] .profile-sheet-head small, :root[data-theme="light"] .profile-sheet-close { color: #7f6c74; }
+:root[data-theme="light"] .profile-sheet-actions { border-top-color: #eaded8; }
+:root[data-theme="light"] .profile-sheet-action { background: #fff8f3; border-color: #e7d7d0; color: #5a3040; }
+:root[data-theme="light"] .profile-sheet-action:hover { background: #f8efea; }
+:root[data-theme="light"] .profile-sheet-danger { color: #b3263f; }
+@media (max-width: 720px) {
+  .profile-trigger { padding: 0; border: 0; }
+  .profile-trigger .profile-name, .profile-trigger .profile-chevron { display: none; }
+  .profile-sheet-backdrop { background: rgba(8,4,6,.62); backdrop-filter: blur(4px); }
+  .profile-sheet { top: auto; right: 0; left: 0; bottom: 0; width: 100%; max-height: 90dvh; border-radius: 22px 22px 0 0; padding: 12px 18px calc(18px + env(safe-area-inset-bottom)); animation: profile-sheet-up .24s cubic-bezier(.2,.8,.2,1) both; }
+  .profile-sheet-grab { display: block; width: 40px; height: 4px; margin: 0 auto 4px; border-radius: 99px; background: rgba(255,255,255,.22); }
+  :root[data-theme="light"] .profile-sheet-grab { background: #dccbc6; }
+  .profile-sheet-close { top: 14px; right: 14px; }
+  .profile-sheet-action { min-height: 50px; font-size: 14px; }
+}
+@keyframes profile-sheet-up { from { transform: translateY(100%); } to { transform: none; } }
+
+/* 3) Mobile Prayers button: presses down only a little, and its label never changes or shrinks on tap. */
+@media (max-width: 720px) {
+  .mobile-bottom-nav a.mbn-fab:active, .mobile-bottom-nav a.mbn-fab:focus { transform: scale(.95); box-shadow: 0 6px 14px rgba(143,33,65,.48); }
+  .mobile-bottom-nav a.mbn-fab .mbn-fab-label, .mobile-bottom-nav a.mbn-fab.mbn-fab-active .mbn-fab-label,
+  :root[data-theme="light"] .mobile-bottom-nav a.mbn-fab .mbn-fab-label, :root[data-theme="light"] .mobile-bottom-nav a.mbn-fab.mbn-fab-active .mbn-fab-label { color: #a28d96; transition: none; }
+  :root[data-theme="light"] .mobile-bottom-nav a.mbn-fab .mbn-fab-label, :root[data-theme="light"] .mobile-bottom-nav a.mbn-fab.mbn-fab-active .mbn-fab-label { color: #76636a; }
+  /* Counter the button's 5% press so the label keeps its exact size and place. */
+  .mobile-bottom-nav a.mbn-fab:active .mbn-fab-label { transform: translate(-50%, 2.4px) scale(1.0526); }
+  .mbn-fab:active { transform: scale(.95); }
+}
+
+/* 4) Home "At a glance": Continue buttons. */
+.stat-continue { position: relative; z-index: 1; align-self: center; margin-left: auto; flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 0 13px; border: 1px solid var(--line-strong); border-radius: 999px; background: rgba(255,255,255,.05); color: #f2e6e8; font: inherit; font-size: 11px; font-weight: 800; cursor: pointer; transition: background .18s ease, transform .18s ease; -webkit-tap-highlight-color: transparent; }
+.stat-continue:hover { background: rgba(255,255,255,.1); }
+.stat-continue:active { transform: scale(.96); }
+.stat-continue svg { transition: transform .18s ease; }
+.stat-continue:hover svg { transform: translateX(2px); }
+:root[data-theme="light"] .stat-continue { background: #fff6f0; border-color: #e7d3cb; color: #7a1a37; }
+:root[data-theme="light"] .stat-continue:hover { background: #f8e8e0; }
+@media (max-width: 720px) { .stat-continue { min-height: 32px; padding: 0 11px; } }
+
+/* 5) Guest: "Continue as Guest" looks like the Google button; names are collected in a responsive modal. */
+.guest-access-form { margin-top: 12px; }
+.guest-continue-button { box-sizing: border-box; display: flex; align-items: center; justify-content: center; gap: 10px; width: min(100%, 360px); height: 40px; margin: 4px auto 0; padding: 0 16px; border: 1px solid #dadce0; border-radius: 999px; background: #fff; color: #3c4043; font: inherit; font-size: 14px; font-weight: 500; letter-spacing: .01em; cursor: pointer; transition: background .15s ease, box-shadow .15s ease; -webkit-tap-highlight-color: transparent; }
+.guest-continue-button:hover { background: #f8f9fa; box-shadow: 0 1px 3px rgba(60,64,67,.25); }
+.guest-continue-button:active { background: #f1f3f4; }
+.guest-continue-button:focus-visible { outline: 2px solid #1a73e8; outline-offset: 2px; }
+:root[data-theme="dark"] .guest-continue-button { background: #131314; border-color: #8e918f; color: #e3e3e3; }
+:root[data-theme="dark"] .guest-continue-button:hover { background: #1f1f20; }
+.guest-identity { position: relative; }
+.guest-change-name { margin-left: auto; padding: 6px 12px; border: 1px solid var(--line-strong); border-radius: 999px; background: transparent; color: inherit; font: inherit; font-size: 11px; font-weight: 800; cursor: pointer; }
+.guest-change-name:hover { background: rgba(255,255,255,.07); }
+:root[data-theme="light"] .guest-change-name { border-color: #e1cfc8; color: #7a1a37; }
+:root[data-theme="light"] .guest-change-name:hover { background: #f8efea; }
+.guest-modal-content { display: flex; flex-direction: column; align-items: stretch; }
+.guest-modal-avatar { align-self: center; width: 64px; height: 64px; margin-bottom: 14px; font-size: 28px; transition: background .2s ease; }
+.guest-modal-content .section-overline, .guest-modal-content h2, .guest-modal-content .modal-subtitle { text-align: center; }
+.guest-modal-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 20px 0 16px; }
+.guest-modal-fields label { display: grid; gap: 6px; min-width: 0; }
+.guest-modal-fields label span { color: #f4e9ed; font-size: 12px; font-weight: 800; }
+.guest-modal-fields input { width: 100%; box-sizing: border-box; min-height: 46px; border: 1px solid rgba(208,174,186,.3); border-radius: 12px; padding: 0 13px; color: #fff4f6; background: rgba(255,255,255,.045); font: inherit; font-size: 16px; outline: none; }
+.guest-modal-fields input:focus { border-color: #d6a0b2; box-shadow: 0 0 0 3px rgba(214,160,178,.13); }
+:root[data-theme="light"] .guest-modal-fields label span { color: #593644; }
+:root[data-theme="light"] .guest-modal-fields input { color: #452a36; border-color: #e8d9dc; background: #fff8f7; }
+.guest-modal-save { min-height: 46px; }
+@media (max-width: 520px) { .guest-modal-fields { grid-template-columns: 1fr; } }

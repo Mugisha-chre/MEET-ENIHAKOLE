@@ -5,6 +5,11 @@ const AUTH_KEY = "meet-enihakole-auth-token";
 const GUEST_AUTH_KEY = "meet-enihakole-guest-token";
 const GUEST_PROFILE_KEY = "meet-enihakole-guest-profile";
 
+/** Origin of the API host (without /api), used for the realtime socket. */
+export function getSocketOrigin(): string {
+  return API_BASE.replace(/\/api$/, "");
+}
+
 export function getAuthToken(): string | null {
   return localStorage.getItem(AUTH_KEY) || sessionStorage.getItem(GUEST_AUTH_KEY);
 }
