@@ -1,5 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { LoaderCircle } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { getAuthToken } from "./api";
 
 const CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID || "").trim();
@@ -104,18 +103,36 @@ export function GoogleContinueButton({ onCredential, oneTap = false, onError }: 
     handler = (credential) => callbackRef.current(credential);
     const paint = (id: GoogleId) => {
       if (cancelled || !holder.current) return;
-      const width = Math.max(200, Math.min(360, holder.current.offsetWidth || 320));
+      // Never wider than the space it sits in: Google then truncates a long name/email with "…" inside the button itself.
+      const box = holder.current.parentElement || holder.current;
+      const available = Math.floor(box.getBoundingClientRect().width) || Math.floor(holder.current.getBoundingClientRect().width) || Math.max(180, Math.min(320, window.innerWidth - 72));
+      const width = Math.max(180, Math.min(360, available));
+      if (lastWidth === width && holder.current.childElementCount > 0) return;
+      lastWidth = width;
       holder.current.innerHTML = "";
       id.renderButton(holder.current, { ...BUTTON_OPTIONS, theme: buttonTheme(), width });
-      if (oneTap) id.prompt();
+      if (oneTap && !prompted) { prompted = true; id.prompt(); }
     };
+    let lastWidth = 0;
+    let prompted = false;
+    let observer: ResizeObserver | null = null;
+    let resizeTimer = 0;
     const ready = initializeNow();
-    (ready ? Promise.resolve(ready) : ensureInitialized()).then(paint).catch((cause: unknown) => {
+    (ready ? Promise.resolve(ready) : ensureInitialized()).then((id) => {
+      paint(id);
+      const box = holder.current?.parentElement;
+      if (box && typeof ResizeObserver !== "undefined") {
+        observer = new ResizeObserver(() => { window.clearTimeout(resizeTimer); resizeTimer = window.setTimeout(() => paint(id), 120); });
+        observer.observe(box);
+      }
+    }).catch((cause: unknown) => {
       const message = cause instanceof Error ? cause.message : "Google sign-in is unavailable.";
       if (!cancelled) { setFailed(message); onError?.(message); }
     });
     return () => {
       cancelled = true;
+      observer?.disconnect();
+      window.clearTimeout(resizeTimer);
       if (handler) handler = null;
       if (oneTap) { try { window.google?.accounts.id.cancel(); } catch { /* One Tap already closed. */ } }
     };
@@ -162,7 +179,8 @@ export function avatarColor(name: string): string {
   return AVATAR_COLORS[index % AVATAR_COLORS.length];
 }
 
-/** Profile photo in a circle. While it downloads a small spinner shows (never a "?"); initials appear only if there is no photo or it fails. */
+/** Profile photo in a circle. The picture is lazy loaded: a soft placeholder shows while it downloads (no spinner), then the photo fades in.
+ *  Without a photo (or if it fails) a Google-style letter avatar is shown, and its letter scales with the avatar's size. */
 export function ProfilePhoto({ src, name, className = "", size = 256 }: { src?: string; name: string; className?: string; size?: number }) {
   const url = src ? hiResPhoto(src, size) : "";
   const [state, setState] = useState<"loading" | "ready" | "error">(() => !url ? "error" : loadedPhotos.has(url) ? "ready" : "loading");
@@ -170,11 +188,23 @@ export function ProfilePhoto({ src, name, className = "", size = 256 }: { src?: 
   const words = name.replace(/[<>]/g, "").trim().split(/\s+/).filter(Boolean);
   const letter = Array.from(words[0] || "")[0]?.toUpperCase() || "";
   const markReady = () => { loadedPhotos.add(url); setState("ready"); };
-  const spinner = <span className="profile-photo-spinner" aria-hidden="true"><LoaderCircle className="spin"/></span>;
   const letterAvatar = state === "error" && Boolean(letter);
-  return <span className={`profile-photo ${state === "loading" ? "profile-photo-loading" : ""} ${letterAvatar ? "profile-photo-letter" : ""} ${className}`} style={letterAvatar ? { background: avatarColor(name), color: "#fff" } : undefined}>
-    {url && state !== "error" && <img ref={(el) => { if (el?.complete && el.naturalWidth > 0 && state === "loading") markReady(); }} src={url} alt="" loading="eager" decoding="async" referrerPolicy="no-referrer" draggable={false} onLoad={markReady} onError={() => setState("error")} />}
-    {state === "loading" ? spinner : state === "error" ? (letter ? <b>{letter}</b> : spinner) : null}
+  const holder = useRef<HTMLSpanElement>(null);
+  const [letterSize, setLetterSize] = useState(0);
+  useLayoutEffect(() => {
+    const node = holder.current;
+    if (!letterAvatar || !node) return;
+    const measure = () => setLetterSize(Math.round(node.getBoundingClientRect().width * 0.46));
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [letterAvatar]);
+  const style: CSSProperties | undefined = letterAvatar ? { background: avatarColor(name), color: "#fff", ...(letterSize > 0 ? { fontSize: letterSize } : {}) } : undefined;
+  return <span ref={holder} className={`profile-photo ${state === "loading" ? "profile-photo-loading" : ""} ${letterAvatar ? "profile-photo-letter" : ""} ${className}`} style={style}>
+    {url && state !== "error" && <img ref={(el) => { if (el?.complete && el.naturalWidth > 0 && state === "loading") markReady(); }} src={url} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" draggable={false} onLoad={markReady} onError={() => setState("error")} />}
+    {letterAvatar ? <b>{letter}</b> : null}
   </span>;
 }
 

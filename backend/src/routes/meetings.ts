@@ -251,7 +251,7 @@ router.post("/", requireRegisteredAuth, requireAuth, async (req, res) => {
 
   const startsAt = new Date(parsed.data.startsAt);
   if (!Number.isFinite(startsAt.getTime())) return res.status(400).json({ error: "Choose a valid start date and time." });
-  if (startsAt.getTime() <= Date.now() + 30_000) return res.status(400).json({ error: "Schedule the gathering at least 30 seconds in the future." });
+  if (startsAt.getTime() <= Date.now() + 30_000) return res.status(400).json({ error: `Schedule the ${parsed.data.meetingType === "prayer" ? "prayer" : "meeting"} at least 30 seconds in the future.` });
   const maxDuration = Number(process.env.MEETING_MAX_DURATION_MINUTES || 240);
   if (parsed.data.durationMinutes > maxDuration) {
     return res.status(400).json({ error: `Meetings can be up to ${maxDuration} minutes long.` });
@@ -361,7 +361,7 @@ router.get("/:slug/recording", async (req, res) => {
   try {
     const meeting = await Meeting.findOne({ slug: req.params.slug }).select("_id slug meetingType visibility status title activeRecordingId recordingStatus").lean();
     if (!meeting) return res.status(404).json({ error: "Meeting not found." });
-    if (meeting.status !== "ended") return res.status(409).json({ error: "Audio recordings become available after the gathering ends." });
+    if (meeting.status !== "ended") return res.status(409).json({ error: `Audio recordings become available after the ${meeting.meetingType === "prayer" ? "prayer" : "meeting"} ends.` });
     const active = meeting.activeRecordingId
       ? await Recording.findById(meeting.activeRecordingId).select("status stagedAvailable lastError").lean()
       : null;
@@ -377,7 +377,7 @@ router.get("/:slug/recording", async (req, res) => {
       $or: [{ deletionStatus: "active" }, { deletionStatus: { $exists: false } }, { deletionStatus: null }],
     }).sort({ endedAt: -1, createdAt: -1 }).lean();
     if (!recording || !recording.cloudinaryPublicId) {
-      return res.status(404).json({ error: "No completed audio recording is available for this gathering." });
+      return res.status(404).json({ error: `No completed audio recording is available for this ${meeting.meetingType === "prayer" ? "prayer" : "meeting"}.` });
     }
     const expiry = recording.expiresAt || new Date((recording.endedAt || recording.createdAt).getTime() + 30 * 24 * 60 * 60 * 1000);
     if (expiry.getTime() <= Date.now()) return res.status(410).json({ error: "This recording has reached the end of its 30-day retention period." });
@@ -472,7 +472,7 @@ router.post("/:slug/token", async (req, res) => {
     // Both meeting types are closed until their scheduled start instant. The
     // server clock is authoritative even if a client enables the Join button.
     if (!isHost && meeting.status === "scheduled" && now.getTime() < meeting.startsAt.getTime()) {
-      return res.status(409).json({ error: "Not Yet Open. This gathering becomes available at its scheduled start time.", code: "NOT_YET_OPEN", opensAt: meeting.startsAt.toISOString() });
+      return res.status(409).json({ error: `Not Yet Open. This ${meeting.meetingType === "prayer" ? "prayer" : "meeting"} becomes available at its scheduled start time.`, code: "NOT_YET_OPEN", opensAt: meeting.startsAt.toISOString() });
     }
     // The host may start early; other people wait. Once the scheduled start arrives the room becomes joinable automatically.
     // The first attendee may initialize the room; only the owner receives host role.

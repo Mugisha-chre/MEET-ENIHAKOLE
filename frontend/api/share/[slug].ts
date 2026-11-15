@@ -51,7 +51,7 @@ export default async function handler(req: Request, res: Response) {
     ? (configuredApiUrl.endsWith("/api") ? configuredApiUrl : `${configuredApiUrl}/api`)
     : "";
   let title = "You're invited · MEET ENIHAKOLE";
-  let description = "Join ENIHAKOLE CHOIR for an online prayer, rehearsal, or gathering.";
+  let description = "Join ENIHAKOLE CHOIR for an online prayer, rehearsal, or meeting.";
   let image = `${appUrl}/og-default.png`;
   let owner = "ENIHAKOLE CHOIR";
   let start = "Open the invitation to see meeting details";

@@ -512,12 +512,17 @@ export default function App() {
     setScheduleOpen(true);
   }, [user]);
   const completeAuth = useCallback((nextUser: User, token: string) => {
+    // Switching to a different account: drop the previous account's cached data so nothing of it shows for the new one.
+    if (user && user.id !== nextUser.id) {
+      removeCache("mine"); clearCachePrefix("meeting:"); clearCachePrefix("admin:"); clearCachePrefix("recordings:"); clearCachePrefix("notes:");
+      setMeetings([]);
+    }
     saveAuthToken(token);
     setUser(nextUser);
     writeCache("user", nextUser);
     setAuthOpen(false);
     void refreshMeetings(true);
-  }, [refreshMeetings]);
+  }, [refreshMeetings, user]);
   const signOut = useCallback(() => {
     void api.logout().catch(() => undefined);
     googleSignOut();
@@ -576,7 +581,7 @@ export default function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
       {activeRoomSlug && <MeetingRoomPage key={activeRoomSlug} slug={activeRoomSlug} isActive={activeRoomVisible}/>}
-      {authOpen && <AuthModal onClose={() => setAuthOpen(false)} onAuthenticated={completeAuth} />}
+      {authOpen && <AuthModal onClose={() => setAuthOpen(false)} onAuthenticated={completeAuth} currentName={user?.displayName} />}
       {scheduleOpen && user && (user.canCreateMeetings || user.isAdmin) && <ScheduleModal onClose={() => setScheduleOpen(false)} onCreated={(meeting) => {
         if (meeting.meetingType === "prayer") {
           const merge = (list: Meeting[]) => [meeting, ...list.filter((item) => item.slug !== meeting.slug)];
@@ -716,7 +721,7 @@ function RouteScrollReset() {
 const HELP_GUIDES: { id: string; icon: ReactNode; title: string; summary: string; steps: string[] }[] = [
   { id: "join", icon: <HeartHandshake size={18}/>, title: "Joining a prayer room", summary: "Enter a live or upcoming online prayer.", steps: [
     "Open Prayers from the sidebar (or the bottom bar on your phone) and find the prayer you want.",
-    "Tap the card to open its details, then choose Join gathering. If the prayer has not started yet the room opens automatically at its scheduled time.",
+    "Tap the card to open its details, then choose Join prayer. If the prayer has not started yet the room opens automatically at its scheduled time.",
     "Sign in with Google, or continue as a guest with your first and last name. Guest access only works for that one prayer.",
     "Choose whether your camera and microphone should be on, then tap Join. You can change both once you are inside the room.",
   ] },
@@ -733,14 +738,14 @@ const HELP_GUIDES: { id: string; icon: ReactNode; title: string; summary: string
   ] },
   { id: "recordings", icon: <Headphones size={18}/>, title: "Viewing recorded prayers", summary: "Listen back to finished prayers.", steps: [
     "Open Recorded prayers from the sidebar (or Recorded on your phone).",
-    "Public prayer recordings and recordings from gatherings you attended appear as cards once the prayer has finished and the audio is ready.",
+    "Public prayer recordings and recordings from prayers you attended appear as cards once the prayer has finished and the audio is ready.",
     "Tap Listen on a card to play it. Use the timeline to skip around and the volume control to adjust the sound.",
     "Recordings are kept for a limited time, so each card shows when it expires. The list updates by itself when a new recording is ready.",
   ] },
   { id: "room", icon: <Video size={18}/>, title: "Inside the prayer room", summary: "Camera, microphone, chat and notes.", steps: [
     "Use the microphone and camera buttons at the bottom of the room to mute or unmute yourself at any time.",
     "Open chat to send messages, raise your hand to ask to speak, and use reactions to respond without interrupting.",
-    "Meeting notes are saved for the gathering, and you can open them again later from the ended prayer page.",
+    "Meeting notes are saved for every prayer and meeting, and you can open them again later from the ended prayer page.",
     "Use the red leave button when you are done. You can rejoin while the prayer is still live.",
   ] },
   { id: "trouble", icon: <LifeBuoy size={18}/>, title: "Troubleshooting", summary: "Fix common audio, video and connection problems.", steps: [
@@ -878,7 +883,7 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
             <ThemeToggle />
             {user ? (
               <div className="profile-menu">
-                <ProfileMenu user={user} onSignOut={signOut} onChangeAccount={() => { signOut(); openAuth(); }} />
+                <ProfileMenu user={user} onSignOut={signOut} onChangeAccount={openAuth} />
               </div>
             ) : <button className="button button-soft button-small" onClick={openAuth}><LogIn size={16} /> Sign in</button>}
             {(user?.canCreateMeetings || user?.isAdmin) && <button className="button button-primary button-small topbar-create" onClick={() => openSchedule(false)}><Plus size={17} /> Create</button>}
@@ -893,7 +898,7 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
         <Link to="/" className={active === "home" ? "mobile-nav-active" : ""} aria-current={active === "home" ? "page" : undefined}><Home size={20}/><span>Home</span></Link>
         {(user?.canCreateMeetings || user?.isAdmin)
           ? <button type="button" className="mbn-fab" aria-label="Create meeting" onClick={() => openSchedule(false)}><Plus size={26} strokeWidth={2.4}/></button>
-          : <Link to="/meetings" className={`mbn-fab mbn-fab-link ${active === "meetings" ? "mbn-fab-active" : ""}`} aria-label="Prayers" aria-current={active === "meetings" ? "page" : undefined}><HeartHandshake size={26} strokeWidth={2.4}/><span className="mbn-fab-label">Prayers</span></Link>}
+          : <Link to="/meetings" onClick={(event) => event.currentTarget.blur()} className={`mbn-fab mbn-fab-link ${active === "meetings" ? "mbn-fab-active" : ""}`} aria-label="Prayers" aria-current={active === "meetings" ? "page" : undefined}><HeartHandshake size={26} strokeWidth={2.4}/><span className="mbn-fab-label">Prayers</span></Link>}
         {(user?.canCreateMeetings || user?.isAdmin)
           ? <Link to="/meetings" className={active === "meetings" ? "mobile-nav-active" : ""} aria-current={active === "meetings" ? "page" : undefined}><HeartHandshake size={20}/><span>Prayers</span></Link>
           : <Link to="/recordings" className={active === "recordings" ? "mobile-nav-active" : ""} aria-current={active === "recordings" ? "page" : undefined}><AudioLines size={20}/><span>Recorded</span></Link>}
@@ -942,7 +947,7 @@ function Dashboard() {
       <section className="section-block">
         <div className="section-heading"><div><p className="section-overline">YOUR SPACE</p><h2>At a glance</h2></div><button className="text-action" onClick={() => navigate("/meetings")}>View prayers <ArrowRight size={15}/></button></div>
         <div className="stats-grid">
-          <div className="stat-card"><span className="stat-icon stat-burgundy"><CalendarDays size={19}/></span><div><span className="stat-label">Upcoming Online Prayers</span><strong>{loadingMeetings ? "—" : upcoming.filter((m) => m.status === "scheduled").length.toString().padStart(2, "0")}</strong></div><button type="button" className="stat-continue" onClick={() => navigate("/meetings")} aria-label="Continue to Upcoming Online Prayers">Continue<ArrowRight size={14}/></button><span className="stat-sheen"/></div>
+          <div className="stat-card"><span className="stat-icon stat-burgundy"><CalendarDays size={19}/></span><div><span className="stat-label">Upcoming Prayers</span><strong>{loadingMeetings ? "—" : upcoming.filter((m) => m.status === "scheduled").length.toString().padStart(2, "0")}</strong></div><button type="button" className="stat-continue" onClick={() => navigate("/meetings")} aria-label="Continue to Upcoming Prayers">Continue<ArrowRight size={14}/></button><span className="stat-sheen"/></div>
           <div className="stat-card"><span className="stat-icon stat-gold"><Video size={19}/></span><div><span className="stat-label">Live right now</span><strong>{loadingMeetings ? "—" : String(liveCount).padStart(2, "0")}</strong>{liveCount > 0 && <small>Join the conversation</small>}</div><button type="button" className="stat-continue" onClick={() => navigate("/meetings")} aria-label="Continue to live prayers">Continue<ArrowRight size={14}/></button><span className="stat-sheen"/></div>
           <div className="stat-card"><span className="stat-icon stat-rose"><Users size={19}/></span><div><span className="stat-label">Your community</span><strong>ENIHAKOLE</strong></div><span className="stat-sheen"/></div>
         </div>
@@ -998,7 +1003,7 @@ function MeetingCard({ meeting, priority = false }: { meeting: Meeting; priority
 
 function MeetingsPage() {
   const { user, meetings, publicMeetings, loadingMeetings, openSchedule, refreshMeetings } = useAppContext();
-  // Everything the person can see: their own meetings plus every public gathering, without duplicates.
+  // Everything the person can see: their own meetings plus every public prayer, without duplicates.
   const visible = [...(user ? meetings : []), ...publicMeetings].filter((meeting) => meeting.meetingType === "prayer").filter((meeting, index, array) => array.findIndex((other) => other.slug === meeting.slug) === index);
   const [filter, setFilter] = useState<"upcoming" | "past" | "all">(() => {
     const requested = new URLSearchParams(window.location.search).get("filter");
@@ -1024,9 +1029,9 @@ function MeetingsPage() {
   const showSkeleton = loadingMeetings || filtering;
   return (
     <div className="meetings-page page-enter">
-      <div className="page-title-row"><div><h1>Prayers</h1></div>{(user?.canCreateMeetings || user?.isAdmin) && <button className="button button-primary" onClick={() => openSchedule(false)}><Plus size={17}/> Create a gathering</button>}</div>
+      <div className="page-title-row"><div><h1>Prayers</h1></div>{(user?.canCreateMeetings || user?.isAdmin) && <button className="button button-primary" onClick={() => openSchedule(false)}><Plus size={17}/> Create a prayer</button>}</div>
       <div className="filter-bar"><div className="segmented-filter">{(["upcoming", "past", "all"] as const).map((value) => <button key={value} className={filter === value ? "filter-active" : ""} onClick={() => changeFilter(value)}>{value === "upcoming" ? "Upcoming" : value === "past" ? "Past prayers" : "All prayers"}</button>)}</div><span className="meeting-count">{showSkeleton ? "Loading…" : `${list.length} ${list.length === 1 ? "prayer" : "prayers"}`}</span></div>
-      {showSkeleton ? <div className="meeting-card-grid" aria-busy="true" aria-label="Loading prayers">{Array.from({ length: 6 }, (_, index) => <MeetingCardSkeleton key={index}/>)}</div> : list.length ? <div className="meeting-card-grid">{list.map((meeting, index) => <MeetingCard key={meeting.slug} meeting={meeting} priority={index < 6}/>)}</div> : <div className="empty-state empty-large"><div className="empty-icon"><CalendarDays size={23}/></div><div><h3>{filter === "past" ? "No past prayers yet" : "A fresh page for your next gathering"}</h3><p>Online Prayers will appear here when they are scheduled.</p></div><Link className="button button-primary" to="/recordings"><AudioLines size={16}/> Recorded Prayers</Link></div>}
+      {showSkeleton ? <div className="meeting-card-grid" aria-busy="true" aria-label="Loading prayers">{Array.from({ length: 6 }, (_, index) => <MeetingCardSkeleton key={index}/>)}</div> : list.length ? <div className="meeting-card-grid">{list.map((meeting, index) => <MeetingCard key={meeting.slug} meeting={meeting} priority={index < 6}/>)}</div> : <div className="empty-state empty-large"><div className="empty-icon"><CalendarDays size={23}/></div><div><h3>{filter === "past" ? "No past prayers yet" : "A fresh page for your next prayer"}</h3><p>Online Prayers will appear here when they are scheduled.</p></div><Link className="button button-primary" to="/recordings"><AudioLines size={16}/> Recorded Prayers</Link></div>}
     </div>
   );
 }
@@ -1094,7 +1099,7 @@ function MeetingPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug, cacheKey]);
 
-  // While a gathering is still scheduled, quietly watch for the host starting it early so waiting people see the Join button right away.
+  // While a session is still scheduled, quietly watch for the host starting it early so waiting people see the Join button right away.
   const waitingForStart = meeting?.status === "scheduled";
   useEffect(() => {
     if (!waitingForStart) return;
@@ -1111,12 +1116,13 @@ function MeetingPage() {
   }, [waitingForStart, slug, cacheKey]);
 
   useEffect(() => { if (user?.picture) void preloadPhoto(user.picture, 512); }, [user?.picture]);
+  useEffect(() => { if (user) setError((current) => current === IDENTITY_NEEDED_MESSAGE ? "" : current); }, [user]);
   useEffect(() => {
     const tick = window.setInterval(() => setClockNow(Date.now() + serverClockOffsetRef.current), 1000);
     return () => window.clearInterval(tick);
   }, []);
 
-  // An ended gathering may have a synchronized audio-only recording. The invitation
+  // An ended prayer or meeting may have a synchronized audio-only recording. The invitation
   // slug is the existing bearer-share permission for a private Meeting.
   useEffect(() => {
     if (!meeting || (meeting.status !== "ended" && meeting.status !== "cancelled")) return;
@@ -1143,7 +1149,7 @@ function MeetingPage() {
         } else if (result.pending) {
           setPastRecordingError("The audio is still being processed. Open this invitation again shortly to listen.");
         } else {
-          setPastRecordingError("No completed audio recording is available for this gathering.");
+          setPastRecordingError(`No completed audio recording is available for this ${kindOf(meeting)}.`);
         }
       } catch (cause) {
         if (!cancelled) setPastRecordingError(cause instanceof Error ? cause.message : "No audio recording is available.");
@@ -1194,7 +1200,7 @@ function MeetingPage() {
       setError(`Not Yet Open. Please return at ${formatTime(meeting.startsAt, meeting.timezone)}.`);
       return;
     }
-    if (!user && !getGuestProfile(slug)) { setError("Continue with Google or enter your first and last name to join as a guest."); return; }
+    if (!user && !getGuestProfile(slug)) { setError(IDENTITY_NEEDED_MESSAGE); return; }
     if (joining || mediaPrompt) return;
     await continueJoin(micOn, cameraOn);
   }
@@ -1202,7 +1208,7 @@ function MeetingPage() {
   async function enterRoom(audio: boolean, video: boolean) {
     if (!meeting || (!user && !getGuestProfile(slug)) || enteringRef.current) return;
     if (!meeting.isOwner && meeting.status === "scheduled" && Date.now() + serverClockOffsetRef.current < new Date(meeting.startsAt).getTime()) {
-      setError("Not Yet Open. This gathering becomes available at its scheduled start time.");
+      setError(`Not Yet Open. This ${kindOf(meeting)} becomes available at its scheduled start time.`);
       return;
     }
     if (activeRoomSlugInApp) {
@@ -1253,6 +1259,7 @@ function MeetingPage() {
     const result = await api.guestSession(slug, displayName);
     saveGuestAuthToken(result.token, { guestId: result.guestId, displayName: result.displayName, meetingSlug: slug });
     setGuestName(result.displayName);
+    setError((current) => current === IDENTITY_NEEDED_MESSAGE ? "" : current);
     setGuestModalOpen(false);
   }
 
@@ -1271,7 +1278,7 @@ function MeetingPage() {
   async function share() {
     const url = `${window.location.origin}/share/${encodeURIComponent(slug)}`;
     try {
-      if (navigator.share) await navigator.share({ title: meeting?.title || "MEET ENIHAKOLE", text: "Join our online gathering.", url });
+      if (navigator.share) await navigator.share({ title: meeting?.title || "MEET ENIHAKOLE", text: `Join our online ${kindOf(meeting)}.`, url });
       else { await navigator.clipboard.writeText(url); window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Invitation link copied." } })); }
     } catch { /* Share sheet dismissed. */ }
   }
@@ -1279,8 +1286,9 @@ function MeetingPage() {
   if (loading) return <StandaloneLoading label="Opening your invitation…"/>;
   if (!meeting) return <StandaloneError message={error || "This meeting could not be found."}/>;
   const ended = meeting.status === "ended" || meeting.status === "cancelled";
+  const kind = kindOf(meeting);
   const opensAt = new Date(meeting.startsAt).getTime();
-  // The host may always start their own gathering early; everyone else waits for the scheduled time.
+  // The host may always start their own session early; everyone else waits for the scheduled time.
   const notYetOpen = !meeting.isOwner && meeting.status === "scheduled" && Number.isFinite(opensAt) && clockNow < opensAt;
 
   return (
@@ -1290,21 +1298,21 @@ function MeetingPage() {
         <section className="join-panel">
           <div className="join-cover join-cover-thumb"><img className="join-cover-img" src={meetingImage(meeting)} alt={meeting.title} decoding="async" fetchPriority="high" draggable={false}/><div className="thumb-corner"><span className={`meeting-status thumb-status ${meeting.status === "live" ? "meeting-status-live" : ""}`}><span/>{getMeetingStateLabel(meeting)}</span><button type="button" className="thumb-share-button" onClick={share} aria-label="Share invitation"><Share2 size={15}/><span>Share invitation</span></button></div></div>
           <form className="join-form" onSubmit={join}>
-            <div className="join-form-heading"><h2>{ended ? "This gathering has ended" : notYetOpen ? "Not Yet Open" : meeting.status === "live" ? "Join the gathering" : meeting.isOwner ? "Your gathering is ready" : "You're in the right place"}</h2><p>{ended ? "This invitation is now closed. Available audio and notes are below." : notYetOpen ? `This gathering opens at ${formatTime(meeting.startsAt, meeting.timezone)}. Please check again when it becomes available.` : meeting.status === "live" ? "Enter your details and come on in." : "The room becomes available automatically at its scheduled start time."}</p></div>
+            <div className="join-form-heading"><h2>{ended ? `This ${kind} has ended` : notYetOpen ? "Not Yet Open" : meeting.status === "live" ? `Join the ${kind}` : meeting.isOwner ? `Your ${kind} is ready` : "You're in the right place"}</h2><p>{ended ? "This invitation is now closed. Available audio and notes are below." : notYetOpen ? `This ${kind} opens at ${formatTime(meeting.startsAt, meeting.timezone)}. Please check again when it becomes available.` : meeting.status === "live" ? "Enter your details and come on in." : "The room becomes available automatically at its scheduled start time."}</p></div>
             {user && !ended && <div className="join-identity"><ProfilePhoto src={user.picture} name={user.displayName} className="join-identity-photo"/><span><b>{user.displayName}</b><small>{user.email}</small></span><button type="button" className="error-link" onClick={signOut}><LogOut size={12}/> Sign out</button></div>}
             {!user && !ended && <div className="join-google"><p>Continue with Google (recommended) or join with your name as a temporary guest. Guest access is limited to this meeting.</p><GoogleContinueButton oneTap onCredential={(credential) => void googleCredential(credential)}/><div className="guest-access-form"><div className="guest-access-divider"><span>OR</span></div>{guestModalOpen && createPortal(<GuestNameModal initialName={getGuestProfile(slug)?.displayName || guestName} onClose={() => setGuestModalOpen(false)} onSave={saveGuest}/>, document.body)}{getGuestProfile(slug) ? <div className="join-identity guest-identity"><ProfilePhoto name={getGuestProfile(slug)?.displayName || guestName} className="join-identity-photo"/><span><b>{getGuestProfile(slug)?.displayName}</b><small>Temporary guest · this meeting only</small></span><button type="button" className="guest-change-name" onClick={() => setGuestModalOpen(true)}>Change</button></div> : <button type="button" className="guest-continue-button" onClick={() => setGuestModalOpen(true)}><UserRound size={18}/><span>Continue as Guest</span></button>}</div></div>}
             {!ended && <div className="join-preferences"><MediaToggle on={cameraOn} onChange={setCameraOn} onIcon={<Video size={16}/>} offIcon={<VideoOff size={16}/>} onLabel="Camera is on" offLabel="Camera is off" onHint="Join with video" offHint="Join without video"/><MediaToggle on={micOn} onChange={setMicOn} onIcon={<Mic size={16}/>} offIcon={<MicOff size={16}/>} onLabel="Microphone is on" offLabel="Microphone is off" onHint="Join with audio" offHint="Join muted"/></div>}
             {error && <div className="inline-error" role="alert">{error}{error.includes("Sign in") && <button type="button" className="error-link" onClick={openAuth}>Sign in</button>}</div>}
-            {ended ? <div className="meeting-ended-actions"><Link to="/meetings" className="button button-soft button-full"><ArrowLeft size={16}/> {meeting.meetingType === "prayer" ? "Back to prayers" : "Back to meetings"}</Link>{(meeting.isOwner || meeting.isParticipant) && <button type="button" className="button button-primary button-full" onClick={() => setPastNotesOpen(true)}><FileText size={16}/> View meeting notes</button>}{pastRecording && <section className="meeting-ended-audio"><div><AudioLines size={20}/><span><b>Audio recording</b><small>{pastRecording.recording.meetingTitle}</small></span></div><AudioRecordingPlayer src={pastRecording.playbackUrl} title={pastRecording.recording.meetingTitle}/><small>Available until {formatDate(pastRecording.expiresAt)}</small></section>}{pastRecordingError && !pastRecordingLoading && !pastRecording && <p className="meeting-audio-unavailable">{pastRecordingError}</p>}</div> : (user || getGuestProfile(slug)) && <><button className={`button button-primary button-full join-submit ${notYetOpen ? "join-submit-locked" : ""}`} type="submit" disabled={joining || notYetOpen}>{joining ? <LoaderCircle size={17} className="spin"/> : notYetOpen ? <Clock3 size={17}/> : meeting.isOwner ? <Video size={17}/> : <DoorOpen size={17}/>} {joining ? "Joining…" : notYetOpen ? "Not Yet Open" : meeting.status === "scheduled" ? "Open gathering" : "Join gathering"}<ArrowRight size={16}/></button>{notYetOpen && <div className="meeting-not-yet-open" role="status"><Clock3 size={16}/><span><b>Opens {formatDate(meeting.startsAt, { weekday: "short" }, meeting.timezone)}</b><small>{formatTime(meeting.startsAt, meeting.timezone)} · {meeting.timezone || "Scheduled time"}</small></span></div>}</>}
+            {ended ? <div className="meeting-ended-actions"><Link to="/meetings" className="button button-soft button-full"><ArrowLeft size={16}/> {meeting.meetingType === "prayer" ? "Back to prayers" : "Back to meetings"}</Link>{(meeting.isOwner || meeting.isParticipant) && <button type="button" className="button button-primary button-full" onClick={() => setPastNotesOpen(true)}><FileText size={16}/> View meeting notes</button>}{pastRecording && <section className="meeting-ended-audio"><div><AudioLines size={20}/><span><b>Audio recording</b><small>{pastRecording.recording.meetingTitle}</small></span></div><AudioRecordingPlayer src={pastRecording.playbackUrl} title={pastRecording.recording.meetingTitle}/><small>Available until {formatDate(pastRecording.expiresAt)}</small></section>}{pastRecordingError && !pastRecordingLoading && !pastRecording && <p className="meeting-audio-unavailable">{pastRecordingError}</p>}</div> : <><button className={`button button-primary button-full join-submit ${notYetOpen ? "join-submit-locked" : ""}`} type="submit" disabled={joining || notYetOpen}>{joining ? <LoaderCircle size={17} className="spin"/> : notYetOpen ? <Clock3 size={17}/> : meeting.isOwner ? <Video size={17}/> : <DoorOpen size={17}/>} {joining ? "Joining…" : notYetOpen ? "Not Yet Open" : meeting.status === "scheduled" ? `Open ${kind}` : `Join ${kind}`}<ArrowRight size={16}/></button>{notYetOpen && <div className="meeting-not-yet-open" role="status"><Clock3 size={16}/><span><b>Opens {formatDate(meeting.startsAt, { weekday: "short" }, meeting.timezone)}</b><small>{formatTime(meeting.startsAt, meeting.timezone)} · {meeting.timezone || "Scheduled time"}</small></span></div>}</>}
             <p className="join-footnote"><ShieldCheck size={13}/> Your camera and microphone are only requested when you enter the room.</p>
           </form>
         </section>
         <section className="landing-details">
-          <p className="eyebrow"><span className={`eyebrow-dot ${meeting.status === "live" ? "eyebrow-dot-live" : ""}`}/>{meeting.status === "live" ? "THE GATHERING IS LIVE" : ended ? "GATHERING CLOSED" : "YOU'RE INVITED"}</p>
+          <p className="eyebrow"><span className={`eyebrow-dot ${meeting.status === "live" ? "eyebrow-dot-live" : ""}`}/>{meeting.status === "live" ? `THE ${kind.toUpperCase()} IS LIVE` : ended ? `${kind.toUpperCase()} CLOSED` : "YOU'RE INVITED"}</p>
           <h1>{meeting.title}</h1>
           <p className="landing-description">{meeting.description || "Join ENIHAKOLE CHOIR for a time to pray, connect, and lift our voices together."}</p>
           <div className="host-row"><span className="host-avatar"><AudioLines size={19}/></span><div><small>HOSTED BY</small><strong>{meeting.ownerName}</strong></div><span className="verified-host"><ShieldCheck size={14}/> Host</span></div>
-          <div className="meeting-detail-list"><div><span className="detail-icon"><CalendarDays size={18}/></span><span><b>{formatDate(meeting.startsAt, { weekday: "long", year: "numeric" }, meeting.timezone)}</b><small>{formatTime(meeting.startsAt, meeting.timezone)} · {meeting.timezone || "Meeting time"}</small></span></div><div><span className="detail-icon"><Clock3 size={18}/></span><span><b>{meeting.durationMinutes} minutes</b><small>Planned gathering time</small></span></div><div><span className="detail-icon"><Users size={18}/></span><span><b>Join from anywhere</b><small>Phone, tablet, or computer</small></span></div></div>
+          <div className="meeting-detail-list"><div><span className="detail-icon"><CalendarDays size={18}/></span><span><b>{formatDate(meeting.startsAt, { weekday: "long", year: "numeric" }, meeting.timezone)}</b><small>{formatTime(meeting.startsAt, meeting.timezone)} · {meeting.timezone || "Meeting time"}</small></span></div><div><span className="detail-icon"><Clock3 size={18}/></span><span><b>{meeting.durationMinutes} minutes</b><small>Planned {kind} time</small></span></div><div><span className="detail-icon"><Users size={18}/></span><span><b>Join from anywhere</b><small>Phone, tablet, or computer</small></span></div></div>
           <button className="landing-share-link" onClick={share}><Link2 size={16}/> Share this invitation <ArrowRight size={15}/></button>
         </section>
       </main>
@@ -1580,6 +1588,10 @@ function ConfirmEndModal({ busy, onCancel, onConfirm }: { busy: boolean; onCance
 }
 
 /** Shown to everyone the moment the meeting is ended. */
+/** "prayer" or "meeting", so wording always follows the type of the session. */
+const kindOf = (item?: { meetingType?: string } | null) => (item?.meetingType === "prayer" ? "prayer" : "meeting");
+const IDENTITY_NEEDED_MESSAGE = "Choose Google or Guest to continue.";
+
 function MeetingEndedScreen({ title, isHost, destinationLabel, onBack }: { title: string; isHost: boolean; destinationLabel: string; onBack: () => void }) {
   const onBackRef = useRef(onBack);
   onBackRef.current = onBack;
@@ -1590,10 +1602,10 @@ function MeetingEndedScreen({ title, isHost, destinationLabel, onBack }: { title
   return <div className="meeting-ended-page" role="status" aria-live="polite">
     <div className="meeting-ended-card">
       <span className="meeting-ended-icon"><DoorOpen size={30}/></span>
-      <p className="eyebrow"><span className="eyebrow-dot"/> GATHERING CLOSED</p>
-      <h1>This meeting has ended</h1>
+      <p className="eyebrow"><span className="eyebrow-dot"/> {/prayer/i.test(destinationLabel) ? "PRAYER" : "MEETING"} CLOSED</p>
+      <h1>This {/prayer/i.test(destinationLabel) ? "prayer" : "meeting"} has ended</h1>
       {title && <p className="meeting-ended-title">{title}</p>}
-      <p className="meeting-ended-text">{isHost ? "You ended this meeting for everyone. Thank you for hosting." : "The host has ended this meeting for everyone. Thank you for joining."}</p>
+      <p className="meeting-ended-text">{isHost ? `You ended this ${/prayer/i.test(destinationLabel) ? "prayer" : "meeting"} for everyone. Thank you for hosting.` : `The host has ended this ${/prayer/i.test(destinationLabel) ? "prayer" : "meeting"} for everyone. Thank you for joining.`}</p>
       <p className="meeting-ended-text">Returning to {destinationLabel}…</p>
       <button type="button" className="button button-primary button-full" onClick={onBack}><ArrowLeft size={16}/> Continue now</button>
     </div>
@@ -2370,7 +2382,7 @@ function useBackgroundCall(room: ReturnType<typeof useRoomContext>, title: strin
           session.metadata = new MediaMetadata({
             title,
             artist: "MEET ENIHAKOLE",
-            album: "Live gathering",
+            album: "Live room",
             artwork: [
               { src: "/icon-512.png", sizes: "512x512", type: "image/png" },
               { src: "/icon-192.png", sizes: "192x192", type: "image/png" },
@@ -4162,7 +4174,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
     />}
     {RECORDING_UI_ENABLED && recordingState?.status === "consent_pending" && recordingState.myDecision === "pending" && <div className="recording-consent-backdrop" role="presentation"><section className="recording-consent-modal" role="dialog" aria-modal="true" aria-labelledby="recording-consent-title"><span className="recording-consent-icon"><AudioLines size={24}/></span><p className="section-overline">MEETING AUDIO RECORDING REQUEST</p><h2 id="recording-consent-title">The host would like to record</h2><p>The recording captures synchronized audio from the connected participants. No camera video is recorded. Your choice is saved with the meeting record. You can decline; recording will not begin unless everyone currently connected accepts.</p><div className="recording-consent-list">{recordingState.consents.map((item) => <span key={item.identity}><b>{item.displayName}</b><small>{item.decision === "accepted" ? "Accepted" : item.decision === "declined" ? "Declined" : "Awaiting response"}</small></span>)}</div><div className="recording-consent-actions"><button type="button" className="button button-soft" disabled={recordingConsentBusy} onClick={() => void respondToRecordingConsent(false)}>Decline</button><button type="button" className="button button-primary" disabled={recordingConsentBusy} onClick={() => void respondToRecordingConsent(true)}>{recordingConsentBusy ? "Saving…" : "I consent"}</button></div></section></div>}
     {notesOpen && <div className="messages-modal-backdrop meeting-notes-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setNotesOpen(false); }}><section className="messages-modal meeting-notes-modal" role="dialog" aria-modal="true" aria-label="Collaborative meeting notes"><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setNotesOpen(false)} aria-label="Back to call"><ArrowLeft size={18}/></button><div className="meeting-panel-heading"><b>Meeting notes</b><small>{meeting.title}</small></div><button className="room-icon-button" onClick={() => setNotesOpen(false)} aria-label="Close notes"><X size={18}/></button></header><nav className="meeting-panel-tabs" aria-label="Meeting tools"><button type="button" className="meeting-panel-tab" onClick={() => { setNotesOpen(false); setMessagesOpen(true); }}>Messages</button><button type="button" className="meeting-panel-tab" onClick={() => { setNotesOpen(false); setPeopleViewTab("people"); setPeopleOpen(true); }}>People</button><button type="button" className="meeting-panel-tab" onClick={() => { setNotesOpen(false); setPeopleViewTab("private"); setPeopleOpen(true); }}>Private chats</button><button type="button" className="meeting-panel-tab meeting-panel-tab-active" aria-current="page">Notes</button></nav><div className="meeting-notes-body"><label className="meeting-notes-title-label">Note title<input value={notesTitle} onChange={(event) => updateMeetingNotesTitle(event.target.value)} onBlur={() => { if (notesDirtyRef.current && !notesConflict) void saveMeetingNotes(); }} maxLength={120} aria-label="Meeting notes title"/></label><div className="meeting-notes-toolbar" role="toolbar" aria-label="Note formatting"><button type="button" title="Bold" aria-label="Bold" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("bold")}><Bold size={16}/></button><button type="button" title="Italic" aria-label="Italic" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("italic")}><Italic size={16}/></button><button type="button" title="Underline" aria-label="Underline" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("underline")}><Underline size={16}/></button><button type="button" title="Heading 1" aria-label="Heading 1" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("formatBlock", "<h1>")}><Heading1 size={16}/></button><button type="button" title="Heading 2" aria-label="Heading 2" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("formatBlock", "<h2>")}><Heading2 size={16}/></button><button type="button" title="Bulleted list" aria-label="Bulleted list" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("insertUnorderedList")}><List size={16}/></button><button type="button" title="Numbered list" aria-label="Numbered list" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("insertOrderedList")}><ListOrdered size={16}/></button><button type="button" title="Indent" aria-label="Indent" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("indent")}><IndentIncrease size={16}/></button><button type="button" title="Outdent" aria-label="Outdent" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("outdent")}><IndentDecrease size={16}/></button></div>{notesLoading ? <div className="meeting-notes-loading"><LoaderCircle size={22} className="spin"/> Loading notes…</div> : <div ref={notesEditorRef} className="meeting-notes-editor" contentEditable suppressContentEditableWarning role="textbox" aria-label="Collaborative meeting notes editor" aria-multiline="true" data-placeholder="Capture decisions, action items, and key points together…" onInput={(event) => updateMeetingNotes(event.currentTarget.innerHTML)} onBlur={() => { if (notesDirtyRef.current && !notesConflict) void saveMeetingNotes(); }}></div>}{notesError && <div className="meeting-notes-error" role="alert">{notesError}{notesConflict && <div className="meeting-notes-conflict-actions"><button type="button" onClick={() => void loadMeetingNotes(true)}>Load latest</button><button type="button" onClick={() => void saveMeetingNotes(true)}>Keep my version</button></div>}</div>}<div className="meeting-notes-footer"><span className="meeting-notes-save-state">{notesSaving ? "Saving…" : notesDirty ? "Unsaved changes" : notesUpdatedBy ? `Saved · ${notesUpdatedBy}` : "Saved for meeting participants"}</span><button type="button" className="button button-soft button-small" onClick={exportNotesPdf}><Download size={15}/> Export PDF</button><button type="button" className="button button-primary button-small" onClick={() => void saveMeetingNotes(notesConflict)} disabled={!notesDirty || notesSaving}><Check size={15}/> Save now</button></div></div></section></div>}
-    {messagesOpen && <div className="messages-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setMessagesOpen(false); }}><section className="messages-modal" role="dialog" aria-modal="true" aria-label="Meeting messages"><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setMessagesOpen(false)} aria-label="Back to call"><ArrowLeft size={18}/></button><div className="meeting-panel-heading"><b>Meeting messages</b><small>Chat with everyone in this room</small></div><button className="room-icon-button" onClick={() => setMessagesOpen(false)} aria-label="Close messages"><X size={18}/></button></header><nav className="meeting-panel-tabs" aria-label="Meeting tools"><button type="button" className="meeting-panel-tab meeting-panel-tab-active" aria-current="page">Messages</button><button type="button" className="meeting-panel-tab" onClick={() => { setMessagesOpen(false); setPeopleViewTab("people"); setPeopleOpen(true); }}>People</button><button type="button" className="meeting-panel-tab" onClick={() => { setMessagesOpen(false); setPeopleViewTab("private"); setPeopleOpen(true); }}>Private chats</button><button type="button" className="meeting-panel-tab" onClick={() => { setMessagesOpen(false); setNotesOpen(true); }}>Notes</button></nav><div className="messages-modal-body">{chatMessages.length === 0 ? <div className="messages-empty"><MessageCircle size={25}/><b>No messages yet</b><span>Send a note to everyone in this gathering.</span></div> : chatMessages.map((message, index) => <article className={`chat-message ${message.from?.identity === localIdentity ? "chat-message-own" : ""}`} key={`${message.timestamp}-${index}`}><span className="chat-message-author">{message.from?.name || (message.from?.identity === localIdentity ? "You" : "Choir guest")}</span><p>{message.message}</p><time>{new Date(message.timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></article>)}<div ref={chatEndRef}/></div><form className="messages-composer" onSubmit={sendMessage}><input value={messageText} onChange={(event) => setMessageText(event.target.value)} placeholder="Write a message…" maxLength={2000} aria-label="Message"/><button className="button button-primary" type="submit" disabled={!messageText.trim() || isSending} aria-label="Send message"><Send size={17}/></button></form></section></div>}
+    {messagesOpen && <div className="messages-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setMessagesOpen(false); }}><section className="messages-modal" role="dialog" aria-modal="true" aria-label="Meeting messages"><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setMessagesOpen(false)} aria-label="Back to call"><ArrowLeft size={18}/></button><div className="meeting-panel-heading"><b>Meeting messages</b><small>Chat with everyone in this room</small></div><button className="room-icon-button" onClick={() => setMessagesOpen(false)} aria-label="Close messages"><X size={18}/></button></header><nav className="meeting-panel-tabs" aria-label="Meeting tools"><button type="button" className="meeting-panel-tab meeting-panel-tab-active" aria-current="page">Messages</button><button type="button" className="meeting-panel-tab" onClick={() => { setMessagesOpen(false); setPeopleViewTab("people"); setPeopleOpen(true); }}>People</button><button type="button" className="meeting-panel-tab" onClick={() => { setMessagesOpen(false); setPeopleViewTab("private"); setPeopleOpen(true); }}>Private chats</button><button type="button" className="meeting-panel-tab" onClick={() => { setMessagesOpen(false); setNotesOpen(true); }}>Notes</button></nav><div className="messages-modal-body">{chatMessages.length === 0 ? <div className="messages-empty"><MessageCircle size={25}/><b>No messages yet</b><span>Send a note to everyone in this {kindOf(meeting)}.</span></div> : chatMessages.map((message, index) => <article className={`chat-message ${message.from?.identity === localIdentity ? "chat-message-own" : ""}`} key={`${message.timestamp}-${index}`}><span className="chat-message-author">{message.from?.name || (message.from?.identity === localIdentity ? "You" : "Choir guest")}</span><p>{message.message}</p><time>{new Date(message.timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></article>)}<div ref={chatEndRef}/></div><form className="messages-composer" onSubmit={sendMessage}><input value={messageText} onChange={(event) => setMessageText(event.target.value)} placeholder="Write a message…" maxLength={2000} aria-label="Message"/><button className="button button-primary" type="submit" disabled={!messageText.trim() || isSending} aria-label="Send message"><Send size={17}/></button></form></section></div>}
     {peopleOpen && <div className="messages-modal-backdrop people-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setPeopleOpen(false); }}><section className="messages-modal people-modal" role="dialog" aria-modal="true" aria-label="People and private chats"><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setPeopleOpen(false)} aria-label="Back to call"><ArrowLeft size={18}/></button><div className="meeting-panel-heading"><b>{peopleViewTab === "people" ? "People" : "Private chats"}</b><small>{peopleViewTab === "people" ? `${participants.length} currently online · presence updates live` : `${recentConversations.length} saved conversations`}</small></div><button className="room-icon-button" onClick={() => setPeopleOpen(false)} aria-label="Close people"><X size={18}/></button></header><nav className="meeting-panel-tabs" aria-label="Meeting tools"><button type="button" className={`meeting-panel-tab ${peopleViewTab === "people" ? "meeting-panel-tab-active" : ""}`} aria-current={peopleViewTab === "people" ? "page" : undefined} onClick={() => setPeopleViewTab("people")}>People</button><button type="button" className={`meeting-panel-tab ${peopleViewTab === "private" ? "meeting-panel-tab-active" : ""}`} aria-current={peopleViewTab === "private" ? "page" : undefined} onClick={() => setPeopleViewTab("private")}>Private chats</button><button type="button" className="meeting-panel-tab" onClick={() => { setPeopleOpen(false); setMessagesOpen(true); }}>Messages</button><button type="button" className="meeting-panel-tab" onClick={() => { setPeopleOpen(false); setNotesOpen(true); }}>Notes</button></nav><div className="people-directory-body">{peopleViewTab === "people" ? <><div className="people-online-heading"><span><span className="people-online-dot"/> Online now</span><b>{participants.length}</b></div>{[...participants].sort((a, b) => getParticipantRole(a) === getParticipantRole(b) ? participantName(a).localeCompare(participantName(b)) : getParticipantRole(a) === "host" ? -1 : 1).map((person) => {
       const isSelf = person.identity === localIdentity;
       const micMuted = person.getTrackPublication(Track.Source.Microphone)?.isMuted ?? true;
@@ -4198,7 +4210,7 @@ function GuestNameModal({ initialName, onClose, onSave }: { initialName: string;
   }
   return <Modal onClose={onClose} wide={false}>
     <form className="auth-modal-content guest-modal-content" onSubmit={(event) => void submit(event)} noValidate>
-      <ProfilePhoto name={fullName} className="guest-modal-avatar" size={160}/>
+      <div className="guest-modal-avatar-slot" aria-hidden="true">{clean(firstName) ? <ProfilePhoto key={Array.from(clean(firstName))[0]?.toUpperCase()} name={clean(firstName)} className="guest-modal-avatar" size={160}/> : null}</div>
       <p className="section-overline">CONTINUE AS GUEST</p>
       <h2>What should we call you?</h2>
       <p className="modal-subtitle">Your name is shown to everyone in the room. No account or email is required.</p>
@@ -4213,7 +4225,7 @@ function GuestNameModal({ initialName, onClose, onSave }: { initialName: string;
   </Modal>;
 }
 
-function AuthModal({ onClose, onAuthenticated }: { onClose: () => void; onAuthenticated: (user: User, token: string) => void }) {
+function AuthModal({ onClose, onAuthenticated, currentName }: { onClose: () => void; onAuthenticated: (user: User, token: string) => void; currentName?: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -4229,7 +4241,7 @@ function AuthModal({ onClose, onAuthenticated }: { onClose: () => void; onAuthen
   }
 
   return <Modal onClose={onClose} wide={false}>
-    <div className="auth-modal-content"><span className="modal-brand-icon"><AudioLines size={23}/></span><p className="section-overline">WELCOME TO YOUR GATHERING SPACE</p><h2>Good to have you here.</h2><p className="modal-subtitle">Continue with Google to sign in or create your account. We use your Google name and profile photo — no password needed.</p>
+    <div className="auth-modal-content"><span className="modal-brand-icon"><AudioLines size={23}/></span><p className="section-overline">WELCOME TO MEET ENIHAKOLE</p><h2>{currentName ? "Change account" : "Good to have you here."}</h2><p className="modal-subtitle">{currentName ? "Choose another Google account to switch. Until then you stay signed in as the current account — closing this keeps everything as it is." : "Continue with Google to sign in or create your account. We use your Google name and profile photo — no password needed."}</p>
       <div className="form-stack">
         <GoogleContinueButton onCredential={(credential) => void handleCredential(credential)}/>
         {busy && <div className="auth-busy"><LoaderCircle size={16} className="spin"/> Signing you in…</div>}
@@ -4345,7 +4357,7 @@ function ScheduleModal({ onClose, onCreated }: { onClose: () => void; onCreated:
   async function submit(event?: FormEvent) {
     event?.preventDefault(); setError("");
     if (step !== 3 || busy) return;
-    if (!meetingType) { setStep(1); setError("Choose a gathering type."); return; }
+    if (!meetingType) { setStep(1); setError("Choose whether this is a prayer or a meeting."); return; }
     if (title.trim().length < 3 || description.trim().length < 3) { setStep(2); setError("Enter both a meeting title and description."); return; }
     const startMillis = new Date(startsAt).getTime();
     if (!startsAt || !Number.isFinite(startMillis) || startMillis <= Date.now() + 30_000) {
@@ -4365,7 +4377,7 @@ function ScheduleModal({ onClose, onCreated }: { onClose: () => void; onCreated:
       setCreated({ meeting: result.meeting, shareUrl });
       onCreated(result.meeting, shareUrl);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not create this gathering.");
+      setError(cause instanceof Error ? cause.message : `Could not create this ${meetingType === "prayer" ? "prayer" : "meeting"}.`);
     } finally { setBusy(false); }
   }
 
@@ -4384,16 +4396,16 @@ function ScheduleModal({ onClose, onCreated }: { onClose: () => void; onCreated:
     {!created ? <div className="schedule-modal-content">
       <div className="modal-heading-row"><span className="modal-brand-icon"><CalendarClock size={22}/></span><button className="icon-button" onClick={onClose} aria-label="Close dialog"><X size={19}/></button></div>
       <div className="modal-scroll-body">
-        <p className="section-overline">CREATE A GATHERING</p>
-        <h2>{step === 1 ? "What are we gathering for?" : step === 2 ? (meetingType === "prayer" ? "Describe your Online Prayer." : "Give your meeting a name.") : "Choose when to meet."}</h2>
-        <p className="modal-subtitle">{step === 1 ? "Choose the kind of gathering you want to create." : step === 2 ? "Add a clear title and a short description for participants." : "Set the date, time, and planned duration. Joining opens automatically at the scheduled start."}</p>
-        {step === 1 && <div className="gathering-type-options" role="group" aria-label="Gathering type">
-          <button type="button" className={`gathering-type-card ${meetingType === "meeting" ? "is-selected" : ""}`} aria-pressed={meetingType === "meeting"} onClick={() => { setMeetingType("meeting"); setError(""); }}><span><Users size={22}/></span><b>Meeting</b><small>Private gathering accessible through its invitation link.</small></button>
+        <p className="section-overline">{meetingType === "prayer" ? "CREATE A PRAYER" : meetingType === "meeting" ? "CREATE A MEETING" : "CREATE A PRAYER OR MEETING"}</p>
+        <h2>{step === 1 ? "What would you like to create?" : step === 2 ? (meetingType === "prayer" ? "Describe your Online Prayer." : "Give your meeting a name.") : "Choose when to meet."}</h2>
+        <p className="modal-subtitle">{step === 1 ? "Choose whether to create a prayer or a meeting." : step === 2 ? "Add a clear title and a short description for participants." : "Set the date, time, and planned duration. Joining opens automatically at the scheduled start."}</p>
+        {step === 1 && <div className="gathering-type-options" role="group" aria-label="Session type">
+          <button type="button" className={`gathering-type-card ${meetingType === "meeting" ? "is-selected" : ""}`} aria-pressed={meetingType === "meeting"} onClick={() => { setMeetingType("meeting"); setError(""); }}><span><Users size={22}/></span><b>Meeting</b><small>Private meeting accessible through its invitation link.</small></button>
           <button type="button" className={`gathering-type-card ${meetingType === "prayer" ? "is-selected" : ""}`} aria-pressed={meetingType === "prayer"} onClick={() => { setMeetingType("prayer"); setError(""); }}><span><HeartHandshake size={22}/></span><b>Online Prayer</b><small>Publicly discoverable before, during, and after the prayer.</small></button>
         </div>}
         {step === 2 && <div className="form-stack schedule-form">
           <label className="field-label">{meetingType === "prayer" ? "Prayer title" : "Meeting title"}<input value={title} onChange={(event) => setTitle(event.target.value)} minLength={3} maxLength={120} placeholder={meetingType === "prayer" ? "e.g. Wednesday morning prayer" : "e.g. Choir planning meeting"} required autoFocus/></label>
-          <label className="field-label">Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={4} minLength={3} maxLength={1000} placeholder="Describe the purpose of this gathering and what participants can expect." required/></label>
+          <label className="field-label">Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={4} minLength={3} maxLength={1000} placeholder="Describe the purpose of this session and what participants can expect." required/></label>
         </div>}
         {step === 3 && <form id="schedule-form" onSubmit={(event) => event.preventDefault()} className="form-stack schedule-form">
           <div className="form-row"><label className="field-label">Date and time<CustomDateTimePicker value={startsAt} onChange={setStartsAt}/></label><label className="field-label">Duration<DurationPicker value={durationMinutes} onChange={setDurationMinutes}/></label></div>
@@ -4406,7 +4418,7 @@ function ScheduleModal({ onClose, onCreated }: { onClose: () => void; onCreated:
         {step > 1 ? <button className="button button-soft" type="button" onClick={() => { setStep((step - 1) as 1 | 2); setError(""); }} disabled={busy}><ChevronLeft size={16}/> Back</button> : <button className="button button-soft" type="button" onClick={onClose}>Cancel</button>}
         {step < 3 ? <button key="schedule-continue" className="button button-primary" type="button" onClick={nextStep} disabled={step === 1 && !meetingType}>Continue <ArrowRight size={15}/></button> : <button key="schedule-create" className="button button-primary" type="button" onClick={() => void submit()} disabled={busy}>{busy ? <LoaderCircle size={16} className="spin"/> : meetingType === "prayer" ? <HeartHandshake size={16}/> : <CalendarDays size={16}/>} {busy ? "Creating…" : meetingType === "prayer" ? "Schedule Online Prayer" : "Create Meeting"} <ArrowRight size={15}/></button>}
       </div>
-    </div> : <div className="schedule-success"><div className="modal-scroll-body"><span className="success-icon"><CheckCircle2 size={27}/></span><p className="section-overline">YOUR INVITATION IS READY</p><h2>It's all set.</h2><p className="modal-subtitle">{created.meeting.meetingType === "prayer" ? "Your Online Prayer is listed publicly. Share the invitation too." : "Your private meeting is ready. Only people with this invitation link can open it."}</p><div className="success-meeting-preview"><img src={meetingImage(created.meeting)} alt="Meeting cover"/><div><b>{created.meeting.title}</b><small>{formatDate(created.meeting.startsAt, {}, created.meeting.timezone)} · {created.meeting.durationMinutes} min</small></div></div><div className="share-url-box"><Link2 size={15}/><span>{created.shareUrl}</span><button className="icon-button" onClick={copyShare} aria-label="Copy link"><Copy size={15}/></button></div></div><div className="success-actions modal-footer-fixed"><button className="button button-primary button-full" onClick={() => void shareMeeting()}><Share2 size={16}/> Share invitation</button><Link className="button button-soft button-full" to={`/meeting/${created.meeting.slug}`} onClick={onClose}>Open gathering page <ArrowRight size={16}/></Link><button className="text-action centered-action" onClick={onClose}>Back to workspace</button></div></div>}
+    </div> : <div className="schedule-success"><div className="modal-scroll-body"><span className="success-icon"><CheckCircle2 size={27}/></span><p className="section-overline">YOUR INVITATION IS READY</p><h2>It's all set.</h2><p className="modal-subtitle">{created.meeting.meetingType === "prayer" ? "Your Online Prayer is listed publicly. Share the invitation too." : "Your private meeting is ready. Only people with this invitation link can open it."}</p><div className="success-meeting-preview"><img src={meetingImage(created.meeting)} alt="Meeting cover"/><div><b>{created.meeting.title}</b><small>{formatDate(created.meeting.startsAt, {}, created.meeting.timezone)} · {created.meeting.durationMinutes} min</small></div></div><div className="share-url-box"><Link2 size={15}/><span>{created.shareUrl}</span><button className="icon-button" onClick={copyShare} aria-label="Copy link"><Copy size={15}/></button></div></div><div className="success-actions modal-footer-fixed"><button className="button button-primary button-full" onClick={() => void shareMeeting()}><Share2 size={16}/> Share invitation</button><Link className="button button-soft button-full" to={`/meeting/${created.meeting.slug}`} onClick={onClose}>Open {meetingType === "prayer" ? "prayer" : "meeting"} page <ArrowRight size={16}/></Link><button className="text-action centered-action" onClick={onClose}>Back to workspace</button></div></div>}
   </Modal>;
 }
 

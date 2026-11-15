@@ -3564,7 +3564,7 @@ html[data-theme="light"] .room-control-dock .room-control-button.control-selecte
 
 /* 3) Mobile Prayers button: presses down only a little, and its label never changes or shrinks on tap. */
 @media (max-width: 720px) {
-  .mobile-bottom-nav a.mbn-fab:active, .mobile-bottom-nav a.mbn-fab:focus { transform: scale(.95); box-shadow: 0 6px 14px rgba(143,33,65,.48); }
+  .mobile-bottom-nav a.mbn-fab:active { transform: scale(.95); box-shadow: 0 6px 14px rgba(143,33,65,.48); }
   .mobile-bottom-nav a.mbn-fab .mbn-fab-label, .mobile-bottom-nav a.mbn-fab.mbn-fab-active .mbn-fab-label,
   :root[data-theme="light"] .mobile-bottom-nav a.mbn-fab .mbn-fab-label, :root[data-theme="light"] .mobile-bottom-nav a.mbn-fab.mbn-fab-active .mbn-fab-label { color: #a28d96; transition: none; }
   :root[data-theme="light"] .mobile-bottom-nav a.mbn-fab .mbn-fab-label, :root[data-theme="light"] .mobile-bottom-nav a.mbn-fab.mbn-fab-active .mbn-fab-label { color: #76636a; }
@@ -3589,8 +3589,9 @@ html[data-theme="light"] .room-control-dock .room-control-button.control-selecte
 .guest-continue-button:hover { background: #f8f9fa; box-shadow: 0 1px 3px rgba(60,64,67,.25); }
 .guest-continue-button:active { background: #f1f3f4; }
 .guest-continue-button:focus-visible { outline: 2px solid #1a73e8; outline-offset: 2px; }
-:root[data-theme="dark"] .guest-continue-button { background: #131314; border-color: #8e918f; color: #e3e3e3; }
-:root[data-theme="dark"] .guest-continue-button:hover { background: #1f1f20; }
+:root[data-theme="dark"] .guest-continue-button { background: linear-gradient(145deg, #5c1a32, #3f1424); border-color: rgba(222,120,150,.42); color: #fbe9ee; }
+:root[data-theme="dark"] .guest-continue-button:hover { background: linear-gradient(145deg, #6a2038, #491829); box-shadow: 0 2px 10px rgba(0,0,0,.3); }
+:root[data-theme="dark"] .guest-continue-button:active { background: #3a1222; }
 .guest-identity { position: relative; }
 .guest-change-name { margin-left: auto; padding: 6px 12px; border: 1px solid var(--line-strong); border-radius: 999px; background: transparent; color: inherit; font: inherit; font-size: 11px; font-weight: 800; cursor: pointer; }
 .guest-change-name:hover { background: rgba(255,255,255,.07); }
@@ -3608,3 +3609,46 @@ html[data-theme="light"] .room-control-dock .room-control-button.control-selecte
 :root[data-theme="light"] .guest-modal-fields input { color: #452a36; border-color: #e8d9dc; background: #fff8f7; }
 .guest-modal-save { min-height: 46px; }
 @media (max-width: 520px) { .guest-modal-fields { grid-template-columns: 1fr; } }
+
+
+/* ===== Round 23 ===== */
+
+/* Sidebar taps: no gray tap flash and no gray pressed colour on touch screens; the active link keeps its burgundy at all times. */
+.side-link { -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none; user-select: none; }
+.side-link:not(.side-link-active):active { background: transparent; color: #aa99a0; }
+:root[data-theme="light"] .side-link:not(.side-link-active):active { background: transparent; color: #755d65; }
+.side-link.side-link-active:active, .side-link.side-link-active:focus, .side-link.side-link-active:focus-visible { background: linear-gradient(95deg, #7a1a37, #8f2141); color: #fff; outline: none; }
+@media (hover: none) {
+  .side-link { transition: none; }
+  .side-link.side-link-active:hover { background: linear-gradient(95deg, #7a1a37, #8f2141); color: #fff; }
+}
+
+/* Prayers button on phones: smooth return to its normal size after a tap, never stuck. */
+@media (max-width: 720px) {
+  .mobile-bottom-nav a.mbn-fab, .mbn-fab { transition: transform .16s ease, box-shadow .16s ease; -webkit-tap-highlight-color: transparent; }
+  .mobile-bottom-nav a.mbn-fab .mbn-fab-label { transition: transform .16s ease; }
+}
+
+/* Sign-in options and the guest card shrink to the card width; long names end in "…". */
+.join-form, .join-google, .guest-access-form, .join-identity { min-width: 0; max-width: 100%; box-sizing: border-box; }
+.join-form > *, .join-google > *, .guest-access-form > * { min-width: 0; max-width: 100%; }
+.google-continue, .google-slot { min-width: 0; max-width: 100%; }
+.google-slot { overflow: hidden; border-radius: 999px; }
+.join-identity { overflow: hidden; }
+.join-identity > span:nth-child(2) { overflow: hidden; }
+.join-identity b, .join-identity small { display: block; max-width: 100%; }
+.join-identity-photo { width: 44px; height: 44px; }
+.guest-change-name, .join-identity .error-link { flex: 0 0 auto; white-space: nowrap; }
+@media (max-width: 380px) { .join-identity { gap: 9px; padding: 10px; } .guest-change-name { padding: 6px 10px; } }
+
+/* Profile photo: lazy-loaded with a soft placeholder instead of a spinner. */
+.profile-photo.profile-photo-loading { background: linear-gradient(110deg, #3a2630 8%, #4b3340 18%, #3a2630 33%); background-size: 200% 100%; animation: photo-shimmer 1.3s linear infinite; }
+:root[data-theme="light"] .profile-photo.profile-photo-loading { background: linear-gradient(110deg, #ecdfd9 8%, #f6ece7 18%, #ecdfd9 33%); background-size: 200% 100%; }
+@keyframes photo-shimmer { to { background-position-x: -200%; } }
+.profile-photo.profile-photo-letter b { font-size: inherit; line-height: 1; font-weight: 700; letter-spacing: 0; }
+@media (prefers-reduced-motion: reduce) { .profile-photo.profile-photo-loading { animation: none; } }
+
+/* Guest name modal avatar: appears (fades in) only once a first name is typed. */
+.guest-modal-avatar-slot { align-self: center; width: 72px; height: 72px; margin-bottom: 14px; display: grid; place-items: center; }
+.guest-modal-avatar { width: 72px; height: 72px; margin: 0; animation: guest-avatar-in .32s ease both; }
+@keyframes guest-avatar-in { from { opacity: 0; transform: scale(.82); } to { opacity: 1; transform: none; } }
