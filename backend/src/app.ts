@@ -81,15 +81,29 @@ export function createApp(): Express {
     }
   });
 
+  // Limits are counted per signed-in person (or per guest token), not per network address, so a whole congregation
+  // sharing one Wi-Fi / mobile-carrier address can join together without blocking each other. Room-critical calls
+  // (joining, presence, chat history, notes) are never throttled by the general limiter.
+  const roomCriticalPath = /^\/meetings\/[^/]+\/(token|guest-session|participant-profile|participant-leave|notes|private-messages|private-conversations|recording\/status|recording\/consent)/;
+  const clientKey = (req: Request): string => {
+    const header = req.get("Authorization") || "";
+    if (/^Bearer\s+\S+/i.test(header)) return `t:${crypto.createHash("sha256").update(header).digest("hex").slice(0, 32)}`;
+    return `ip:${req.ip || "unknown"}`;
+  };
   const apiLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    limit: 240,
+    windowMs: 60 * 1000,
+    limit: (req) => (/^Bearer\s+\S+/i.test(req.get("Authorization") || "") ? 600 : 1500),
     standardHeaders: "draft-7",
     legacyHeaders: false,
+    keyGenerator: clientKey,
+    validate: false,
     // LiveKit webhooks are independently authenticated by their signed JWT;
     // a busy room must not exhaust the browser API quota and drop lifecycle events.
-    skip: (req) => req.path.startsWith("/webhooks/"),
-    message: { error: "Too many requests. Please wait a moment and try again." },
+    skip: (req) => req.path.startsWith("/webhooks/") || roomCriticalPath.test(req.path) || req.path === "/auth/session-heartbeat",
+    handler: (_req, res) => {
+      res.setHeader("Retry-After", "2");
+      res.status(429).json({ error: "The server is busy for a moment. Please try again." });
+    },
   });
   const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,

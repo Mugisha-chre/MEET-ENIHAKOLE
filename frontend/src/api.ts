@@ -66,22 +66,81 @@ export function warmServer(): void {
   } catch { /* Best effort only. */ }
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+/**
+ * Request pipeline: every call goes through a small queue so a burst (many people joining, chatting and loading notes at the
+ * same moment) is sent a few at a time instead of all at once, identical in-flight GETs are shared, and a busy server
+ * (429/502/503/504) is retried quietly with back-off, so people never see a "Too many requests" error.
+ */
+const MAX_PARALLEL_REQUESTS = 6;
+const MAX_ATTEMPTS = 6;
+let activeRequests = 0;
+const waitingRequests: Array<() => void> = [];
+const inFlightGets = new Map<string, Promise<unknown>>();
+const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+
+function acquireRequestSlot(): Promise<void> {
+  if (activeRequests < MAX_PARALLEL_REQUESTS) { activeRequests += 1; return Promise.resolve(); }
+  return new Promise((resolve) => waitingRequests.push(() => { activeRequests += 1; resolve(); }));
+}
+function releaseRequestSlot(): void {
+  activeRequests = Math.max(0, activeRequests - 1);
+  waitingRequests.shift()?.();
+}
+function retryDelayMs(response: Response | null, attempt: number): number {
+  const header = response?.headers.get("Retry-After");
+  const seconds = header ? Number(header) : NaN;
+  const base = Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, 20) * 1000 : Math.min(500 * 2 ** attempt, 8000);
+  return base + Math.random() * 400; // jitter keeps a crowd from retrying at the same instant
+}
+const isIdempotent = (method: string) => method === "GET" || method === "HEAD" || method === "PUT" || method === "DELETE";
+
+async function sendWithRetry<T>(path: string, init: RequestInit, headers: Headers): Promise<T> {
+  const method = (init.method || "GET").toUpperCase();
+  let lastStatus = 0;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+    let response: Response | null = null;
+    await acquireRequestSlot();
+    try {
+      response = await fetch(`${API_BASE}${path}`, { ...init, headers });
+    } catch {
+      response = null;
+    } finally {
+      releaseRequestSlot();
+    }
+    if (!response) {
+      // Network error: retry safe calls (and sends that never reached the server) a few times before giving up.
+      if (attempt < 2 || (isIdempotent(method) && attempt < MAX_ATTEMPTS - 1)) { await sleep(retryDelayMs(null, attempt)); continue; }
+      throw new Error("We could not reach the server. Check your connection and try again.");
+    }
+    lastStatus = response.status;
+    // 429 is always safe to retry (the request was refused before it ran); gateway errors only for idempotent calls.
+    const retryable = response.status === 429 || (isIdempotent(method) && [502, 503, 504].includes(response.status));
+    if (retryable && attempt < MAX_ATTEMPTS - 1) { await sleep(retryDelayMs(response, attempt)); continue; }
+    const payload = await response.json().catch(() => ({})) as { error?: string };
+    if (!response.ok) {
+      const busy = response.status === 429;
+      throw new ApiError(busy ? "The server is busy for a moment. Please try again." : payload.error || `Request failed (${response.status}).`, response.status);
+    }
+    return payload as T;
+  }
+  throw new ApiError("The server is busy for a moment. Please try again.", lastStatus || 429);
+}
+
+function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = getAuthToken();
   const headers = new Headers(init.headers);
   if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   if (token) headers.set("Authorization", `Bearer ${token}`);
 
-  let response: Response;
-  try {
-    response = await fetch(`${API_BASE}${path}`, { ...init, headers });
-  } catch {
-    throw new Error("We could not reach the server. Check your connection and try again.");
-  }
-
-  const payload = await response.json().catch(() => ({})) as { error?: string };
-  if (!response.ok) throw new ApiError(payload.error || `Request failed (${response.status}).`, response.status);
-  return payload as T;
+  const method = (init.method || "GET").toUpperCase();
+  if (method !== "GET") return sendWithRetry<T>(path, init, headers);
+  // Identical GETs that are already on their way share one network call.
+  const key = `${token || ""}|${path}`;
+  const existing = inFlightGets.get(key);
+  if (existing) return existing as Promise<T>;
+  const pending = sendWithRetry<T>(path, init, headers).finally(() => { inFlightGets.delete(key); });
+  inFlightGets.set(key, pending);
+  return pending;
 }
 
 export const api = {
