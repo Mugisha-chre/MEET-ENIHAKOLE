@@ -7,7 +7,7 @@ import {
   ArrowLeft, ArrowRight, AudioLines, CalendarClock, CalendarDays, Check,
   CheckCircle2, CircleHelp, Clock3, Copy, DoorOpen, HeartHandshake, Home,
   Link2, LoaderCircle, LogIn, LogOut, Menu, Mic, Plus, Share2, ShieldCheck,
-  UserRound, Users, Video, VideoOff, X, Sun, Moon, MessageCircle,
+  SlidersHorizontal, ArrowUp, ArrowDown, UserRound, Users, Video, VideoOff, X, Sun, Moon, MessageCircle,
   PictureInPicture2, Hand, Send, MonitorUp, MicOff, Maximize2, Minimize2, ChevronLeft, ChevronRight, Smile, ChevronDown, Download,
   MousePointer2, MoveUpRight, Eraser, Eye, EyeOff, PenLine, Undo2, Settings2,
   BookOpen, Smartphone, Headphones, LifeBuoy, Mail,
@@ -607,12 +607,52 @@ function ThemeToggle() {
   return <button type="button" className="icon-button theme-toggle" onClick={toggleTheme} title={`Switch to ${nextTheme} mode`} aria-label={`Switch to ${nextTheme} mode`} aria-pressed={theme === "dark"}>{theme === "light" ? <Moon size={17}/> : <Sun size={17}/>}</button>;
 }
 
+/** Phone side menu: modern light/dark switch (the top bar has no theme button on phones). */
+function SidebarThemeSwitch() {
+  const { theme, toggleTheme } = useAppContext();
+  const dark = theme === "dark";
+  return (
+    <button type="button" role="switch" aria-checked={dark} className={`sidebar-theme-switch ${dark ? "is-dark" : "is-light"}`} onClick={toggleTheme}>
+      <span className="sidebar-theme-icon" aria-hidden="true">{dark ? <Moon size={18}/> : <Sun size={18}/>}</span>
+      <span className="sidebar-theme-text"><b>{dark ? "Dark mode" : "Light mode"}</b><small>Switch to {dark ? "light" : "dark"}</small></span>
+      <span className="sidebar-theme-track" aria-hidden="true"><span className="sidebar-theme-knob"/></span>
+    </button>
+  );
+}
+
 /** Top bar profile picture: opens a profile card (popover on desktop, bottom sheet on phones) with Change account and Logout. */
 function ProfileMenu({ user, onSignOut, onChangeAccount }: { user: User; onSignOut: () => void; onChangeAccount: () => void }) {
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<{ top: number; right: number } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const close = useCallback(() => setOpen(false), []);
+  const [dragY, setDragY] = useState(0);
+  const [dragged, setDragged] = useState(false);
+  const dragStart = useRef<number | null>(null);
+  const close = useCallback(() => { setOpen(false); setDragY(0); setDragged(false); dragStart.current = null; }, []);
+  // While the sheet is open the page itself must not pull-to-refresh or scroll.
+  useEffect(() => {
+    if (!open) return;
+    document.documentElement.classList.add("no-pull-refresh");
+    return () => document.documentElement.classList.remove("no-pull-refresh");
+  }, [open]);
+  const onSheetPointerDown = (event: ReactPointerEvent<HTMLElement>) => {
+    if (window.innerWidth > 720 || (event.target as HTMLElement).closest("button")) return;
+    dragStart.current = event.clientY;
+    try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* Optional. */ }
+  };
+  const onSheetPointerMove = (event: ReactPointerEvent<HTMLElement>) => {
+    if (dragStart.current === null) return;
+    const delta = Math.max(0, event.clientY - dragStart.current);
+    if (delta > 2) setDragged(true);
+    setDragY(delta);
+  };
+  const onSheetPointerEnd = (event: ReactPointerEvent<HTMLElement>) => {
+    if (dragStart.current === null) return;
+    const delta = Math.max(0, event.clientY - dragStart.current);
+    dragStart.current = null;
+    try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* Optional. */ }
+    if (delta > 90) close(); else setDragY(0);
+  };
   useBackClose(open, close);
   const toggle = () => {
     const rect = triggerRef.current?.getBoundingClientRect();
@@ -635,7 +675,7 @@ function ProfileMenu({ user, onSignOut, onChangeAccount }: { user: User; onSignO
     </button>
     {open && createPortal(
       <div className="profile-sheet-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
-        <section className="profile-sheet" role="dialog" aria-modal="true" aria-label="Profile" style={anchor ? ({ "--profile-top": `${anchor.top}px`, "--profile-right": `${anchor.right}px` } as CSSProperties) : undefined}>
+        <section className={`profile-sheet ${dragY > 0 ? "profile-sheet-dragging" : ""}`} role="dialog" aria-modal="true" aria-label="Profile" onPointerDown={onSheetPointerDown} onPointerMove={onSheetPointerMove} onPointerUp={onSheetPointerEnd} onPointerCancel={onSheetPointerEnd} style={{ ...(anchor ? ({ "--profile-top": `${anchor.top}px`, "--profile-right": `${anchor.right}px` } as CSSProperties) : {}), ...(dragged ? { animation: "none" } : {}), ...(dragY > 0 ? { transform: `translateY(${dragY}px)` } : {}) }}>
           <span className="profile-sheet-grab" aria-hidden="true"/>
           <button type="button" className="profile-sheet-close" onClick={close} aria-label="Close profile"><X size={16}/></button>
           <div className="profile-sheet-head">
@@ -875,6 +915,7 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
           {user?.isAdmin && <Link to="/admin" className={`side-link ${active === "admin" ? "side-link-active" : ""}`}><ShieldCheck size={18} /><span>Admin center</span></Link>}
         </nav>
         <div className="sidebar-bottom">
+          <SidebarThemeSwitch />
           {user && <div className="sidebar-account"><ProfilePhoto className="sidebar-account-photo" src={user.picture} name={user.displayName} size={160}/><span><b title={user.displayName}>{user.displayName}</b><small title={user.email}>{user.email}</small></span><button type="button" className="sidebar-signout" onClick={() => { setMobileNavOpen(false); signOut(); }} title="Logout" aria-label="Logout"><LogOut size={16}/><span>Logout</span></button></div>}
           {!user && <div className="sidebar-signin-card"><span className="sidebar-signin-icon" aria-hidden="true"><LogIn size={18}/></span><span className="sidebar-signin-copy"><b>You're not logged in</b><small>Login to manage your prayers, recordings and profile.</small></span><button type="button" className="sidebar-signin-button" onClick={() => { setMobileNavOpen(false); openAuth(); }}><LogIn size={15}/><span>Login</span></button></div>}
           <button className="side-link quiet-link" onClick={() => { setMobileNavOpen(false); setHelpOpen(true); }}><CircleHelp size={18} /><span>Help & support</span></button>
@@ -887,7 +928,6 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
           <button className="icon-button mobile-menu-button" aria-label="Open navigation" onClick={() => setMobileNavOpen(!mobileNavOpen)}><Menu size={20} /></button>
           <div className="breadcrumb"><span>ENIHAKOLE CHOIR</span><span className="breadcrumb-slash">/</span><strong>{active === "meetings" ? "Prayers" : active === "recordings" ? "Recordings" : active === "admin" ? "System admin" : "Workspace"}</strong></div>
           <div className="topbar-actions">
-            <button className="topbar-help" onClick={() => setHelpOpen(true)}><CircleHelp size={16} /><span>Need help?</span></button>
             <ThemeToggle />
             {user ? (
               <div className="profile-menu">
@@ -1016,11 +1056,20 @@ function MeetingsPage() {
     const requested = new URLSearchParams(window.location.search).get("filter");
     return requested === "past" || requested === "all" ? requested : "upcoming";
   });
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [filterOpen, setFilterOpen] = useState(false);
+  const localDay = (iso: string) => { const d = new Date(iso); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+  const filtersActive = Boolean(dateFrom || dateTo || sortDir !== "asc");
   const list = visible.filter((meeting) => {
     if (filter === "upcoming") return meeting.status === "scheduled" || meeting.status === "live";
     if (filter === "past") return meeting.status === "ended" || meeting.status === "cancelled";
     return true;
-  }).sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
+  }).filter((meeting) => {
+    const day = localDay(meeting.startsAt);
+    return (!dateFrom || day >= dateFrom) && (!dateTo || day <= dateTo);
+  }).sort((a, b) => (new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime()) * (sortDir === "asc" ? 1 : -1));
   // Switching between Upcoming / Past / All briefly shows the loading cards before the list appears.
   const [filtering, setFiltering] = useState(false);
   const filterTimer = useRef<number | undefined>(undefined);
@@ -1037,9 +1086,47 @@ function MeetingsPage() {
   return (
     <div className="meetings-page page-enter">
       <div className="page-title-row"><div><h1>Prayers</h1></div>{(user?.canCreateMeetings || user?.isAdmin) && <button className="button button-primary" onClick={() => openSchedule(false)}><Plus size={17}/> Create a prayer</button>}</div>
-      <div className="filter-bar"><div className="segmented-filter">{(["upcoming", "past", "all"] as const).map((value) => <button key={value} className={filter === value ? "filter-active" : ""} onClick={() => changeFilter(value)}>{value === "upcoming" ? "Upcoming" : value === "past" ? "Past prayers" : "All prayers"}</button>)}</div><span className="meeting-count">{showSkeleton ? "Loading…" : `${list.length} ${list.length === 1 ? "prayer" : "prayers"}`}</span></div>
+      <div className="filter-bar"><div className="segmented-filter">{(["upcoming", "past", "all"] as const).map((value) => <button key={value} className={filter === value ? "filter-active" : ""} onClick={() => changeFilter(value)}>{value === "upcoming" ? "Upcoming" : value === "past" ? "Past prayers" : "All prayers"}</button>)}</div><div className="filter-bar-end"><button type="button" className={`filter-open-button ${filtersActive ? "filter-open-active" : ""}`} onClick={() => setFilterOpen(true)} aria-haspopup="dialog"><SlidersHorizontal size={15}/><span>Filter</span>{filtersActive && <i aria-hidden="true"/>}</button><span className="meeting-count">{showSkeleton ? "Loading…" : `${list.length} ${list.length === 1 ? "prayer" : "prayers"}`}</span></div></div>
+      {filterOpen && <PrayerFilterModal sortDir={sortDir} dateFrom={dateFrom} dateTo={dateTo} onClose={() => setFilterOpen(false)} onApply={(next) => { setSortDir(next.sortDir); setDateFrom(next.dateFrom); setDateTo(next.dateTo); setFilterOpen(false); }}/>}
       {showSkeleton ? <div className="meeting-card-grid" aria-busy="true" aria-label="Loading prayers">{Array.from({ length: 6 }, (_, index) => <MeetingCardSkeleton key={index}/>)}</div> : list.length ? <div className="meeting-card-grid">{list.map((meeting, index) => <MeetingCard key={meeting.slug} meeting={meeting} priority={index < 6}/>)}</div> : <div className="empty-state empty-large"><div className="empty-icon"><CalendarDays size={23}/></div><div><h3>{filter === "past" ? "No past prayers yet" : "A fresh page for your next prayer"}</h3><p>Online Prayers will appear here when they are scheduled.</p></div><Link className="button button-primary" to="/recordings"><AudioLines size={16}/> Recorded Prayers</Link></div>}
     </div>
+  );
+}
+
+/** "Filter" on the Prayers page: sort by date (ascending / descending) and limit to a date range. */
+function PrayerFilterModal({ sortDir, dateFrom, dateTo, onClose, onApply }: { sortDir: "asc" | "desc"; dateFrom: string; dateTo: string; onClose: () => void; onApply: (next: { sortDir: "asc" | "desc"; dateFrom: string; dateTo: string }) => void }) {
+  const [dir, setDir] = useState(sortDir);
+  const [from, setFrom] = useState(dateFrom);
+  const [to, setTo] = useState(dateTo);
+  const invalid = Boolean(from && to && from > to);
+  return createPortal(
+    <Modal onClose={onClose}>
+      <div className="auth-modal-content prayer-filter-content">
+        <span className="modal-brand-icon"><SlidersHorizontal size={22}/></span>
+        <p className="section-overline">FILTER PRAYERS</p>
+        <h2>Sort and filter by date</h2>
+        <div className="prayer-filter-group" role="radiogroup" aria-label="Sort by date">
+          <b>Sort by date</b>
+          <div className="prayer-filter-choices">
+            <button type="button" role="radio" aria-checked={dir === "asc"} className={dir === "asc" ? "is-selected" : ""} onClick={() => setDir("asc")}><ArrowUp size={15}/> Ascending<small>Oldest first</small></button>
+            <button type="button" role="radio" aria-checked={dir === "desc"} className={dir === "desc" ? "is-selected" : ""} onClick={() => setDir("desc")}><ArrowDown size={15}/> Descending<small>Newest first</small></button>
+          </div>
+        </div>
+        <div className="prayer-filter-group">
+          <b>Date range</b>
+          <div className="prayer-filter-dates">
+            <label><span>From</span><input type="date" value={from} max={to || undefined} onChange={(event) => setFrom(event.target.value)}/></label>
+            <label><span>To</span><input type="date" value={to} min={from || undefined} onChange={(event) => setTo(event.target.value)}/></label>
+          </div>
+          {invalid && <div className="inline-error" role="alert">The start date must be before the end date.</div>}
+        </div>
+        <div className="prayer-filter-actions">
+          <button type="button" className="button button-soft" onClick={() => { setDir("asc"); setFrom(""); setTo(""); }}>Reset</button>
+          <button type="button" className="button button-primary" disabled={invalid} onClick={() => onApply({ sortDir: dir, dateFrom: from, dateTo: to })}>Apply</button>
+        </div>
+      </div>
+    </Modal>,
+    document.body,
   );
 }
 
@@ -1220,7 +1307,7 @@ function MeetingPage() {
       return;
     }
     if (activeRoomSlugInApp) {
-      if (activeRoomSlugInApp === slug) navigate(`/room/${encodeURIComponent(slug)}`);
+      if (activeRoomSlugInApp === slug) navigate(`/room/${encodeURIComponent(slug)}`, { replace: true });
       else window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Leave your current meeting before joining another one." } }));
       return;
     }
@@ -1253,7 +1340,7 @@ function MeetingPage() {
         await room.disconnect().catch(() => { /* Nothing to close. */ });
       }
       window.dispatchEvent(new CustomEvent("meet-room-opened", { detail: { slug } }));
-      navigate(`/room/${encodeURIComponent(slug)}`);
+      navigate(`/room/${encodeURIComponent(slug)}`, { replace: true });
     } catch (cause) {
       setMediaPrompt(null);
       setError(cause instanceof Error ? cause.message : "Could not join this meeting.");
@@ -1479,8 +1566,11 @@ function MeetingRoomPage({ slug, isActive }: { slug: string; isActive: boolean }
   }, [isActive, meetingEnded, session, slug]);
 
   function leaveRoom() {
-    window.dispatchEvent(new CustomEvent("meet-room-closed", { detail: { slug } }));
-    navigate(`/meeting/${encodeURIComponent(slug)}`, { replace: roomBackGuardOn });
+    // The room entry is replaced by the meeting page, so Back from there goes to the page before the meeting page.
+    unwindDialogHistory(() => {
+      window.dispatchEvent(new CustomEvent("meet-room-closed", { detail: { slug } }));
+      navigate(`/meeting/${encodeURIComponent(slug)}`, { replace: true });
+    });
   }
 
   // The host pressed End for everyone: ask first with our own confirmation, never the browser box.
@@ -1611,8 +1701,8 @@ function ConfirmPrompt({ icon, title, message, confirmLabel, cancelLabel, onConf
   }, [onCancel]);
   const host = document.fullscreenElement ?? document.querySelector(".conference-fullscreen-target.is-pseudo-fullscreen") ?? document.body;
   return createPortal(
-    <div className="modal-backdrop confirm-end-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}>
-      <section className="modal-panel modal-panel-narrow confirm-end-panel" role="alertdialog" aria-modal="true" aria-labelledby="confirm-prompt-title" aria-describedby="confirm-prompt-text">
+    <div className="modal-backdrop confirm-prompt-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}>
+      <section className="modal-panel modal-panel-narrow confirm-end-panel confirm-prompt-panel" role="alertdialog" aria-modal="true" aria-labelledby="confirm-prompt-title" aria-describedby="confirm-prompt-text">
         <div className="confirm-end-icon" aria-hidden="true">{icon}</div>
         <h2 id="confirm-prompt-title">{title}</h2>
         <p id="confirm-prompt-text">{message}</p>
@@ -1627,9 +1717,19 @@ function ConfirmPrompt({ icon, title, message, confirmLabel, cancelLabel, onConf
 }
 
 /** Shown to everyone the moment the meeting is ended. */
+/** Removes every dialog/guard history entry in one jump, then runs `then` (used when leaving the room so Back never returns into it). */
+function unwindDialogHistory(then: () => void) {
+  const count = backCloseStack.length;
+  backCloseStack.length = 0;
+  if (count === 0) { then(); return; }
+  pendingBacks += 1;
+  afterBack.push(then);
+  window.history.go(-count);
+  // If the browser never reports the jump, continue anyway.
+  window.setTimeout(() => { if (afterBack.includes(then)) { pendingBacks = 0; afterBack.splice(0).forEach((run) => run()); } }, 1200);
+}
+
 /** Phone/browser Back closes the open dialog instead of leaving the page. Opening pushes one history entry; closing by any means removes it again. */
-// True while the call room is the visible page and Back is being caught (so leaving can replace that entry).
-let roomBackGuardOn = false;
 const backCloseStack: string[] = [];
 // When one dialog closes and another opens in the same moment, the new entry waits until the old one has finished going back.
 let pendingBacks = 0;
@@ -1671,6 +1771,7 @@ function useBackClose(active: boolean, onClose: () => void, keep = false) {
       window.removeEventListener("popstate", onPop);
       if (!pushed) return;
       const index = backCloseStack.lastIndexOf(id);
+      if (index < 0) return;
       const wasTop = index === backCloseStack.length - 1;
       if (index >= 0) backCloseStack.splice(index, 1);
       // Closed with a button or by tapping outside: remove the extra entry so Back goes to the real previous page.
@@ -3033,7 +3134,6 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
   useCallWakeLock(room);
   const pip = useRoomPictureInPicture(room, meeting.title);
   // Back button inside the call: stay in the room and float the call (picture-in-picture) instead of dropping out of it.
-  useEffect(() => { roomBackGuardOn = isActive; return () => { roomBackGuardOn = false; }; }, [isActive]);
   useBackClose(isActive, () => {
     if (document.visibilityState === "hidden" || pip.active) return;
     void (pip.supported ? pip.enterAuto() : Promise.resolve(false)).then((floated) => {

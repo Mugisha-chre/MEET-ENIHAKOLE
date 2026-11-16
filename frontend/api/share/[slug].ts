@@ -42,7 +42,8 @@ export default async function handler(req: Request, res: Response) {
   const detailsUrl = `${appUrl}/meeting/${encodeURIComponent(slug)}`;
   if (!isPreviewCrawler) {
     res.setHeader("Cache-Control", "no-store");
-    res.redirect(302, detailsUrl);
+    // Stay on the exact site the visitor opened (never hop to another deployment/API), so everyone lands in the same prayer room.
+    res.redirect(302, `/meeting/${encodeURIComponent(slug)}`);
     return;
   }
 

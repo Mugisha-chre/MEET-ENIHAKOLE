@@ -3700,3 +3700,81 @@ html[data-theme="light"] .room-control-dock .room-control-button.control-selecte
 .help-steps { animation: help-steps-in .2s ease-out both; }
 @keyframes help-steps-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .help-steps { animation: none; } .help-guide-chevron { transition: none; } }
+
+/* ===== Round 26 ===== */
+
+/* Desktop top bar: a slimmer profile button. */
+@media (min-width: 721px) {
+  .profile-trigger { padding: 2px 11px 2px 2px; gap: 8px; border-width: 1px; }
+  .profile-trigger .profile-avatar, .profile-trigger .profile-photo.profile-avatar { width: 30px; height: 30px; }
+  .profile-trigger .profile-name { font-size: 12.5px; }
+  .profile-trigger .profile-chevron { width: 13px; height: 13px; }
+}
+
+/* Phones: no theme button in the top bar (it lives in the side menu); the profile ring is dark red in both themes. */
+@media (max-width: 720px) {
+  .topbar .theme-toggle { display: none; }
+  .profile-trigger { border-color: #a62b4d; }
+  :root[data-theme="light"] .profile-trigger { border-color: #8f2141; }
+  .profile-sheet-photo { border: 3px solid #a62b4d; box-shadow: 0 0 0 3px rgba(166,43,77,.22); }
+  :root[data-theme="light"] .profile-sheet-photo { border-color: #8f2141; box-shadow: 0 0 0 3px rgba(143,33,65,.18); }
+  .profile-sheet, .profile-sheet-backdrop { touch-action: none; overscroll-behavior: contain; }
+}
+.profile-sheet-dragging { transition: none; }
+html.no-pull-refresh, html.no-pull-refresh body { overscroll-behavior-y: none; }
+
+/* Side menu theme switch (phones only). */
+.sidebar-theme-switch { display: none; }
+@media (max-width: 720px) {
+  .sidebar-theme-switch { box-sizing: border-box; width: 100%; display: flex; align-items: center; gap: 12px; margin-bottom: 8px; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 14px; background: rgba(255,255,255,.04); color: inherit; font: inherit; text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .sidebar-theme-icon { display: grid; place-items: center; flex: 0 0 auto; width: 36px; height: 36px; border-radius: 11px; color: #fff; background: linear-gradient(145deg, #a92b4e, #7a1a37); }
+  .sidebar-theme-switch.is-light .sidebar-theme-icon { color: #7a4a10; background: linear-gradient(145deg, #f6d98f, #e9b95a); }
+  .sidebar-theme-text { display: grid; gap: 1px; min-width: 0; flex: 1 1 auto; }
+  .sidebar-theme-text b { font-size: 13px; font-weight: 800; }
+  .sidebar-theme-text small { color: var(--muted); font-size: 11px; }
+  .sidebar-theme-track { position: relative; flex: 0 0 auto; width: 42px; height: 24px; border-radius: 999px; background: rgba(255,255,255,.16); transition: background .2s ease; }
+  .sidebar-theme-knob { position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.35); transition: transform .2s ease; }
+  .sidebar-theme-switch.is-dark .sidebar-theme-track { background: #8f2141; }
+  .sidebar-theme-switch.is-dark .sidebar-theme-knob { transform: translateX(18px); }
+  :root[data-theme="light"] .sidebar-theme-switch { background: #fff8f3; border-color: #e7d7d0; }
+  :root[data-theme="light"] .sidebar-theme-text small { color: #7f6c74; }
+  :root[data-theme="light"] .sidebar-theme-track { background: #d9c7c1; }
+}
+
+/* Welcome heading: pure white (dark) / pure black (light), tall enough that letters like g are never cut. */
+.welcome-row .welcome-copy h1 { color: #fff; line-height: 1.4; padding: .04em 0 .16em; }
+:root[data-theme="light"] .welcome-row .welcome-copy h1 { color: #000; }
+
+/* Leave / logout prompt follows the theme. In light mode "No, stay…" is a clear dark red. */
+.confirm-prompt-panel .button-soft { font-weight: 800; }
+:root[data-theme="light"] .confirm-prompt-panel .button-soft { background: #fff; border-color: #8b0a1f; color: #8b0a1f; }
+:root[data-theme="light"] .confirm-prompt-panel .button-soft:hover:not(:disabled) { background: #fbeef0; border-color: #8b0a1f; color: #8b0a1f; }
+
+/* Prayers filter. */
+.filter-bar-end { display: flex; align-items: center; gap: 12px; margin-left: auto; }
+.filter-open-button { position: relative; display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 11px; background: rgba(255,255,255,.04); color: inherit; font: inherit; font-size: 12px; font-weight: 800; cursor: pointer; }
+.filter-open-button:hover { background: rgba(255,255,255,.08); }
+.filter-open-button.filter-open-active { border-color: #a62b4d; color: #f3b9c8; }
+.filter-open-button i { position: absolute; top: 6px; right: 7px; width: 7px; height: 7px; border-radius: 50%; background: #d4426b; }
+:root[data-theme="light"] .filter-open-button { background: #fffdf9; border-color: #e8dad4; color: #4a2c37; }
+:root[data-theme="light"] .filter-open-button.filter-open-active { border-color: #8f2141; color: #8f2141; }
+@media (max-width: 720px) { .filter-bar { flex-wrap: wrap; row-gap: 10px; } .segmented-filter { max-width: 100%; } .filter-bar-end { width: 100%; justify-content: space-between; margin-left: 0; } }
+.prayer-filter-content { display: flex; flex-direction: column; align-items: stretch; gap: 14px; }
+.prayer-filter-content > .modal-brand-icon, .prayer-filter-content > .section-overline, .prayer-filter-content > h2 { align-self: center; text-align: center; margin: 0; }
+.prayer-filter-group { display: grid; gap: 8px; }
+.prayer-filter-group > b { font-size: 12px; font-weight: 800; }
+.prayer-filter-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.prayer-filter-choices button { display: grid; justify-items: start; gap: 2px; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 12px; background: rgba(255,255,255,.04); color: inherit; font: inherit; font-size: 13px; font-weight: 800; text-align: left; cursor: pointer; }
+.prayer-filter-choices button svg { margin-bottom: 2px; }
+.prayer-filter-choices button small { color: var(--muted); font-size: 11px; font-weight: 600; }
+.prayer-filter-choices button.is-selected { border-color: #a62b4d; background: rgba(143,33,65,.22); }
+.prayer-filter-dates { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.prayer-filter-dates label { display: grid; gap: 5px; min-width: 0; font-size: 11px; font-weight: 700; color: var(--muted); }
+.prayer-filter-dates input { box-sizing: border-box; width: 100%; min-width: 0; min-height: 42px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 11px; background: rgba(255,255,255,.045); color: inherit; font: inherit; font-size: 14px; color-scheme: dark; }
+.prayer-filter-actions { display: flex; gap: 10px; margin-top: 4px; }
+.prayer-filter-actions .button { flex: 1 1 0; justify-content: center; }
+:root[data-theme="light"] .prayer-filter-choices button { background: #fff8f3; border-color: #e7d7d0; color: #4a2c37; }
+:root[data-theme="light"] .prayer-filter-choices button small, :root[data-theme="light"] .prayer-filter-dates label { color: #7f6c74; }
+:root[data-theme="light"] .prayer-filter-choices button.is-selected { border-color: #8f2141; background: #f9e7ec; color: #8f2141; }
+:root[data-theme="light"] .prayer-filter-dates input { background: #fff8f7; border-color: #e8d9dc; color: #452a36; color-scheme: light; }
+@media (max-width: 420px) { .prayer-filter-choices, .prayer-filter-dates { grid-template-columns: 1fr; } }
