@@ -1,5 +1,5 @@
 import { createPortal } from "react-dom";
-import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type RefObject, type FormEvent, type ReactNode, type TouchEvent as ReactTouchEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { createContext, memo, startTransition, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type RefObject, type FormEvent, type ReactNode, type TouchEvent as ReactTouchEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { LiveKitRoom, ParticipantTile, RoomAudioRenderer, isTrackReference, useChat, useIsMuted, useLocalParticipant, useParticipants, useRoomContext, useTracks, VideoTrack, type TrackReference } from "@livekit/components-react";
 import { ConnectionState, DisconnectReason, MediaDeviceFailure, ParticipantEvent, Room, RoomEvent, Track, VideoPresets, VideoQuality, type Participant, type RemoteParticipant, type RoomOptions, type VideoCaptureOptions } from "livekit-client";
@@ -410,11 +410,16 @@ export default function App() {
   }, []);
 
   const toggleTheme = useCallback(() => {
-    setTheme((current) => {
-      const next = current === "light" ? "dark" : "light";
-      try { localStorage.setItem(THEME_STORAGE_KEY, next); } catch { /* Theme still applies for this session. */ }
-      return next;
-    });
+    const root = document.documentElement;
+    const next = root.dataset.theme === "light" ? "dark" : "light";
+    // Paint the new theme immediately (before React re-renders) with transitions switched off for that frame, so nothing fades or lags.
+    root.classList.add("theme-switching");
+    root.dataset.theme = next;
+    const themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+    if (themeColor) themeColor.content = next === "light" ? "#fbf7f2" : "#130d10";
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => root.classList.remove("theme-switching")));
+    try { localStorage.setItem(THEME_STORAGE_KEY, next); } catch { /* Theme still applies for this session. */ }
+    startTransition(() => setTheme(next));
   }, []);
 
   // Without a saved choice, follow the browser/device theme live (including when it switches while the app is open).
@@ -625,10 +630,10 @@ function ProfileMenu({ user, onSignOut, onChangeAccount }: { user: User; onSignO
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<{ top: number; right: number } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const [dragY, setDragY] = useState(0);
-  const [dragged, setDragged] = useState(false);
+  const sheetRef = useRef<HTMLElement>(null);
   const dragStart = useRef<number | null>(null);
-  const close = useCallback(() => { setOpen(false); setDragY(0); setDragged(false); dragStart.current = null; }, []);
+  const dragFrame = useRef(0);
+  const close = useCallback(() => { setOpen(false); dragStart.current = null; }, []);
   // While the sheet is open the page itself must not pull-to-refresh or scroll.
   useEffect(() => {
     if (!open) return;
@@ -643,17 +648,24 @@ function ProfileMenu({ user, onSignOut, onChangeAccount }: { user: User; onSignO
   const onSheetPointerMove = (event: ReactPointerEvent<HTMLElement>) => {
     if (dragStart.current === null) return;
     const delta = Math.max(0, event.clientY - dragStart.current);
-    if (delta > 2) setDragged(true);
-    setDragY(delta);
+    const sheet = sheetRef.current;
+    if (!sheet) return;
+    window.cancelAnimationFrame(dragFrame.current);
+    // Moves the sheet straight on the compositor: no React re-render while the finger is down.
+    dragFrame.current = window.requestAnimationFrame(() => { sheet.style.animation = "none"; sheet.style.transition = "none"; sheet.style.transform = `translate3d(0, ${delta}px, 0)`; });
   };
   const onSheetPointerEnd = (event: ReactPointerEvent<HTMLElement>) => {
     if (dragStart.current === null) return;
     const delta = Math.max(0, event.clientY - dragStart.current);
     dragStart.current = null;
+    window.cancelAnimationFrame(dragFrame.current);
     try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* Optional. */ }
-    if (delta > 90) close(); else setDragY(0);
+    const sheet = sheetRef.current;
+    if (!sheet) return;
+    sheet.style.transition = "transform .14s ease-out";
+    if (delta > 80) { sheet.style.transform = "translate3d(0, 100%, 0)"; window.setTimeout(close, 120); }
+    else sheet.style.transform = "translate3d(0, 0, 0)";
   };
-  useBackClose(open, close);
   const toggle = () => {
     const rect = triggerRef.current?.getBoundingClientRect();
     if (rect) setAnchor({ top: rect.bottom + 10, right: Math.max(12, window.innerWidth - rect.right) });
@@ -675,7 +687,7 @@ function ProfileMenu({ user, onSignOut, onChangeAccount }: { user: User; onSignO
     </button>
     {open && createPortal(
       <div className="profile-sheet-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
-        <section className={`profile-sheet ${dragY > 0 ? "profile-sheet-dragging" : ""}`} role="dialog" aria-modal="true" aria-label="Profile" onPointerDown={onSheetPointerDown} onPointerMove={onSheetPointerMove} onPointerUp={onSheetPointerEnd} onPointerCancel={onSheetPointerEnd} style={{ ...(anchor ? ({ "--profile-top": `${anchor.top}px`, "--profile-right": `${anchor.right}px` } as CSSProperties) : {}), ...(dragged ? { animation: "none" } : {}), ...(dragY > 0 ? { transform: `translateY(${dragY}px)` } : {}) }}>
+        <section ref={sheetRef} className="profile-sheet" role="dialog" aria-modal="true" aria-label="Profile" onPointerDown={onSheetPointerDown} onPointerMove={onSheetPointerMove} onPointerUp={onSheetPointerEnd} onPointerCancel={onSheetPointerEnd} style={anchor ? ({ "--profile-top": `${anchor.top}px`, "--profile-right": `${anchor.right}px` } as CSSProperties) : undefined}>
           <span className="profile-sheet-grab" aria-hidden="true"/>
           <button type="button" className="profile-sheet-close" onClick={close} aria-label="Close profile"><X size={16}/></button>
           <div className="profile-sheet-head">

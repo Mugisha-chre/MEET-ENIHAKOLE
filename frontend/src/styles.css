@@ -3778,3 +3778,20 @@ html.no-pull-refresh, html.no-pull-refresh body { overscroll-behavior-y: none; }
 :root[data-theme="light"] .prayer-filter-choices button.is-selected { border-color: #8f2141; background: #f9e7ec; color: #8f2141; }
 :root[data-theme="light"] .prayer-filter-dates input { background: #fff8f7; border-color: #e8d9dc; color: #452a36; color-scheme: light; }
 @media (max-width: 420px) { .prayer-filter-choices, .prayer-filter-dates { grid-template-columns: 1fr; } }
+
+/* ===== Round 27: speed ===== */
+
+/* Theme switch is instant: while the class is on (two frames), nothing transitions. */
+html.theme-switching *, html.theme-switching *::before, html.theme-switching *::after { transition: none !important; }
+
+/* Phone side menu opens and closes quickly, on the compositor only (transform), without blur or shadow animation. */
+@media (max-width: 720px) {
+  .sidebar { transition: transform .18s cubic-bezier(.2, .9, .3, 1), visibility 0s; opacity: 1; will-change: transform; contain: layout style; backface-visibility: hidden; }
+  .sidebar:not(.sidebar-open) { opacity: 1; transition: transform .16s cubic-bezier(.4, 0, .8, .4), visibility 0s linear .16s; }
+  .sidebar.sidebar-open { opacity: 1; }
+  .mobile-scrim { backdrop-filter: none; -webkit-backdrop-filter: none; transition: opacity .15s ease, visibility 0s linear .15s; }
+  .mobile-scrim-open { transition: opacity .15s ease, visibility 0s; }
+  .profile-sheet { animation-duration: .16s; will-change: transform; }
+  .profile-sheet-backdrop { backdrop-filter: none; -webkit-backdrop-filter: none; animation-duration: .12s; }
+}
+@media (min-width: 721px) { .profile-sheet { animation-duration: .12s; } .profile-sheet-backdrop { animation-duration: .1s; } }
