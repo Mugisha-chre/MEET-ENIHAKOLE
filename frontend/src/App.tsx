@@ -11,7 +11,7 @@ import {
   PictureInPicture2, Hand, Send, MonitorUp, MicOff, Maximize2, Minimize2, ChevronLeft, ChevronRight, Smile, ChevronDown, Download,
   MousePointer2, MoveUpRight, Eraser, Eye, EyeOff, PenLine, Undo2, Settings2,
   BookOpen, Smartphone, Headphones, LifeBuoy, Mail,
-  FileText, Bold, Italic, Underline, List, ListOrdered, Heading1, Heading2, IndentIncrease, IndentDecrease,
+  FileText, Bold, Italic, Underline, List, ListOrdered, Heading1, Heading2, IndentIncrease, IndentDecrease, Lightbulb,
 } from "lucide-react";
 import { api, ApiError, clearAuthToken, getRegisteredAuthToken, getGuestProfile, saveAuthToken, saveGuestAuthToken, type MeetingNotesPayload } from "./api";
 import { AdminCenterPage, AudioRecordingPlayer, RecordingsPage } from "./ManagementPages";
@@ -19,7 +19,6 @@ import { clearCachePrefix, patchCache, readCache, removeCache, writeCache } from
 import type { JoinSession, Meeting, PrivateConversationSummary, PrivateMessage, User } from "./types";
 import { GoogleContinueButton, ProfilePhoto, avatarColor, googleSignOut, hiResPhoto, preloadPhoto, preloadPhotoBriefly } from "./google";
 import { RoomTipCard, useRoomTips, useWeakNetworkTip, type RoomTip } from "./RoomTips";
-import { REACTION_SET, ReactionGif, normalizeReaction, preloadReactionGifs } from "./reactionGifs";
 
 interface AppContextValue {
   user: User | null;
@@ -1602,6 +1601,18 @@ function MeetingRoomPage({ slug, isActive }: { slug: string; isActive: boolean }
   // The room closed under us. If the host ended the meeting, show the ended screen.
   function handleRoomDisconnected(reason?: DisconnectReason) {
     if (reason === DisconnectReason.ROOM_DELETED) { showEnded(); return; }
+    if (reason === DisconnectReason.PARTICIPANT_REMOVED) {
+      // The host removed this person: leave the call completely and explain it with a tip toast, never a top banner.
+      sessionStorage.removeItem(`meet-session:${slug}`);
+      preparedRooms.delete(slug);
+      setConfirmLeave(false); setConfirmEnd(false);
+      unwindDialogHistory(() => {
+        window.dispatchEvent(new CustomEvent("meet-room-closed", { detail: { slug } }));
+        navigate(`/meeting/${encodeURIComponent(slug)}`, { replace: true });
+        window.dispatchEvent(new CustomEvent("meet-tip", { detail: { message: "The host removed you from this meeting, so you are no longer in the call.", tone: "removed" } }));
+      });
+      return;
+    }
     setDisconnected(true);
     void api.meeting(slug).then(({ meeting }) => { if (meeting.status === "ended" || meeting.status === "cancelled") showEnded(); }).catch(() => { /* Keep the normal disconnected notice. */ });
   }
@@ -1960,14 +1971,23 @@ const PRIVATE_MESSAGE_TOPIC = "meet-enihakole-private";
 function makeReaction(id: string, emoji: string, name: string): FloatingReaction {
   return { id, emoji, name, x: 12 + Math.random() * 76, rise: 65, scale: 0.9 + Math.random() * 0.35 };
 }
-function reactionKind(emoji: string): string {
-  if (emoji === "👏") return "clap"; if (emoji === "🙌") return "wave"; if (emoji === "❤️" || emoji === "💛") return "beat";
-  if (emoji === "🎉") return "pop"; if (emoji === "✨") return "twinkle"; if (emoji === "🕊️") return "flap"; if (emoji === "👍") return "thumb";
-  return "float";
+/** Animated Noto emoji (the same set Google Meet uses). Falls back to the native emoji if an image cannot load. */
+const ANIMATED_EMOJI_CODE: Record<string, string> = { "🙏": "1f64f", "❤️": "2764_fe0f", "👏": "1f44f", "🙌": "1f64c", "😊": "1f60a", "🎉": "1f389", "✨": "2728", "💛": "1f49b", "🕊️": "1f54a_fe0f", "👍": "1f44d", "😂": "1f602", "🔥": "1f525" };
+const animatedEmojiUrl = (emoji: string) => `https://fonts.gstatic.com/s/e/notoemoji/latest/${ANIMATED_EMOJI_CODE[emoji] || "1f64f"}/512.webp`;
+const failedAnimatedEmoji = new Set<string>();
+function preloadAnimatedEmojis() {
+  if (typeof Image === "undefined") return;
+  Object.keys(ANIMATED_EMOJI_CODE).forEach((emoji) => { const img = new Image(); img.decoding = "async"; img.onerror = () => failedAnimatedEmoji.add(emoji); img.src = animatedEmojiUrl(emoji); });
+}
+function AnimatedEmoji({ emoji, className = "" }: { emoji: string; className?: string }) {
+  const [failed, setFailed] = useState(() => failedAnimatedEmoji.has(emoji));
+  if (failed || !ANIMATED_EMOJI_CODE[emoji]) return <span className={`animated-emoji-fallback ${className}`} aria-hidden="true">{emoji}</span>;
+  return <img className={`animated-emoji ${className}`} src={animatedEmojiUrl(emoji)} alt="" aria-hidden="true" draggable={false} decoding="async" onError={() => { failedAnimatedEmoji.add(emoji); setFailed(true); }} />;
 }
 // Anything a person can press: a tap on these must keep doing its own job and never toggle fullscreen.
 const INTERACTIVE_SELECTOR = ".screen-annotate-layer.is-drawing, .screen-annotate-toolbar, button, a, input, textarea, select, label, summary, [role='button'], [role='dialog'], [data-popover], .room-device-menu, .reaction-picker, .messages-modal-backdrop, .room-alert, .room-message-toast, .room-presence-stack, .modal-backdrop";
 const PARTICIPANTS_PER_SCREEN = 6;
+const REACTION_SET = ["🙏", "❤️", "👏", "🙌", "😊", "🎉", "✨", "💛", "🕊️", "👍", "😂", "🔥"];
 
 // People we already know about before the room connects (from the join response and our own token), so names and photos are there from the first frame.
 const knownPeople = new Map<string, { name: string; picture: string }>();
@@ -3228,6 +3248,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
   const [privateNotice, setPrivateNotice] = useState<DirectContact | null>(null);
   const [moderatorRequest, setModeratorRequest] = useState<{ media: "microphone" | "camera"; hostName: string } | null>(null);
   const [moderationBusy, setModerationBusy] = useState<string | null>(null);
+  const [hostMenuIdentity, setHostMenuIdentity] = useState<string | null>(null);
   const [spotlightIdentity, setSpotlightIdentity] = useState<string | null>(null);
   const [videoQualityMode, setVideoQualityMode] = useState<VideoQualityMode>(readVideoQualityChoice);
   const [videoQualityMenuOpen, setVideoQualityMenuOpen] = useState(false);
@@ -3258,7 +3279,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
   const [raisedHands, setRaisedHands] = useState<Record<string, boolean>>({});
   const [handRaised, setHandRaised] = useState(false);
   const [reactions, setReactions] = useState<FloatingReaction[]>([]);
-  useEffect(() => { preloadReactionGifs(); }, []);
+  useEffect(() => { preloadAnimatedEmojis(); }, []);
   const [page, setPage] = useState(0);
   const [fullScreen, setFullScreen] = useState(false);
   const [pseudoFull, setPseudoFull] = useState(false);
@@ -3347,9 +3368,8 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
         const data = JSON.parse(new TextDecoder().decode(payload)) as RoomSignal;
         const identity = participant?.identity || "unknown";
         if (data.kind === "hand") setRaisedHands((current) => ({ ...current, [identity]: data.raised }));
-        const reactionEmoji = data.kind === "reaction" ? normalizeReaction(data.emoji) : null;
-        if (data.kind === "reaction" && reactionEmoji) {
-          const item = makeReaction(`${data.id}-${Math.random().toString(36).slice(2, 6)}`, reactionEmoji, participant?.name || "A participant");
+        if (data.kind === "reaction" && REACTION_SET.includes(data.emoji)) {
+          const item = makeReaction(`${data.id}-${Math.random().toString(36).slice(2, 6)}`, data.emoji, participant?.name || "A participant");
           setReactions((current) => [...current.slice(-11), item]);
           window.setTimeout(() => setReactions((current) => current.filter((reaction) => reaction.id !== item.id)), REACTION_LIFETIME);
         }
@@ -3911,16 +3931,15 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
 
   // Close the microphone / camera / reaction popovers as soon as the user presses anywhere outside them.
   useEffect(() => {
-    if (!deviceMenu && !reactionsOpen) return;
+    if (!deviceMenu) return;
     const onOutside = (event: Event) => {
       const target = event.target instanceof Element ? event.target : null;
       const inside = (name: string) => Boolean(target?.closest(`[data-popover="${name}"]`));
       if (deviceMenu && !inside(deviceMenu)) setDeviceMenu(null);
-      if (reactionsOpen && !inside("reactions")) setReactionsOpen(false);
     };
     document.addEventListener("pointerdown", onOutside, true);
     return () => document.removeEventListener("pointerdown", onOutside, true);
-  }, [deviceMenu, reactionsOpen]);
+  }, [deviceMenu]);
 
   async function broadcast(signal: RoomSignal) {
     try {
@@ -4387,7 +4406,6 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
     await broadcast({ kind: "hand", raised: next });
   }
   async function react(emoji: string) {
-    setReactionsOpen(false);
     const id = `${localIdentity}-${Date.now()}`;
     setReactions((current) => [...current.slice(-11), makeReaction(id, emoji, localParticipant.name || "You")]);
     window.setTimeout(() => setReactions((current) => current.filter((reaction) => reaction.id !== id)), REACTION_LIFETIME);
@@ -4555,7 +4573,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
             </div>;
           })}
         </div>
-        {reactions.length > 0 && <div className="reaction-float-stack" aria-live="polite">{reactions.map((reaction) => <div className="reaction-float" key={reaction.id} style={{ "--x": `${reaction.x}%`, "--rise": `${reaction.rise}%`, "--rs": reaction.scale } as CSSProperties}><span className={`reaction-emoji reaction-emoji-${reactionKind(reaction.emoji)}`}><ReactionGif emoji={reaction.emoji}/></span><b>{reaction.name}</b></div>)}</div>}
+        {reactions.length > 0 && <div className="reaction-float-stack" aria-live="polite">{reactions.map((reaction) => <div className="reaction-float" key={reaction.id} style={{ "--x": `${reaction.x}%`, "--rise": `${reaction.rise}%`, "--rs": reaction.scale } as CSSProperties}><span className="reaction-emoji"><AnimatedEmoji emoji={reaction.emoji}/></span><b>{reaction.name}</b></div>)}</div>}
         {pages > 1 && <div className="participant-pagination"><span>Screen {currentPage + 1} of {pages} · {visualParticipants.length} participants</span><div><button className="room-icon-button" onClick={() => setPage(Math.max(0, currentPage - 1))} disabled={currentPage === 0} aria-label="Previous participant screen"><ChevronLeft size={18}/></button><button className="room-icon-button" onClick={() => setPage(Math.min(pages - 1, currentPage + 1))} disabled={currentPage >= pages - 1} aria-label="Next participant screen"><ChevronRight size={18}/></button></div></div>}
       </div>
       <div className={`room-control-dock rd-dock ${!fullScreen || controlsVisible ? "dock-open" : "dock-hidden"}`} ref={dockRef} aria-hidden={fullScreen && !controlsVisible}>
@@ -4580,11 +4598,11 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
           </div>
         </div>
       </div>
-      {reactionsOpen && <div className="rd-emoji-layer"><div className="rd-emoji-pop" data-popover="reactions" role="group" aria-label="Choose a reaction">{REACTION_SET.map((emoji) => <button type="button" key={emoji} onClick={() => { void react(emoji); setReactionsOpen(false); }} aria-label={`Send ${emoji}`}><ReactionGif emoji={emoji}/></button>)}</div></div>}
+      {reactionsOpen && <div className="rd-emoji-layer"><div className="rd-emoji-pop" data-popover="reactions" role="group" aria-label="Choose a reaction"><header className="rd-emoji-head"><b>Reactions</b><button type="button" className="rd-emoji-close" onClick={() => setReactionsOpen(false)} aria-label="Close reactions"><X size={16}/></button></header><div className="rd-emoji-grid">{REACTION_SET.map((emoji) => <button type="button" key={emoji} onClick={() => { void react(emoji); }} aria-label={`Send ${emoji}`}><AnimatedEmoji emoji={emoji}/></button>)}</div></div></div>}
       {moreOpen && <div className="rd-more-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setMoreOpen(false); }}>
         <section className="rd-more-sheet" role="dialog" aria-modal="true" aria-label="More call actions">
           <header className="rd-more-head">{moreView === "reactions" ? <button type="button" className="rd-more-icon" onClick={() => setMoreView("actions")} aria-label="Back to actions"><ArrowLeft size={18}/></button> : <span className="rd-more-grip" aria-hidden="true"/>}<b>{moreView === "reactions" ? "Send a reaction" : "More"}</b><button type="button" className="rd-more-icon" onClick={() => setMoreOpen(false)} aria-label="Close"><X size={18}/></button></header>
-          {moreView === "reactions" ? <div className="rd-more-emojis" role="group" aria-label="Choose a reaction">{REACTION_SET.map((emoji) => <button type="button" key={emoji} onClick={() => { void react(emoji); setMoreOpen(false); }} aria-label={`Send ${emoji}`}><ReactionGif emoji={emoji}/></button>)}</div> : <div className="rd-more-grid">
+          {moreView === "reactions" ? <div className="rd-more-emojis" role="group" aria-label="Choose a reaction">{REACTION_SET.map((emoji) => <button type="button" key={emoji} onClick={() => { void react(emoji); setMoreOpen(false); }} aria-label={`Send ${emoji}`}><AnimatedEmoji emoji={emoji}/></button>)}</div> : <div className="rd-more-grid">
             <RdButton label={handRaised ? "Lower your hand" : "Raise your hand"} on={handRaised} onClick={() => { void toggleHand(); setMoreOpen(false); }} icon={<Hand size={24} strokeWidth={2.2}/>}/>
             <RdButton label={isScreenShareEnabled ? "Stop sharing screen" : "Share screen"} on={isScreenShareEnabled} onClick={() => { setMoreOpen(false); void toggleScreenShare(); }} icon={<RdShareIcon/>}/>
             <RdButton label="Open collaborative meeting notes" onClick={() => { setMoreOpen(false); setNotesOpen(true); setMessagesOpen(false); setPeopleOpen(false); setDirectContact(null); }} icon={<FileText size={24} strokeWidth={2.2}/>}/>
@@ -4645,13 +4663,29 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
       const micMuted = person.getTrackPublication(Track.Source.Microphone)?.isMuted ?? true;
       const cameraMuted = person.getTrackPublication(Track.Source.Camera)?.isMuted ?? true;
       const isHostPerson = getParticipantRole(person) === "host";
-      const busy = moderationBusy === person.identity;
-      return <article className="people-person-row" key={person.identity}><ProfilePhoto src={participantPicture(person.metadata, person.identity)} name={participantName(person)} size={128} className="people-person-avatar"/><div className="people-person-details"><div className="people-person-title"><b>{participantName(person) || "Participant"}{isSelf ? " · You" : ""}</b>{isHostPerson && <span className="people-host-tag">HOST</span>}</div><small><span className="people-online-dot"/> Connected {person.isSpeaking ? "· Speaking" : ""}{micMuted ? " · Mic off" : " · Mic on"}{cameraMuted ? " · Camera off" : " · Camera on"}</small></div>{!isSelf && <div className="people-person-actions"><button type="button" onClick={() => void focusParticipant(person.identity)} title={spotlightIdentity === person.identity ? "Clear participant focus" : "Bring participant into the main view"}>{spotlightIdentity === person.identity ? "Unfocus" : "Focus"}</button><button type="button" onClick={() => openPrivateConversation(person)} title={`Private message ${participantName(person) || "participant"}`}><MessageCircle size={15}/><span>Message</span></button>{role === "host" && !isHostPerson && <details className="people-more-menu"><summary aria-label={`Host actions for ${participantName(person) || "participant"}`}><ChevronDown size={16}/></summary><div className="people-more-popover"><button type="button" disabled={busy} onClick={() => void moderateParticipant(person, micMuted ? "request-unmute" : "mute-mic")}>{micMuted ? "Request microphone" : "Mute microphone"}</button><button type="button" disabled={busy} onClick={() => void moderateParticipant(person, cameraMuted ? "request-camera" : "disable-camera")}>{cameraMuted ? "Request camera" : "Disable camera"}</button><button type="button" disabled={busy} onClick={() => void moderateParticipant(person, "remove")}>Remove from meeting</button><button type="button" className="people-ban-action" disabled={busy} onClick={() => void moderateParticipant(person, "ban")}>Remove and block re-entry</button></div></details>}</div>}{isSelf && <span className="people-you-tag">You</span>}</article>;
+      return <article className="people-person-row" key={person.identity}><ProfilePhoto src={participantPicture(person.metadata, person.identity)} name={participantName(person)} size={128} className="people-person-avatar"/><div className="people-person-details"><div className="people-person-title"><b>{participantName(person) || "Participant"}{isSelf ? " · You" : ""}</b>{isHostPerson && <span className="people-host-tag">HOST</span>}</div><small><span className="people-online-dot"/> Connected {person.isSpeaking ? "· Speaking" : ""}{micMuted ? " · Mic off" : " · Mic on"}{cameraMuted ? " · Camera off" : " · Camera on"}</small></div>{!isSelf && <div className="people-person-actions"><button type="button" onClick={() => void focusParticipant(person.identity)} title={spotlightIdentity === person.identity ? "Clear participant focus" : "Bring participant into the main view"}>{spotlightIdentity === person.identity ? "Unfocus" : "Focus"}</button><button type="button" onClick={() => openPrivateConversation(person)} title={`Private message ${participantName(person) || "participant"}`}><MessageCircle size={15}/><span>Message</span></button>{role === "host" && !isHostPerson && <button type="button" className="people-more-trigger" onClick={() => setHostMenuIdentity(person.identity)} aria-haspopup="dialog" aria-label={`Host actions for ${participantName(person) || "participant"}`} title="Host actions"><ChevronDown size={16}/></button>}</div>}{isSelf && <span className="people-you-tag">You</span>}</article>;
     })}{participants.length === 1 && <div className="people-alone-note">You are the only person connected right now.</div>}</> : <section className="people-recent-conversations"><div className="people-recent-heading">Saved private conversations</div>{recentConversations.length === 0 ? <div className="messages-empty"><MessageCircle size={25}/><b>No private conversations yet</b><span>Start a one-to-one conversation from the People tab.</span></div> : recentConversations.map((contact) => {
       const online = participants.some((person) => participantUserId(person) === contact.userId);
       return <button type="button" className="people-recent-row" key={contact.userId} onClick={() => openPrivateContact({ userId: contact.userId, identity: "", name: contact.name, picture: contact.picture })}><ProfilePhoto src={contact.picture} name={contact.name} size={96} className="people-person-avatar"/><span className="people-recent-copy"><b>{contact.name}</b><small>{contact.lastMessage}</small></span><span className={`people-recent-status ${online ? "is-online" : ""}`}>{online ? "Online" : "Saved"}</span></button>;
     })}</section>}</div></section></div>}
-    {directContact && <div className="messages-modal-backdrop private-chat-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setDirectContact(null); }}><section className="messages-modal private-chat-modal" role="dialog" aria-modal="true" aria-label={`Private conversation with ${directContact.name}`}><header className="messages-modal-header"><button className="room-icon-button" onClick={() => { setDirectContact(null); setPeopleViewTab("private"); setPeopleOpen(true); }} aria-label="Back to private chats"><ArrowLeft size={18}/></button><ProfilePhoto src={directContact.picture} name={directContact.name} size={64} className="private-chat-avatar"/><div className="meeting-panel-heading"><b>{directContact.name}</b><small>Private one-to-one conversation</small></div><button className="room-icon-button" onClick={() => { setDirectContact(null); setPeopleViewTab("private"); setPeopleOpen(true); }} aria-label="Close private messages"><X size={18}/></button></header><nav className="meeting-panel-tabs" aria-label="Meeting tools"><button type="button" className="meeting-panel-tab" onClick={() => { setDirectContact(null); setPeopleViewTab("people"); setPeopleOpen(true); }}>People</button><button type="button" className="meeting-panel-tab meeting-panel-tab-active" aria-current="page" onClick={() => { setDirectContact(null); setPeopleViewTab("private"); setPeopleOpen(true); }}>Private chats</button><button type="button" className="meeting-panel-tab" onClick={() => { setDirectContact(null); setMessagesOpen(true); }}>Messages</button><button type="button" className="meeting-panel-tab" onClick={() => { setDirectContact(null); setNotesOpen(true); }}>Notes</button></nav><div className="messages-modal-body private-chat-body">{privateLoading ? <div className="messages-empty"><LoaderCircle size={23} className="spin"/><span>Loading private conversation…</span></div> : privateMessages.length === 0 ? <div className="messages-empty"><MessageCircle size={25}/><b>No private messages yet</b><span>Only you and {directContact.name} can see this conversation.</span></div> : privateMessages.map((message) => <article className={`chat-message ${message.senderUserId === localUserId ? "chat-message-own" : ""}`} key={message.id}><span className="chat-message-author">{message.senderUserId === localUserId ? "You" : message.senderName}</span><p>{message.message}</p><time>{new Date(message.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></article>)}<div ref={privateChatEndRef}/></div><form className="messages-composer" onSubmit={sendPrivateMessage}><input value={privateDraft} onChange={(event) => setPrivateDraft(event.target.value)} placeholder={`Message ${directContact.name} privately…`} maxLength={2000} aria-label="Private message"/><button className="button button-primary" type="submit" disabled={!privateDraft.trim() || privateSending || privateLoading} aria-label="Send private message">{privateSending ? <LoaderCircle size={17} className="spin"/> : <Send size={17}/>}</button></form></section></div>}
+    {role === "host" && hostMenuIdentity && (() => {
+      const target = participants.find((item) => item.identity === hostMenuIdentity);
+      if (!target || target.isLocal) return null;
+      const targetName = participantName(target) || "Participant";
+      const micMuted = target.getTrackPublication(Track.Source.Microphone)?.isMuted ?? true;
+      const cameraMuted = target.getTrackPublication(Track.Source.Camera)?.isMuted ?? true;
+      const busy = moderationBusy === target.identity;
+      const act = (action: "mute-mic" | "disable-camera" | "remove" | "ban" | "request-unmute" | "request-camera") => { setHostMenuIdentity(null); void moderateParticipant(target, action); };
+      return <RoomSheet title={targetName} subtitle="Host actions" className="rs-host-actions" onClose={() => setHostMenuIdentity(null)}>
+        <div className="host-actions-list">
+          <button type="button" className="rs-option" disabled={busy} onClick={() => act(micMuted ? "request-unmute" : "mute-mic")}><span className="rs-option-icon">{micMuted ? <Mic size={16}/> : <MicOff size={16}/>}</span><span className="rs-option-label">{micMuted ? "Request microphone" : "Mute microphone"}</span></button>
+          <button type="button" className="rs-option" disabled={busy} onClick={() => act(cameraMuted ? "request-camera" : "disable-camera")}><span className="rs-option-icon">{cameraMuted ? <Video size={16}/> : <VideoOff size={16}/>}</span><span className="rs-option-label">{cameraMuted ? "Request camera" : "Disable camera"}</span></button>
+          <button type="button" className="rs-option host-action-danger" disabled={busy} onClick={() => act("remove")}><span className="rs-option-icon"><LogOut size={16}/></span><span className="rs-option-label">Remove from meeting</span></button>
+          <button type="button" className="rs-option host-action-danger" disabled={busy} onClick={() => act("ban")}><span className="rs-option-icon"><X size={16}/></span><span className="rs-option-label">Remove and block re-entry</span></button>
+        </div>
+      </RoomSheet>;
+    })()}
+    {directContact && <div className="messages-modal-backdrop private-chat-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setDirectContact(null); }}><section className="messages-modal private-chat-modal" role="dialog" aria-modal="true" aria-label={`Private conversation with ${directContact.name}`}><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setDirectContact(null)} aria-label="Back to call"><ArrowLeft size={18}/></button><ProfilePhoto src={directContact.picture} name={directContact.name} size={64} className="private-chat-avatar"/><div className="meeting-panel-heading"><b>{directContact.name}</b><small>Private one-to-one conversation</small></div><button className="room-icon-button" onClick={() => setDirectContact(null)} aria-label="Close private messages"><X size={18}/></button></header><nav className="meeting-panel-tabs" aria-label="Meeting tools"><button type="button" className="meeting-panel-tab" onClick={() => { setDirectContact(null); setPeopleViewTab("people"); setPeopleOpen(true); }}>People</button><button type="button" className="meeting-panel-tab meeting-panel-tab-active" aria-current="page" onClick={() => { setDirectContact(null); setPeopleViewTab("private"); setPeopleOpen(true); }}>Private chats</button><button type="button" className="meeting-panel-tab" onClick={() => { setDirectContact(null); setMessagesOpen(true); }}>Messages</button><button type="button" className="meeting-panel-tab" onClick={() => { setDirectContact(null); setNotesOpen(true); }}>Notes</button></nav><div className="messages-modal-body private-chat-body">{privateLoading ? <div className="messages-empty"><LoaderCircle size={23} className="spin"/><span>Loading private conversation…</span></div> : privateMessages.length === 0 ? <div className="messages-empty"><MessageCircle size={25}/><b>No private messages yet</b><span>Only you and {directContact.name} can see this conversation.</span></div> : privateMessages.map((message) => <article className={`chat-message ${message.senderUserId === localUserId ? "chat-message-own" : ""}`} key={message.id}><span className="chat-message-author">{message.senderUserId === localUserId ? "You" : message.senderName}</span><p>{message.message}</p><time>{new Date(message.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></article>)}<div ref={privateChatEndRef}/></div><form className="messages-composer" onSubmit={sendPrivateMessage}><input value={privateDraft} onChange={(event) => setPrivateDraft(event.target.value)} placeholder={`Message ${directContact.name} privately…`} maxLength={2000} aria-label="Private message"/><button className="button button-primary" type="submit" disabled={!privateDraft.trim() || privateSending || privateLoading} aria-label="Send private message">{privateSending ? <LoaderCircle size={17} className="spin"/> : <Send size={17}/>}</button></form></section></div>}
     {role === "host" && <span className="room-host-sr" aria-hidden="true">{meeting.ownerName} is hosting</span>}
   </div>;
 }
@@ -4973,6 +5007,18 @@ function StandaloneError({ message, action }: { message: string; action?: ReactN
 }
 
 function ToastHost() {
+  const [tip, setTip] = useState<{ message: string; id: number } | null>(null);
+  useEffect(() => {
+    let timer = 0;
+    const onTip = (event: Event) => {
+      const detail = (event as CustomEvent<{ message: string }>).detail;
+      setTip({ message: detail.message, id: Date.now() });
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setTip(null), 9000);
+    };
+    window.addEventListener("meet-tip", onTip);
+    return () => { window.clearTimeout(timer); window.removeEventListener("meet-tip", onTip); };
+  }, []);
   const [toast, setToast] = useState<{ message: string; action?: string; shareUrl?: string } | null>(null);
   const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
   useEffect(() => {
@@ -4999,6 +5045,8 @@ function ToastHost() {
       window.removeEventListener("meet-pseudo-fullscreen-change", updateTarget);
     };
   }, []);
-  if (!toast || !portalTarget) return null;
-  return createPortal(<div className="toast-message" role="status"><span className="toast-check"><Check size={15}/></span><span>{toast.message}</span>{toast.action && toast.shareUrl && <button onClick={() => void navigator.clipboard.writeText(toast.shareUrl!)}>{toast.action}</button>}<button className="toast-close" onClick={() => setToast(null)} aria-label="Dismiss"><X size={14}/></button></div>, portalTarget);
+  const tipNode = tip && portalTarget ? createPortal(<div className="global-tip-lane" key={tip.id}><div className="room-tip global-tip" role="status"><span className="room-tip-icon"><Lightbulb size={16}/></span><span className="room-tip-body"><span className="room-tip-text">{tip.message}</span></span><button type="button" className="room-tip-close" onClick={() => setTip(null)} aria-label="Dismiss tip"><X size={14}/></button></div></div>, portalTarget) : null;
+  if ((!toast || !portalTarget) && !tipNode) return null;
+  if (!toast || !portalTarget) return tipNode;
+  return <>{tipNode}{createPortal(<div className="toast-message" role="status"><span className="toast-check"><Check size={15}/></span><span>{toast.message}</span>{toast.action && toast.shareUrl && <button onClick={() => void navigator.clipboard.writeText(toast.shareUrl!)}>{toast.action}</button>}<button className="toast-close" onClick={() => setToast(null)} aria-label="Dismiss"><X size={14}/></button></div>, portalTarget)}</>;
 }

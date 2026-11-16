@@ -2170,7 +2170,11 @@ body { min-height: var(--app-viewport-height, 100vh); }
   .people-person-avatar { width: 36px; height: 36px; }
   .people-person-actions { gap: 3px; }
   .people-person-actions > button { min-height: 32px; padding: 0 7px; }
-  .people-person-actions > button span { display: none; }
+  .people-person-actions > button.people-more-trigger { width: 34px; padding: 0; }
+  .people-person-row { flex-wrap: wrap; }
+  .people-person-actions { flex: 1 1 100%; flex-wrap: wrap; justify-content: flex-start; gap: 6px; padding-left: 44px; }
+  .people-person-actions > button { min-height: 34px; padding: 0 11px; font-size: 10px; }
+  .people-person-actions > button span { display: inline; }
   .people-person-actions > button svg { width: 16px; height: 16px; }
   .moderator-request-banner, .room-private-notice { width: calc(100% - 16px); gap: 6px; padding: 8px; }
   .moderator-request-banner > span, .room-private-notice > span { font-size: 10px; }
@@ -3942,46 +3946,73 @@ input:-webkit-autofill, textarea:-webkit-autofill, select:-webkit-autofill { -we
 .conference-fullscreen-target[data-theme="light"] .rd-emoji-pop { border: 1px solid rgba(143,33,65,.16); box-shadow: 0 8px 18px rgba(67,36,49,.2), 0 14px 32px rgba(67,36,49,.2); }
 .conference-fullscreen-target[data-theme="dark"] .rd-pill { box-shadow: 0 0 0 1px rgba(255,255,255,.06), 0 14px 34px rgba(0,0,0,.5); }
 
-/* ===== Animated GIF reactions: one continuous, constant-speed bottom-to-top rise (no stops, no jumps) ===== */
+
+/* ===== Animated reactions: one steady, continuous bottom-to-top rise (no stops, no steps, same travel distance as before) ===== */
 .reaction-float {
-  bottom: 8px;
-  gap: 3px;
-  opacity: 0;
-  transform: translate3d(-50%, 0, 0);
-  backface-visibility: hidden;
-  will-change: transform, opacity;
   animation: reaction-rise-smooth 5s linear forwards !important;
+  will-change: transform, opacity;
+  backface-visibility: hidden;
 }
-/* A single linear segment for movement: speed is identical from the first frame to the last. Only opacity eases in/out. */
 @keyframes reaction-rise-smooth {
   0%   { opacity: 0; transform: translate3d(-50%, 0, 0); }
-  7%   { opacity: 1; }
-  80%  { opacity: 1; }
-  100% { opacity: 0; transform: translate3d(-50%, -65vh, 0); }
+  10%  { opacity: 1; }
+  78%  { opacity: 1; }
+  100% { opacity: 0; transform: translate3d(-50%, -65dvh, 0); }
 }
-@supports (height: 1dvh) {
+@supports not (height: 1dvh) {
   @keyframes reaction-rise-smooth {
     0%   { opacity: 0; transform: translate3d(-50%, 0, 0); }
-    7%   { opacity: 1; }
-    80%  { opacity: 1; }
-    100% { opacity: 0; transform: translate3d(-50%, -65dvh, 0); }
+    10%  { opacity: 1; }
+    78%  { opacity: 1; }
+    100% { opacity: 0; transform: translate3d(-50%, -65vh, 0); }
   }
 }
-.reaction-float .reaction-emoji { display: block; animation: none !important; transform: none; line-height: 0; filter: none; }
-.reaction-float .reaction-gif {
-  display: block;
-  width: calc(54px * var(--rs, 1));
-  height: calc(54px * var(--rs, 1));
-  max-width: none;
-  object-fit: contain;
-  pointer-events: none;
-  user-select: none;
-  -webkit-user-drag: none;
-  filter: drop-shadow(0 3px 5px rgba(0, 0, 0, .28));
-}
-.rd-emoji-pop button .reaction-gif { display: block; width: 34px; height: 34px; pointer-events: none; }
-.rd-more-emojis button .reaction-gif { display: block; width: 36px; height: 36px; pointer-events: none; }
-@media (prefers-reduced-motion: reduce) {
-  .reaction-float { animation: reaction-fade-still 2.6s linear forwards !important; transform: translate3d(-50%, -18vh, 0); }
-  @keyframes reaction-fade-still { 0% { opacity: 0; } 8% { opacity: 1; } 75% { opacity: 1; } 100% { opacity: 0; } }
+.reaction-float .reaction-emoji { display: block; line-height: 0; animation: none !important; transform: none !important; filter: drop-shadow(0 4px 8px rgba(0,0,0,.28)); }
+.reaction-float .animated-emoji, .reaction-float .animated-emoji-fallback { display: block; width: calc(56px * var(--rs, 1)); height: calc(56px * var(--rs, 1)); object-fit: contain; pointer-events: none; user-select: none; -webkit-user-drag: none; }
+.reaction-float .animated-emoji-fallback { font-size: calc(44px * var(--rs, 1)); line-height: calc(56px * var(--rs, 1)); text-align: center; }
+.rd-emoji-pop button .animated-emoji, .rd-more-emojis button .animated-emoji { display: block; width: 30px; height: 30px; object-fit: contain; pointer-events: none; user-select: none; -webkit-user-drag: none; }
+.rd-more-emojis button .animated-emoji { width: 34px; height: 34px; }
+.rd-emoji-pop button .animated-emoji-fallback, .rd-more-emojis button .animated-emoji-fallback { line-height: 1; }
+
+
+/* ===== Reactions modal: stays open until the reaction button or its close button is pressed; two full rows of six; normal app rounding ===== */
+.rd-emoji-pop { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 6px; width: min(100%, 372px); padding: 8px 10px 10px; border-radius: 16px; }
+.rd-emoji-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 2px; color: #fff; }
+.rd-emoji-head b { font-size: 13px; font-weight: 700; }
+.rd-emoji-pop button.rd-emoji-close { width: 28px; height: 28px; border-radius: 8px; color: inherit; background: #4a4a4c; }
+.rd-emoji-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; justify-items: center; }
+.rd-emoji-pop .rd-emoji-grid button { width: 100%; max-width: 50px; height: auto; aspect-ratio: 1; border-radius: 12px; }
+.rd-emoji-pop .rd-emoji-grid button .animated-emoji { width: 66%; height: 66%; }
+.rd-more-emojis { grid-template-columns: repeat(6, 1fr); gap: 6px; }
+.rd-more-emojis button .animated-emoji { width: 30px; height: 30px; }
+.conference-fullscreen-target[data-theme="light"] .rd-emoji-head { color: #4c303c; }
+.conference-fullscreen-target[data-theme="light"] .rd-emoji-pop button.rd-emoji-close { background: #e4d6da; }
+
+/* Host actions: bottom sheet on phones, centred modal on desktop (via RoomSheet). */
+.people-person-actions > .people-more-trigger { width: 34px; padding: 0; }
+.host-actions-list { display: flex; flex-direction: column; gap: 4px; }
+.host-actions-list .rs-option:disabled { opacity: .5; cursor: wait; }
+.host-actions-list .host-action-danger, .host-actions-list .host-action-danger .rs-option-icon { color: #f1a3a8; }
+.conference-fullscreen-target[data-theme="light"] .host-actions-list .host-action-danger, .conference-fullscreen-target[data-theme="light"] .host-actions-list .host-action-danger .rs-option-icon { color: #a63248; }
+.rs-host-actions { z-index: 5; }
+
+/* Global tip toast (for example: removed by the host) sits in the bottom lane with a safe margin, also in fullscreen. */
+.global-tip-lane { position: fixed; z-index: 210; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom, 0px)); width: min(520px, calc(100vw - 24px)); transform: translateX(-50%); pointer-events: none; animation: modal-in .2s ease both; }
+.global-tip-lane .global-tip { pointer-events: auto; }
+.conference-fullscreen-target > .global-tip-lane { position: absolute; bottom: calc(var(--dock-space, 0px) + max(24px, env(safe-area-inset-bottom, 0px) + 16px)); }
+
+/* Fullscreen: dialogs, sheets, tips, toasts and warnings keep a clear bottom margin from the screen edge. */
+.conference-fullscreen-target.is-fullscreen, .conference-fullscreen-target.is-pseudo-fullscreen { --fs-gap: max(16px, calc(env(safe-area-inset-bottom, 0px) + 12px)); }
+.is-fullscreen .room-bottom-notifications, .is-pseudo-fullscreen .room-bottom-notifications { bottom: calc(var(--dock-space, 0px) + var(--fs-gap) ); }
+.conference-fullscreen-target.is-fullscreen > .toast-message, .conference-fullscreen-target.is-pseudo-fullscreen > .toast-message { bottom: calc(var(--dock-space, 0px) + var(--fs-gap) + 8px); }
+.is-fullscreen .modal-backdrop, .is-pseudo-fullscreen .modal-backdrop,
+.is-fullscreen .recording-consent-backdrop, .is-pseudo-fullscreen .recording-consent-backdrop { padding-bottom: var(--fs-gap); }
+.is-fullscreen .rs-backdrop, .is-pseudo-fullscreen .rs-backdrop { padding-bottom: var(--fs-gap); padding-left: 10px; padding-right: 10px; }
+.is-fullscreen .rs-panel, .is-pseudo-fullscreen .rs-panel { border-radius: 18px; max-height: calc(100% - var(--fs-gap) - 8px); }
+.is-fullscreen .rd-more-backdrop, .is-pseudo-fullscreen .rd-more-backdrop { padding-bottom: var(--fs-gap); }
+.is-fullscreen .messages-modal-backdrop, .is-pseudo-fullscreen .messages-modal-backdrop { padding-bottom: var(--fs-gap) !important; padding-top: 10px !important; padding-right: 10px !important; box-sizing: border-box; }
+.is-fullscreen .messages-modal, .is-pseudo-fullscreen .messages-modal { border-radius: 16px !important; border: 1px solid rgba(233,203,212,.18) !important; overflow: hidden; }
+@media (max-width: 720px) {
+  .is-fullscreen .messages-modal-backdrop, .is-pseudo-fullscreen .messages-modal-backdrop { padding-left: 8px !important; padding-right: 8px !important; }
+  .is-fullscreen .modal-panel, .is-pseudo-fullscreen .modal-panel { border-radius: 20px; border-bottom: 1px solid rgba(233,203,212,.18); padding-bottom: 0; }
 }
