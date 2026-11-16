@@ -96,7 +96,7 @@ export function createApp(): Express {
     limit: 20,
     standardHeaders: "draft-7",
     legacyHeaders: false,
-    message: { error: "Too many sign-in attempts. Please try again later." },
+    message: { error: "Too many login attempts. Please try again later." },
   });
 
   app.get("/health", (_req: Request, res: Response) => {

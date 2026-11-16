@@ -157,7 +157,7 @@ function LazyMount({ children, fallback }: { children: ReactNode; fallback: Reac
 const playbackCache = new Map<string, { url: string; expiresAt: number }>();
 
 export function RecordingsPage() {
-  // Cache-first: saved recordings paint instantly (keyed per signed-in account), then the list refreshes quietly in the background.
+  // Cache-first: saved recordings paint instantly (keyed per logged-in account), then the list refreshes quietly in the background.
   const cacheKey = `recordings:${(getAuthToken() || "").slice(-12) || "public"}`;
   const [recordings, setRecordings] = useState<any[]>(() => readCache<any[]>(cacheKey)?.value ?? []);
   const [loading, setLoading] = useState(() => !readCache(cacheKey));
@@ -508,7 +508,7 @@ export function AdminCenterPage() {
   }
   async function setUserStatus(user: any, status: "active" | "suspended") {
     const action = status === "suspended" ? "Suspend" : "Reactivate";
-    if (!window.confirm(`${action} ${user.displayName} (${user.email})? ${status === "suspended" ? "All current sessions will be revoked." : "They will be able to sign in again."}`)) return;
+    if (!window.confirm(`${action} ${user.displayName} (${user.email})? ${status === "suspended" ? "All current sessions will be revoked." : "They will be able to log in again."}`)) return;
     setBusy(`user:${user.id}`); setError("");
     try {
       const result = await api.adminSetUserStatus(user.id, status);
@@ -577,7 +577,7 @@ export function AdminCenterPage() {
 
   return <div className="management-page admin-center-page page-enter">
     <div className="management-heading"><div><p className="section-overline">PLATFORM OPERATIONS</p><h1>System Admin Control Center</h1><p>Live operational data, account controls, meeting management, and audit history.</p></div><button className="button button-soft" onClick={() => void refreshAll()}>Refresh data</button></div>
-    <div className="admin-access-note"><span className="admin-access-dot"/> Signed in with authorized system administrator permissions. Account credentials and session tokens are never displayed.</div>
+    <div className="admin-access-note"><span className="admin-access-dot"/> Logged in with authorized system administrator permissions. Account credentials and session tokens are never displayed.</div>
     {error && <div className="inline-error" role="alert">{error}<button type="button" onClick={() => setError("")}>Dismiss</button></div>}
     <div className="admin-tabs" role="tablist" aria-label="Admin sections">{ADMIN_TABS.filter((item) => RECORDING_UI_ENABLED || item !== "Recordings").map((item) => <button key={item} role="tab" aria-selected={tab === item} className={tab === item ? "admin-tab admin-tab-active" : "admin-tab"} onClick={() => { setTab(item); setSelectedMeeting(null); }}>{item}</button>)}</div>
 

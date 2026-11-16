@@ -82,7 +82,7 @@ export async function optionalAuth(req: Request, _res: Response, next: NextFunct
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
-  if (!req.auth) { res.status(401).json({ error: "Sign in to continue." }); return; }
+  if (!req.auth) { res.status(401).json({ error: "Login to continue." }); return; }
   next();
 }
 

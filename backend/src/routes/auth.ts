@@ -34,9 +34,9 @@ function safePicture(value: unknown): string {
 
 router.post("/google", async (req, res) => {
   const parsed = googleSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: "Google sign-in did not return a valid credential." });
+  if (!parsed.success) return res.status(400).json({ error: "Google login did not return a valid credential." });
   const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
-  if (!clientId) return res.status(503).json({ error: "Google sign-in is not configured. Add GOOGLE_CLIENT_ID to the API environment." });
+  if (!clientId) return res.status(503).json({ error: "Google login is not configured. Add GOOGLE_CLIENT_ID to the API environment." });
 
   try {
     googleClient ??= new OAuth2Client(clientId);
@@ -50,7 +50,7 @@ router.post("/google", async (req, res) => {
     const displayName = name.length >= 2 ? name : (email.split("@")[0] ?? "guest").padEnd(2, "_").slice(0, 80);
     const picture = safePicture(payload.picture);
 
-    // Match by Google id first, then by email so accounts created before Google sign-in keep their meetings.
+    // Match by Google id first, then by email so accounts created before Google login keep their meetings.
     let user = await User.findOne({ googleId: payload.sub });
     if (!user) user = await User.findOne({ email });
     if (user) {
@@ -71,7 +71,7 @@ router.post("/google", async (req, res) => {
     return res.json({ token, user: profile });
   } catch (error) {
     console.error("[auth/google] failed", error instanceof Error ? error.message : error);
-    return res.status(401).json({ error: "Google sign-in could not be verified. Please try again." });
+    return res.status(401).json({ error: "Google login could not be verified. Please try again." });
   }
 });
 

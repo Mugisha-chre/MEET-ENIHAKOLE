@@ -3663,3 +3663,40 @@ html[data-theme="light"] .room-control-dock .room-control-button.control-selecte
 .background-meeting-dock .background-meeting-leave:hover { background: rgba(143,33,65,.08); }
 :root[data-theme="dark"] .background-meeting-dock .background-meeting-leave { border-color: #c2446a; color: #ee8fab; }
 :root[data-theme="dark"] .background-meeting-dock .background-meeting-leave:hover { background: rgba(194,68,106,.14); }
+
+/* ===== Round 25 ===== */
+
+/* Top bar profile: a bigger avatar inside a clear ring. */
+.profile-trigger { padding: 4px 12px 4px 4px; border: 1.5px solid var(--line-strong); gap: 10px; }
+.profile-trigger .profile-avatar, .profile-trigger .profile-photo.profile-avatar { width: 42px; height: 42px; flex: 0 0 auto; }
+.profile-trigger .profile-name { font-size: 13px; font-weight: 700; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+:root[data-theme="light"] .profile-trigger { border-color: #e4d1ca; }
+@media (max-width: 720px) {
+  .profile-trigger { padding: 3px; border: 2px solid rgba(184, 68, 104, .6); border-radius: 50%; }
+  .profile-trigger .profile-avatar, .profile-trigger .profile-photo.profile-avatar { width: 38px; height: 38px; }
+}
+
+/* Welcome heading: one line always; the text shrinks to fit the width (long names included). */
+.welcome-row > .welcome-copy { flex: 1 1 0; min-width: 0; container-type: inline-size; }
+.welcome-row .welcome-copy h1 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: clamp(13px, calc(100cqw / (var(--welcome-chars, 24) * 0.56)), var(--welcome-max, 34px)); }
+@media (max-width: 720px) { .welcome-row .welcome-copy h1 { --welcome-max: 27px; } }
+
+/* Hero starts straight at "Join room for". */
+.hero-copy h2 { margin-top: 0; }
+
+/* Profile menu buttons: a comfortable, compact size on every screen. */
+.profile-sheet { gap: 12px; }
+.profile-sheet-actions { gap: 6px; padding-top: 10px; }
+.profile-sheet-action { min-height: 40px; padding: 0 12px; gap: 10px; border-radius: 11px; font-size: 13px; }
+.profile-sheet-action svg { width: 16px; height: 16px; }
+@media (max-width: 720px) { .profile-sheet-action { min-height: 42px; font-size: 13.5px; } }
+
+/* Help guides: no heavy layout animation or screen blur, so opening a guide is instant and smooth. */
+.help-backdrop { backdrop-filter: none; background: rgba(8,4,6,.82); }
+.help-modal { box-shadow: 0 18px 44px rgba(0,0,0,.45); }
+.help-body { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+.help-guide { transition: none; contain: layout paint; }
+.help-guide-chevron { transition: transform .18s ease; will-change: transform; }
+.help-steps { animation: help-steps-in .2s ease-out both; }
+@keyframes help-steps-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .help-steps { animation: none; } .help-guide-chevron { transition: none; } }

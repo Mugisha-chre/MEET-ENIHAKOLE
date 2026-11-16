@@ -1,5 +1,5 @@
 import { createPortal } from "react-dom";
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type RefObject, type FormEvent, type ReactNode, type TouchEvent as ReactTouchEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type RefObject, type FormEvent, type ReactNode, type TouchEvent as ReactTouchEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { LiveKitRoom, ParticipantTile, RoomAudioRenderer, isTrackReference, useChat, useIsMuted, useLocalParticipant, useParticipants, useRoomContext, useTracks, VideoTrack, type TrackReference } from "@livekit/components-react";
 import { ConnectionState, DisconnectReason, MediaDeviceFailure, ParticipantEvent, Room, RoomEvent, Track, VideoPresets, VideoQuality, type Participant, type RemoteParticipant, type RoomOptions, type VideoCaptureOptions } from "livekit-client";
@@ -7,7 +7,7 @@ import {
   ArrowLeft, ArrowRight, AudioLines, CalendarClock, CalendarDays, Check,
   CheckCircle2, CircleHelp, Clock3, Copy, DoorOpen, HeartHandshake, Home,
   Link2, LoaderCircle, LogIn, LogOut, Menu, Mic, Plus, Share2, ShieldCheck,
-  Sparkles, UserRound, Users, Video, VideoOff, X, Sun, Moon, MessageCircle,
+  UserRound, Users, Video, VideoOff, X, Sun, Moon, MessageCircle,
   PictureInPicture2, Hand, Send, MonitorUp, MicOff, Maximize2, Minimize2, ChevronLeft, ChevronRight, Smile, ChevronDown, Download,
   MousePointer2, MoveUpRight, Eraser, Eye, EyeOff, PenLine, Undo2, Settings2,
   BookOpen, Smartphone, Headphones, LifeBuoy, Mail,
@@ -523,7 +523,7 @@ export default function App() {
     setAuthOpen(false);
     void refreshMeetings(true);
   }, [refreshMeetings, user]);
-  const signOut = useCallback(() => {
+  const performLogout = useCallback(() => {
     void api.logout().catch(() => undefined);
     googleSignOut();
     clearAuthToken();
@@ -532,6 +532,9 @@ export default function App() {
     setMeetings([]);
     void refreshMeetings(true);
   }, [refreshMeetings]);
+  // Every "Logout" button asks first; only "Yes, log out" really logs out.
+  const [logoutAsk, setLogoutAsk] = useState(false);
+  const signOut = useCallback(() => setLogoutAsk(true), []);
 
   // Keep prayer availability and meeting-creation permission in sync. Re-check
   // immediately when a background tab becomes active, as well as periodically.
@@ -581,6 +584,7 @@ export default function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
       {activeRoomSlug && <MeetingRoomPage key={activeRoomSlug} slug={activeRoomSlug} isActive={activeRoomVisible}/>}
+      {logoutAsk && <ConfirmPrompt icon={<LogOut size={26}/>} title="Log out of your account?" message="You will need to log in again to host prayers or see your recordings. Guests can still join with a name." confirmLabel="Yes, log out" cancelLabel="No, stay logged in" onCancel={() => setLogoutAsk(false)} onConfirm={() => { setLogoutAsk(false); performLogout(); }}/>}
       {authOpen && <AuthModal onClose={() => setAuthOpen(false)} onAuthenticated={completeAuth} currentName={user?.displayName} />}
       {scheduleOpen && user && (user.canCreateMeetings || user.isAdmin) && <ScheduleModal onClose={() => setScheduleOpen(false)} onCreated={(meeting) => {
         if (meeting.meetingType === "prayer") {
@@ -603,7 +607,7 @@ function ThemeToggle() {
   return <button type="button" className="icon-button theme-toggle" onClick={toggleTheme} title={`Switch to ${nextTheme} mode`} aria-label={`Switch to ${nextTheme} mode`} aria-pressed={theme === "dark"}>{theme === "light" ? <Moon size={17}/> : <Sun size={17}/>}</button>;
 }
 
-/** Top bar profile picture: opens a profile card (popover on desktop, bottom sheet on phones) with Change account and Sign out. */
+/** Top bar profile picture: opens a profile card (popover on desktop, bottom sheet on phones) with Change account and Logout. */
 function ProfileMenu({ user, onSignOut, onChangeAccount }: { user: User; onSignOut: () => void; onChangeAccount: () => void }) {
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<{ top: number; right: number } | null>(null);
@@ -641,7 +645,7 @@ function ProfileMenu({ user, onSignOut, onChangeAccount }: { user: User; onSignO
           </div>
           <div className="profile-sheet-actions">
             <button type="button" className="profile-sheet-action" onClick={() => { close(); onChangeAccount(); }}><Users size={17}/><span>Change account</span></button>
-            <button type="button" className="profile-sheet-action profile-sheet-danger" onClick={() => { close(); onSignOut(); }}><LogOut size={17}/><span>Sign out</span></button>
+            <button type="button" className="profile-sheet-action profile-sheet-danger" onClick={() => { close(); onSignOut(); }}><LogOut size={17}/><span>Logout</span></button>
           </div>
         </section>
       </div>, document.body)}
@@ -723,7 +727,7 @@ const HELP_GUIDES: { id: string; icon: ReactNode; title: string; summary: string
   { id: "join", icon: <HeartHandshake size={18}/>, title: "Joining a prayer room", summary: "Enter a live or upcoming online prayer.", steps: [
     "Open Prayers from the sidebar (or the bottom bar on your phone) and find the prayer you want.",
     "Tap the card to open its details, then choose Join prayer. If the prayer has not started yet the room opens automatically at its scheduled time.",
-    "Sign in with Google, or continue as a guest with your first and last name. Guest access only works for that one prayer.",
+    "Login with Google, or continue as a guest with your first and last name. Guest access only works for that one prayer.",
     "Choose whether your camera and microphone should be on, then tap Join. You can change both once you are inside the room.",
   ] },
   { id: "invite", icon: <Link2 size={18}/>, title: "Using an invitation link", summary: "Open a link someone shared with you.", steps: [
@@ -757,8 +761,22 @@ const HELP_GUIDES: { id: string; icon: ReactNode; title: string; summary: string
   ] },
 ];
 
+const HelpGuideRow = memo(function HelpGuideRow({ guide, open, onToggle }: { guide: (typeof HELP_GUIDES)[number]; open: boolean; onToggle: (id: string) => void }) {
+  return (
+    <section className={`help-guide ${open ? "help-guide-open" : ""}`}>
+      <button type="button" className="help-guide-head" aria-expanded={open} onClick={() => onToggle(guide.id)}>
+        <span className="help-guide-icon">{guide.icon}</span>
+        <span className="help-guide-text"><b>{guide.title}</b><small>{guide.summary}</small></span>
+        <ChevronDown size={17} className="help-guide-chevron"/>
+      </button>
+      {open && <ol className="help-steps">{guide.steps.map((step, index) => <li key={index}><span>{index + 1}</span><p>{step}</p></li>)}</ol>}
+    </section>
+  );
+});
+
 function HelpSupportModal({ onClose }: { onClose: () => void }) {
   const [openId, setOpenId] = useState<string>(HELP_GUIDES[0].id);
+  const toggleGuide = useCallback((id: string) => setOpenId((current) => (current === id ? "" : id)), []);
   useBackClose(true, onClose);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
@@ -782,19 +800,7 @@ function HelpSupportModal({ onClose }: { onClose: () => void }) {
           </div>
           <p className="help-section-title">Step-by-step guides</p>
           <div className="help-guides">
-            {HELP_GUIDES.map((guide) => {
-              const open = openId === guide.id;
-              return (
-                <section key={guide.id} className={`help-guide ${open ? "help-guide-open" : ""}`}>
-                  <button type="button" className="help-guide-head" aria-expanded={open} onClick={() => setOpenId(open ? "" : guide.id)}>
-                    <span className="help-guide-icon">{guide.icon}</span>
-                    <span className="help-guide-text"><b>{guide.title}</b><small>{guide.summary}</small></span>
-                    <ChevronDown size={17} className="help-guide-chevron"/>
-                  </button>
-                  <div className="help-steps-wrap" aria-hidden={!open} inert={!open}><div className="help-steps-inner"><ol className="help-steps">{guide.steps.map((step, index) => <li key={index}><span>{index + 1}</span><p>{step}</p></li>)}</ol></div></div>
-                </section>
-              );
-            })}
+            {HELP_GUIDES.map((guide) => <HelpGuideRow key={guide.id} guide={guide} open={openId === guide.id} onToggle={toggleGuide}/>)}
           </div>
           <div className="help-contact"><Mail size={17}/><p>Need more help? Contact the organizer who invited you, or the ENIHAKOLE team, and mention the prayer name and what you were trying to do.</p></div>
         </div>
@@ -869,8 +875,8 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
           {user?.isAdmin && <Link to="/admin" className={`side-link ${active === "admin" ? "side-link-active" : ""}`}><ShieldCheck size={18} /><span>Admin center</span></Link>}
         </nav>
         <div className="sidebar-bottom">
-          {user && <div className="sidebar-account"><ProfilePhoto className="sidebar-account-photo" src={user.picture} name={user.displayName} size={160}/><span><b title={user.displayName}>{user.displayName}</b><small title={user.email}>{user.email}</small></span><button type="button" className="sidebar-signout" onClick={() => { setMobileNavOpen(false); signOut(); }} title="Sign out" aria-label="Sign out"><LogOut size={16}/><span>Sign out</span></button></div>}
-          {!user && <div className="sidebar-signin-card"><span className="sidebar-signin-icon" aria-hidden="true"><LogIn size={18}/></span><span className="sidebar-signin-copy"><b>You're not signed in</b><small>Sign in to manage your prayers, recordings and profile.</small></span><button type="button" className="sidebar-signin-button" onClick={() => { setMobileNavOpen(false); openAuth(); }}><LogIn size={15}/><span>Sign in</span></button></div>}
+          {user && <div className="sidebar-account"><ProfilePhoto className="sidebar-account-photo" src={user.picture} name={user.displayName} size={160}/><span><b title={user.displayName}>{user.displayName}</b><small title={user.email}>{user.email}</small></span><button type="button" className="sidebar-signout" onClick={() => { setMobileNavOpen(false); signOut(); }} title="Logout" aria-label="Logout"><LogOut size={16}/><span>Logout</span></button></div>}
+          {!user && <div className="sidebar-signin-card"><span className="sidebar-signin-icon" aria-hidden="true"><LogIn size={18}/></span><span className="sidebar-signin-copy"><b>You're not logged in</b><small>Login to manage your prayers, recordings and profile.</small></span><button type="button" className="sidebar-signin-button" onClick={() => { setMobileNavOpen(false); openAuth(); }}><LogIn size={15}/><span>Login</span></button></div>}
           <button className="side-link quiet-link" onClick={() => { setMobileNavOpen(false); setHelpOpen(true); }}><CircleHelp size={18} /><span>Help & support</span></button>
           <div className="sidebar-version">MEET ENIHAKOLE <span>EARLY ACCESS</span></div>
         </div>
@@ -887,7 +893,7 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
               <div className="profile-menu">
                 <ProfileMenu user={user} onSignOut={signOut} onChangeAccount={openAuth} />
               </div>
-            ) : <button className="button button-soft button-small" onClick={openAuth}><LogIn size={16} /> Sign in</button>}
+            ) : <button className="button button-soft button-small" onClick={openAuth}><LogIn size={16} /> Login</button>}
             {(user?.canCreateMeetings || user?.isAdmin) && <button className="button button-primary button-small topbar-create" onClick={() => openSchedule(false)}><Plus size={17} /> Create</button>}
           </div>
         </header>
@@ -923,8 +929,8 @@ function Dashboard() {
   return (
     <div className="dashboard-page page-enter">
       <section className="welcome-row">
-        <div>
-          <h1>{user ? `Welcome back, ${user.displayName.split(" ")[0]}.` : "Gather in faith. Wherever you are."}</h1>
+        <div className="welcome-copy">
+          {(() => { const text = user ? `Welcome back, ${user.displayName.split(" ")[0]}.` : "Gather in faith. Wherever you are."; return <h1 title={text} style={{ "--welcome-chars": Array.from(text).length } as CSSProperties}>{text}</h1>; })()}
         </div>
         <div className="welcome-decoration" aria-hidden="true"><span className="decor-ring decor-ring-one"/><span className="decor-ring decor-ring-two"/><span className="decor-center"><AudioLines size={36}/></span><span className="decor-star decor-star-one">✦</span><span className="decor-star decor-star-two">✧</span></div>
       </section>
@@ -932,7 +938,6 @@ function Dashboard() {
       <section className="hero-panel">
         <div className="hero-shimmer" aria-hidden="true" />
         <div className="hero-copy">
-          <div className="hero-pill"><Sparkles size={13} /> A LITTLE CLOSER, EVEN FROM AFAR</div>
           <h2>Join room for<br /><em>what matters.</em></h2>
           <p>No complicated setup — just open your link and be there.</p>
           <div className="hero-actions">
@@ -1081,7 +1086,7 @@ function MeetingPage() {
     let cancelled = false;
     // Show what we already know instantly; the fresh copy swaps in quietly when it arrives.
     const known = readCache<Meeting>(cacheKey)?.value ?? [...knownMeetings, ...knownPublic].find((item) => item.slug === slug) ?? null;
-    // After signing in the cache key changes; keep showing the invitation we already have (no loading screen, no flash) and refresh it quietly.
+    // After logging in the cache key changes; keep showing the invitation we already have (no loading screen, no flash) and refresh it quietly.
     if (known) { setMeeting(known); setLoading(false); } else if (!meeting) setLoading(true);
     api.meeting(slug).then(({ meeting: result }) => {
       if (cancelled) return;
@@ -1270,11 +1275,11 @@ function MeetingPage() {
     setError("");
     try {
       const result = await api.googleSignIn(credential);
-      // Have the profile photo ready first so the signed-in state appears instantly, with no spinner and no page reload.
+      // Have the profile photo ready first so the logged-in state appears instantly, with no spinner and no page reload.
       await preloadPhotoBriefly(result.user.picture, 512, 1200);
       completeAuth(result.user, result.token);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not sign in with Google.");
+      setError(cause instanceof Error ? cause.message : "Could not log in with Google.");
     }
   }
 
@@ -1302,10 +1307,10 @@ function MeetingPage() {
           <div className="join-cover join-cover-thumb"><img className="join-cover-img" src={meetingImage(meeting)} alt={meeting.title} decoding="async" fetchPriority="high" draggable={false}/><div className="thumb-corner"><span className={`meeting-status thumb-status ${meeting.status === "live" ? "meeting-status-live" : ""}`}><span/>{getMeetingStateLabel(meeting)}</span><button type="button" className="thumb-share-button" onClick={share} aria-label="Share invitation"><Share2 size={15}/><span>Share invitation</span></button></div></div>
           <form className="join-form" onSubmit={join}>
             <div className="join-form-heading"><h2>{ended ? `This ${kind} has ended` : notYetOpen ? "Not Yet Open" : meeting.status === "live" ? `Join the ${kind}` : meeting.isOwner ? `Your ${kind} is ready` : "You're in the right place"}</h2><p>{ended ? "This invitation is now closed. Available audio and notes are below." : notYetOpen ? `This ${kind} opens at ${formatTime(meeting.startsAt, meeting.timezone)}. Please check again when it becomes available.` : meeting.status === "live" ? "Enter your details and come on in." : "The room becomes available automatically at its scheduled start time."}</p></div>
-            {user && !ended && <div className="join-identity"><ProfilePhoto src={user.picture} name={user.displayName} className="join-identity-photo"/><span><b>{user.displayName}</b><small>{user.email}</small></span><button type="button" className="error-link" onClick={signOut}><LogOut size={12}/> Sign out</button></div>}
+            {user && !ended && <div className="join-identity"><ProfilePhoto src={user.picture} name={user.displayName} className="join-identity-photo"/><span><b>{user.displayName}</b><small>{user.email}</small></span><button type="button" className="error-link" onClick={signOut}><LogOut size={12}/> Logout</button></div>}
             {!user && !ended && <div className="join-google"><GoogleContinueButton oneTap onCredential={(credential) => void googleCredential(credential)}/><div className="guest-access-form"><div className="guest-access-divider"><span>OR</span></div>{guestModalOpen && createPortal(<GuestNameModal initialName={getGuestProfile(slug)?.displayName || guestName} onClose={() => setGuestModalOpen(false)} onSave={saveGuest}/>, document.body)}{getGuestProfile(slug) ? <div className="join-identity guest-identity"><ProfilePhoto name={getGuestProfile(slug)?.displayName || guestName} className="join-identity-photo"/><span><b>{getGuestProfile(slug)?.displayName}</b><small>Temporary guest · this meeting only</small></span><button type="button" className="guest-change-name" onClick={() => setGuestModalOpen(true)}>Change</button></div> : <button type="button" className="guest-continue-button" onClick={() => setGuestModalOpen(true)}><UserRound size={18}/><span>Continue as Guest</span></button>}</div></div>}
             {!ended && <div className="join-preferences"><MediaToggle on={cameraOn} onChange={setCameraOn} onIcon={<Video size={16}/>} offIcon={<VideoOff size={16}/>} onLabel="Camera is on" offLabel="Camera is off" onHint="Join with video" offHint="Join without video"/><MediaToggle on={micOn} onChange={setMicOn} onIcon={<Mic size={16}/>} offIcon={<MicOff size={16}/>} onLabel="Microphone is on" offLabel="Microphone is off" onHint="Join with audio" offHint="Join muted"/></div>}
-            {error && <div className="inline-error" role="alert">{error}{error.includes("Sign in") && <button type="button" className="error-link" onClick={openAuth}>Sign in</button>}</div>}
+            {error && <div className="inline-error" role="alert">{error}{error.includes("Login") && <button type="button" className="error-link" onClick={openAuth}>Login</button>}</div>}
             {ended ? <div className="meeting-ended-actions"><Link to="/meetings" className="button button-soft button-full"><ArrowLeft size={16}/> {meeting.meetingType === "prayer" ? "Back to prayers" : "Back to meetings"}</Link>{(meeting.isOwner || meeting.isParticipant) && <button type="button" className="button button-primary button-full" onClick={() => setPastNotesOpen(true)}><FileText size={16}/> View meeting notes</button>}{pastRecording && <section className="meeting-ended-audio"><div><AudioLines size={20}/><span><b>Audio recording</b><small>{pastRecording.recording.meetingTitle}</small></span></div><AudioRecordingPlayer src={pastRecording.playbackUrl} title={pastRecording.recording.meetingTitle}/><small>Available until {formatDate(pastRecording.expiresAt)}</small></section>}{pastRecordingError && !pastRecordingLoading && !pastRecording && <p className="meeting-audio-unavailable">{pastRecordingError}</p>}</div> : <><button className={`button button-primary button-full join-submit ${notYetOpen ? "join-submit-locked" : ""}`} type="submit" disabled={joining || notYetOpen}>{joining ? <LoaderCircle size={17} className="spin"/> : notYetOpen ? <Clock3 size={17}/> : meeting.isOwner ? <Video size={17}/> : <DoorOpen size={17}/>} {joining ? "Joining…" : notYetOpen ? "Not Yet Open" : meeting.status === "scheduled" ? `Open ${kind}` : `Join ${kind}`}<ArrowRight size={16}/></button>{notYetOpen && <div className="meeting-not-yet-open" role="status"><Clock3 size={16}/><span><b>Opens {formatDate(meeting.startsAt, { weekday: "short" }, meeting.timezone)}</b><small>{formatTime(meeting.startsAt, meeting.timezone)} · {meeting.timezone || "Scheduled time"}</small></span></div>}</>}
             <p className="join-footnote"><ShieldCheck size={13}/> Your camera and microphone are only requested when you enter the room.</p>
           </form>
@@ -1450,6 +1455,7 @@ function MeetingRoomPage({ slug, isActive }: { slug: string; isActive: boolean }
   const [endError, setEndError] = useState("");
   const [disconnected, setDisconnected] = useState(false);
   const [confirmEnd, setConfirmEnd] = useState(false);
+  const [confirmLeave, setConfirmLeave] = useState(false);
   const [meetingEnded, setMeetingEnded] = useState(false);
   // A room that was already connected and fully loaded on the meeting page;
   // the app-level host keeps it mounted while other SPA routes are displayed.
@@ -1530,15 +1536,16 @@ function MeetingRoomPage({ slug, isActive }: { slug: string; isActive: boolean }
       onDisconnected={handleRoomDisconnected}
       onMediaDeviceFailure={(failure, kind) => window.dispatchEvent(new CustomEvent("meet-media-failure", { detail: { failure, kind } }))}
     >
-      {!isActive && <BackgroundMeetingDock title={session.meeting.title} disconnected={disconnected} onReturn={() => navigate(`/room/${encodeURIComponent(slug)}`)} onLeave={leaveRoom}/>}
+      {!isActive && <BackgroundMeetingDock title={session.meeting.title} disconnected={disconnected} onReturn={() => navigate(`/room/${encodeURIComponent(slug)}`)} onLeave={() => setConfirmLeave(true)}/>}
       <div className={`conference-page ${!isActive ? "conference-page-audio-host" : ""}`} aria-hidden={!isActive}>
         {endError && <div className="room-alert" role="alert">{endError}</div>}
         {disconnected && <div className="room-alert" role="status">You have disconnected from the call. <button onClick={leaveRoom}>Return to meeting</button></div>}
         <main className="conference-main">
           <div className="conference-stage">
-            <ConferenceWorkspace meeting={session.meeting} role={session.role} onLeave={leaveRoom} onEndForEveryone={() => endForEveryone()} ending={ending} isActive={isActive}/>
+            <ConferenceWorkspace meeting={session.meeting} role={session.role} onLeave={leaveRoom} onLeaveClick={() => setConfirmLeave(true)} onEndForEveryone={() => endForEveryone()} ending={ending} isActive={isActive}/>
             {!preparedRoom && <RoomReadyOverlay expected={(session.participants ?? []).map((person) => person.identity)}/>}
           </div>
+          {confirmLeave && <ConfirmPrompt icon={<DoorOpen size={26}/>} title="Leave the room?" message="You will leave the call now. You can join again any time while the room is open." confirmLabel="Yes, leave room" cancelLabel="No, stay in the room" onCancel={() => setConfirmLeave(false)} onConfirm={() => { setConfirmLeave(false); leaveRoom(); }}/>}
           {confirmEnd && <ConfirmEndModal busy={ending} onCancel={() => setConfirmEnd(false)} onConfirm={() => void confirmEndForEveryone()}/>}
         </main>
       </div>
@@ -1587,6 +1594,31 @@ function ConfirmEndModal({ busy, onCancel, onConfirm }: { busy: boolean; onCance
         <div className="confirm-end-actions">
           <button type="button" className="button button-soft" onClick={onCancel} disabled={busy} autoFocus>Keep meeting open</button>
           <button type="button" className="button button-danger" onClick={onConfirm} disabled={busy}>{busy ? <LoaderCircle size={16} className="spin"/> : <X size={16}/>} {busy ? "Ending…" : "End for everyone"}</button>
+        </div>
+      </section>
+    </div>,
+    host,
+  );
+}
+
+/** Yes/No confirmation used for logging out and leaving the room. Centered card on desktop, bottom sheet on phones. */
+function ConfirmPrompt({ icon, title, message, confirmLabel, cancelLabel, onConfirm, onCancel }: { icon: ReactNode; title: string; message: string; confirmLabel: string; cancelLabel: string; onConfirm: () => void; onCancel: () => void }) {
+  useBackClose(true, onCancel);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onCancel(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+  const host = document.fullscreenElement ?? document.querySelector(".conference-fullscreen-target.is-pseudo-fullscreen") ?? document.body;
+  return createPortal(
+    <div className="modal-backdrop confirm-end-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}>
+      <section className="modal-panel modal-panel-narrow confirm-end-panel" role="alertdialog" aria-modal="true" aria-labelledby="confirm-prompt-title" aria-describedby="confirm-prompt-text">
+        <div className="confirm-end-icon" aria-hidden="true">{icon}</div>
+        <h2 id="confirm-prompt-title">{title}</h2>
+        <p id="confirm-prompt-text">{message}</p>
+        <div className="confirm-end-actions">
+          <button type="button" className="button button-soft" onClick={onCancel} autoFocus>{cancelLabel}</button>
+          <button type="button" className="button button-danger" onClick={onConfirm}>{confirmLabel}</button>
         </div>
       </section>
     </div>,
@@ -2396,11 +2428,52 @@ function useRoomPictureInPicture(room: Room, title: string) {
 }
 
 /**
+ * While the call is on screen, keep the phone awake (Screen Wake Lock) so the screen timeout never turns the display off
+ * and puts the call to sleep. It is released automatically when the page is hidden, so it is taken again on return, after
+ * a reconnect, and on the first touch for browsers that require a gesture. Released for good when the room closes.
+ */
+function useCallWakeLock(room: Room) {
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("wakeLock" in navigator)) return;
+    let sentinel: WakeLockSentinel | null = null;
+    let disposed = false;
+    let requesting = false;
+    const acquire = async () => {
+      if (disposed || sentinel || requesting || document.visibilityState !== "visible" || room.state !== ConnectionState.Connected) return;
+      requesting = true;
+      try {
+        const lock = await navigator.wakeLock.request("screen");
+        if (disposed) { void lock.release().catch(() => undefined); return; }
+        sentinel = lock;
+        lock.addEventListener("release", () => { if (sentinel === lock) sentinel = null; });
+      } catch { /* Denied (battery saver or no gesture yet): retried on the next touch or when the page returns. */ }
+      finally { requesting = false; }
+    };
+    const onVisible = () => { if (document.visibilityState === "visible") void acquire(); };
+    const onTouch = () => { void acquire(); };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("pointerdown", onTouch, { passive: true });
+    room.on(RoomEvent.Connected, onTouch);
+    room.on(RoomEvent.Reconnected, onTouch);
+    void acquire();
+    return () => {
+      disposed = true;
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("pointerdown", onTouch);
+      room.off(RoomEvent.Connected, onTouch);
+      room.off(RoomEvent.Reconnected, onTouch);
+      const lock = sentinel; sentinel = null;
+      if (lock) void lock.release().catch(() => undefined);
+    };
+  }, [room]);
+}
+
+/**
  * Keeps an active LiveKit call usable when the browser backgrounds the page.
  * WebRTC media capture and active real-time connections receive browser-managed
  * treatment, but a page can still be suspended or terminated by the OS. We do
- * not use silent audio or held locks as artificial keep-alives because neither
- * can guarantee background execution and both waste device resources.
+ * not use silent audio as an artificial keep-alive because it cannot guarantee
+ * background execution; the screen wake lock above keeps the display on instead.
  */
 function useBackgroundCall(room: ReturnType<typeof useRoomContext>, title: string, onLeave: () => void) {
   const leaveRef = useRef(onLeave);
@@ -2844,7 +2917,7 @@ function ScreenShareStage({ screenShare, onStop, onSwitch }: { screenShare: Trac
   </div>;
 }
 
-function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending, isActive }: { meeting: Meeting; role: "host" | "participant"; onLeave: () => void; onEndForEveryone: () => void; ending: boolean; isActive: boolean }) {
+function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEveryone, ending, isActive }: { meeting: Meeting; role: "host" | "participant"; onLeave: () => void; onLeaveClick?: () => void; onEndForEveryone: () => void; ending: boolean; isActive: boolean }) {
   const room = useRoomContext();
   const { theme, toggleTheme } = useAppContext();
   const { localParticipant, isMicrophoneEnabled, isCameraEnabled, isScreenShareEnabled } = useLocalParticipant();
@@ -2957,6 +3030,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
   notesSavingRef.current = notesSaving;
   const localVoiceActivity = useVoiceActivity(localParticipant);
   useBackgroundCall(room, meeting.title, onLeave);
+  useCallWakeLock(room);
   const pip = useRoomPictureInPicture(room, meeting.title);
   // Back button inside the call: stay in the room and float the call (picture-in-picture) instead of dropping out of it.
   useEffect(() => { roomBackGuardOn = isActive; return () => { roomBackGuardOn = false; }; }, [isActive]);
@@ -3059,7 +3133,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
   useEffect(() => () => window.clearTimeout(privateNoticeTimer.current), []);
   useEffect(() => { privateChatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [privateMessages.length, directContact]);
 
-  // Register the signed-in account even when an existing stored LiveKit token is reused after a refresh.
+  // Register the logged-in account even when an existing stored LiveKit token is reused after a refresh.
   // A blocked account is disconnected again if it tries to reconnect with a still-valid token.
   useEffect(() => {
     let cancelled = false;
@@ -4196,7 +4270,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onEndForEveryone, ending,
             <div className="rd-slot"><RdButton label="Open room messages" on={messagesOpen} onClick={() => { setMessagesOpen(true); setPeopleOpen(false); setDirectContact(null); setNotesOpen(false); }} icon={<MessageCircle size={24} strokeWidth={2.2}/>} badge={chatMessages.length > 0 ? <i className="rd-badge">{chatMessages.length > 99 ? "99+" : chatMessages.length}</i> : null}/></div>
             <div className="rd-slot"><RdButton label="See who is in the meeting" on={peopleOpen} onClick={() => { setPeopleViewTab("people"); setPeopleOpen(true); setMessagesOpen(false); setDirectContact(null); setNotesOpen(false); }} icon={<Users size={24} strokeWidth={2.2}/>} badge={<i className="rd-badge rd-badge-count">{participants.length}</i>}/></div>
             <div className="rd-slot"><RdButton label="More actions" on={moreOpen} onClick={() => { setMoreOpen((open) => !open); setMoreView("actions"); setDeviceMenu(null); }} icon={<RdDotsIcon/>} aria-haspopup="dialog" aria-expanded={moreOpen}/></div>
-            <div className="rd-slot"><RdButton label="Leave the meeting" danger onClick={onLeave} icon={<RdHangupIcon/>}/></div>
+            <div className="rd-slot"><RdButton label="Leave the meeting" danger onClick={onLeaveClick ?? onLeave} icon={<RdHangupIcon/>}/></div>
           </div>
         </div>
       </div>
@@ -4317,15 +4391,15 @@ function AuthModal({ onClose, onAuthenticated, currentName }: { onClose: () => v
       await preloadPhotoBriefly(result.user.picture, 512, 1200);
       onAuthenticated(result.user, result.token);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not sign in with Google.");
+      setError(cause instanceof Error ? cause.message : "Could not log in with Google.");
     } finally { setBusy(false); }
   }
 
   return <Modal onClose={onClose} wide={false}>
-    <div className="auth-modal-content"><span className="modal-brand-icon"><AudioLines size={23}/></span><p className="section-overline">WELCOME TO MEET ENIHAKOLE</p><h2>{currentName ? "Change account" : "Good to have you here."}</h2><p className="modal-subtitle">{currentName ? "Choose another Google account to switch. Until then you stay signed in as the current account — closing this keeps everything as it is." : "Continue with Google to sign in or create your account. We use your Google name and profile photo — no password needed."}</p>
+    <div className="auth-modal-content"><span className="modal-brand-icon"><AudioLines size={23}/></span><p className="section-overline">WELCOME TO MEET ENIHAKOLE</p><h2>{currentName ? "Change account" : "Good to have you here."}</h2><p className="modal-subtitle">{currentName ? "Choose another Google account to switch. Until then you stay logged in as the current account — closing this keeps everything as it is." : "Continue with Google to log in or create your account. We use your Google name and profile photo — no password needed."}</p>
       <div className="form-stack">
         <GoogleContinueButton onCredential={(credential) => void handleCredential(credential)}/>
-        {busy && <div className="auth-busy"><LoaderCircle size={16} className="spin"/> Signing you in…</div>}
+        {busy && <div className="auth-busy"><LoaderCircle size={16} className="spin"/> Logging you in…</div>}
         {error && <div className="inline-error" role="alert">{error}</div>}
       </div><p className="auth-legal"><ShieldCheck size={13}/> Your account is used to manage the meetings you host.</p>
     </div>

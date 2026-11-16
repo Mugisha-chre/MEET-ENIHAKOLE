@@ -84,10 +84,10 @@ router.get("/:id/playback", async (req, res) => {
     const publicPrayer = Boolean(meeting && (meeting.meetingType === "prayer" || (!meeting.meetingType && meeting.visibility === "public")));
     if (!publicPrayer) {
       // The meeting slug is a high-entropy bearer invitation: anyone who holds the shared
-      // meeting link (no sign-in, not necessarily an attendee) may listen to its recording.
+      // meeting link (no login, not necessarily an attendee) may listen to its recording.
       const invitedByExactLink = typeof req.query.invite === "string" && req.query.invite === recording.meetingSlug;
       if (!invitedByExactLink) {
-        if (!req.auth) return res.status(401).json({ error: "Sign in or open the exact meeting invitation link to listen to this recording." });
+        if (!req.auth) return res.status(401).json({ error: "Login or open the exact meeting invitation link to listen to this recording." });
         if (req.auth.isGuest && req.auth.meetingSlug !== recording.meetingSlug) return res.status(403).json({ error: "This guest identity belongs to a different meeting." });
         const isParticipant = recording.hostUserId === req.auth.userId || recording.participants.some((person) => person.userId === req.auth!.userId);
         if (!isParticipant) return res.status(403).json({ error: "You do not have access to this private recording." });
