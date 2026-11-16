@@ -3589,6 +3589,9 @@ html[data-theme="light"] .room-control-dock .room-control-button.control-selecte
 .guest-continue-button:hover { background: linear-gradient(145deg, #6a2038, #491829); box-shadow: 0 2px 10px rgba(63,20,36,.35); }
 .guest-continue-button:active { background: #3a1222; }
 .guest-continue-button:focus-visible { outline: 2px solid #de7896; outline-offset: 2px; }
+:root[data-theme="light"] .guest-continue-button { background: linear-gradient(145deg, #7c2c48, #5e1f35); border-color: rgba(143,33,65,.4); color: #fff4f7; }
+:root[data-theme="light"] .guest-continue-button:hover { background: linear-gradient(145deg, #88344f, #6a253c); box-shadow: 0 2px 10px rgba(94,31,53,.28); }
+:root[data-theme="light"] .guest-continue-button:active { background: #5a1d32; }
 :root[data-theme="dark"] .guest-continue-button { background: linear-gradient(145deg, #5c1a32, #3f1424); border-color: rgba(222,120,150,.42); color: #fbe9ee; }
 :root[data-theme="dark"] .guest-continue-button:hover { background: linear-gradient(145deg, #6a2038, #491829); box-shadow: 0 2px 10px rgba(0,0,0,.3); }
 :root[data-theme="dark"] .guest-continue-button:active { background: #3a1222; }
@@ -3759,7 +3762,8 @@ html.no-pull-refresh, html.no-pull-refresh body { overscroll-behavior-y: none; }
 :root[data-theme="light"] .filter-open-button { background: #fffdf9; border-color: #e8dad4; color: #4a2c37; }
 :root[data-theme="light"] .filter-open-button.filter-open-active { border-color: #8f2141; color: #8f2141; }
 .filter-bar { flex-wrap: nowrap; }
-.filter-bar .segmented-filter { flex: 1 1 auto; min-width: 0; max-width: none; overflow-x: auto; scrollbar-width: none; }
+.filter-bar { justify-content: space-between; }
+.filter-bar .segmented-filter { flex: 0 1 auto; width: auto; min-width: 0; max-width: none; overflow-x: auto; scrollbar-width: none; }
 .filter-bar .segmented-filter::-webkit-scrollbar { display: none; }
 .filter-bar .segmented-filter button { flex: 0 0 auto; white-space: nowrap; }
 .filter-bar .filter-open-button { flex: 0 0 auto; white-space: nowrap; margin-left: 0; }
@@ -3804,7 +3808,7 @@ html.theme-switching *, html.theme-switching *::before, html.theme-switching *::
 
 /* ==========================================================================
    Room v2: spaced call bar, compact More sheet, shared picker sheets (bottom sheet on phones, modal on desktop),
-   one-row top bar, calmer toasts, rotating tips and the Bible tab. Light and dark.
+   one-row top bar, calmer toasts, rotating tips. Light and dark.
    ========================================================================== */
 
 /* Call bar: roomy spacing that scales with the screen instead of breaking it. */
@@ -3901,40 +3905,6 @@ html.theme-switching *, html.theme-switching *::before, html.theme-switching *::
 .conference-fullscreen-target[data-theme="light"] .room-tip-icon, .conference-fullscreen-target[data-theme="light"] .room-tip-action { color: #fff; background: #8f2141; }
 .conference-fullscreen-target[data-theme="light"] .room-tip-never { color: #806773; }
 
-/* Bible tab (same panel family as Messages / People / Notes). */
-.bible-modal { --bb-fg: #f7eef0; --bb-muted: #b9a0aa; --bb-line: rgba(234,210,217,.14); --bb-item: rgba(255,255,255,.06); --bb-accent: #e8ca91; --bb-accent-fg: #2d1921; --bb-sel: rgba(232,202,145,.18); }
-.conference-fullscreen-target[data-theme="light"] .bible-modal { --bb-fg: #4c303c; --bb-muted: #806b75; --bb-line: #eadde1; --bb-item: #f6eeee; --bb-accent: #8f2141; --bb-accent-fg: #fff; --bb-sel: #f8e9ed; }
-.bible-toolbar { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--bb-line); }
-.bible-ref { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 12px; border: 1px solid var(--bb-line); border-radius: 10px; color: var(--bb-fg); background: var(--bb-item); font: inherit; font-size: 13px; font-weight: 750; cursor: pointer; }
-.bible-ref span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
-.bible-ref svg:last-child { transition: transform .18s ease; } .bible-ref svg.bible-ref-open { transform: rotate(90deg); }
-.bible-font { flex: 0 0 auto; display: flex; gap: 6px; }
-.bible-font button { display: grid; place-items: center; width: 38px; height: 38px; padding: 0; border: 1px solid var(--bb-line); border-radius: 10px; color: var(--bb-fg); background: var(--bb-item); cursor: pointer; }
-.bible-font button:disabled { opacity: .4; cursor: default; }
-.bible-picker { flex: 0 1 auto; max-height: 52%; overflow-y: auto; padding: 10px 12px 12px; border-bottom: 1px solid var(--bb-line); overscroll-behavior: contain; }
-.bible-testaments { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 10px; }
-.bible-testaments button, .bible-books button, .bible-chapters button, .bible-picker-back { border: 1px solid var(--bb-line); border-radius: 9px; color: var(--bb-fg); background: var(--bb-item); font: inherit; cursor: pointer; }
-.bible-testaments button { height: 36px; font-size: 12px; font-weight: 750; }
-.bible-testaments button.is-active, .bible-books button.is-active, .bible-chapters button.is-active { color: var(--bb-accent-fg); border-color: var(--bb-accent); background: var(--bb-accent); }
-.bible-books { display: grid; grid-template-columns: repeat(auto-fill, minmax(116px, 1fr)); gap: 6px; }
-.bible-books button { min-height: 38px; padding: 6px 8px; font-size: 12px; font-weight: 650; line-height: 1.2; }
-.bible-chapters { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 6px; }
-.bible-chapters button { height: 40px; font-size: 13px; font-weight: 700; }
-.bible-picker-back { display: inline-flex; align-items: center; gap: 4px; height: 34px; margin-bottom: 10px; padding: 0 12px 0 8px; font-size: 12.5px; font-weight: 800; }
-.bible-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 14px 16px 18px; color: var(--bb-fg); }
-.bible-text h3 { margin: 0 0 12px; font-size: calc(var(--bible-size, 15px) + 3px); }
-.bible-text p { margin: 0 0 4px; padding: 5px 7px; border-radius: 8px; font-size: var(--bible-size, 15px); line-height: 1.75; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-.bible-text p.is-selected { background: var(--bb-sel); box-shadow: inset 3px 0 0 var(--bb-accent); }
-.bible-text sup { margin-right: 6px; color: var(--bb-accent); font-size: .66em; font-weight: 800; }
-.bible-state { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 40px 12px; color: var(--bb-muted); text-align: center; font-size: 13px; }
-.bible-state-error b { color: var(--bb-fg); }
-.bible-state button { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px; border: 0; border-radius: 9px; color: var(--bb-accent-fg); background: var(--bb-accent); font: inherit; font-size: 12px; font-weight: 800; cursor: pointer; }
-.bible-footer { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--bb-line); color: var(--bb-muted); font-size: 11px; }
-.bible-footer button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-width: 96px; height: 38px; padding: 0 12px; border: 1px solid var(--bb-line); border-radius: 10px; color: var(--bb-fg); background: var(--bb-item); font: inherit; font-size: 12px; font-weight: 750; cursor: pointer; }
-.bible-footer button:disabled { opacity: .4; cursor: default; }
-.bible-footer .bible-share { flex: 1 1 auto; color: var(--bb-accent-fg); border-color: var(--bb-accent); background: var(--bb-accent); }
-@media (max-width: 720px) { .bible-modal { width: 100%; } }
-
 /* Room v3: call bar spacing is perfectly even (the gap between buttons equals the gap to both sides), and the reaction
    picker is its own floating strip above the bar, independent from the More sheet. */
 .rd-pill { width: min(100%, 420px); padding: 12px 0; box-sizing: border-box; }
@@ -3966,3 +3936,52 @@ input, textarea, select, button { -webkit-appearance: none; appearance: none; }
 input[type="checkbox"], input[type="radio"], input[type="date"], input[type="range"] { -webkit-appearance: auto; appearance: auto; }
 input:-webkit-autofill, textarea:-webkit-autofill, select:-webkit-autofill { -webkit-text-fill-color: currentColor; transition: background-color 600000s 0s, color 600000s 0s; caret-color: currentColor; }
 ::selection { background: rgba(143,33,65,.35); color: inherit; }
+
+/* Light-mode call bar: clear edge + layered shadow so the bar stands out from the light room background. */
+.conference-fullscreen-target[data-theme="light"] .rd-pill { border: 1px solid rgba(143,33,65,.16); box-shadow: 0 -2px 10px rgba(67,36,49,.08), 0 8px 18px rgba(67,36,49,.2), 0 16px 38px rgba(67,36,49,.22); }
+.conference-fullscreen-target[data-theme="light"] .rd-emoji-pop { border: 1px solid rgba(143,33,65,.16); box-shadow: 0 8px 18px rgba(67,36,49,.2), 0 14px 32px rgba(67,36,49,.2); }
+.conference-fullscreen-target[data-theme="dark"] .rd-pill { box-shadow: 0 0 0 1px rgba(255,255,255,.06), 0 14px 34px rgba(0,0,0,.5); }
+
+/* ===== Animated GIF reactions: one continuous, constant-speed bottom-to-top rise (no stops, no jumps) ===== */
+.reaction-float {
+  bottom: 8px;
+  gap: 3px;
+  opacity: 0;
+  transform: translate3d(-50%, 0, 0);
+  backface-visibility: hidden;
+  will-change: transform, opacity;
+  animation: reaction-rise-smooth 5s linear forwards !important;
+}
+/* A single linear segment for movement: speed is identical from the first frame to the last. Only opacity eases in/out. */
+@keyframes reaction-rise-smooth {
+  0%   { opacity: 0; transform: translate3d(-50%, 0, 0); }
+  7%   { opacity: 1; }
+  80%  { opacity: 1; }
+  100% { opacity: 0; transform: translate3d(-50%, -65vh, 0); }
+}
+@supports (height: 1dvh) {
+  @keyframes reaction-rise-smooth {
+    0%   { opacity: 0; transform: translate3d(-50%, 0, 0); }
+    7%   { opacity: 1; }
+    80%  { opacity: 1; }
+    100% { opacity: 0; transform: translate3d(-50%, -65dvh, 0); }
+  }
+}
+.reaction-float .reaction-emoji { display: block; animation: none !important; transform: none; line-height: 0; filter: none; }
+.reaction-float .reaction-gif {
+  display: block;
+  width: calc(54px * var(--rs, 1));
+  height: calc(54px * var(--rs, 1));
+  max-width: none;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
+  filter: drop-shadow(0 3px 5px rgba(0, 0, 0, .28));
+}
+.rd-emoji-pop button .reaction-gif { display: block; width: 34px; height: 34px; pointer-events: none; }
+.rd-more-emojis button .reaction-gif { display: block; width: 36px; height: 36px; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) {
+  .reaction-float { animation: reaction-fade-still 2.6s linear forwards !important; transform: translate3d(-50%, -18vh, 0); }
+  @keyframes reaction-fade-still { 0% { opacity: 0; } 8% { opacity: 1; } 75% { opacity: 1; } 100% { opacity: 0; } }
+}

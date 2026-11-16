@@ -1,6 +1,7 @@
 /* MEET ENIHAKOLE service worker: offline fallback + static asset caching.
    API calls, media and live-meeting traffic are never cached. */
-const VERSION = "v2";
+// __BUILD_ID__ is replaced with a unique id on every production build, so each deployment gets a fresh cache and old ones are deleted.
+const VERSION = "__BUILD_ID__";
 const STATIC_CACHE = `meet-enihakole-static-${VERSION}`;
 const PRECACHE = ["/offline.html", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png", "/favicon.png"];
 
@@ -26,7 +27,7 @@ self.addEventListener("fetch", (event) => {
   // Page navigations: network first, offline page when the network is unavailable.
   if (req.mode === "navigate") {
     event.respondWith(
-      fetch(req).catch(() => caches.match("/offline.html").then((r) => r || Response.error())),
+      fetch(req, { cache: "no-store" }).catch(() => caches.match("/offline.html").then((r) => r || Response.error())),
     );
     return;
   }
@@ -44,4 +45,8 @@ self.addEventListener("fetch", (event) => {
       }),
     );
   }
+});
+
+self.addEventListener("message", (event) => {
+  if (event.data === "SKIP_WAITING") self.skipWaiting();
 });

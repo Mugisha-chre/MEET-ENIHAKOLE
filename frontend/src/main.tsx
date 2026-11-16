@@ -57,10 +57,67 @@ window.addEventListener("beforeinstallprompt", (event) => {
 
 warmServer();
 
+/**
+ * Automatic updates. Whenever a new version is deployed, anyone who opens (or returns to) the app gets it without
+ * refreshing by hand: the new service worker takes over at once, old caches are deleted and the page reloads one time.
+ * A reload is never forced in the middle of a live meeting; it is applied as soon as the person leaves the room.
+ */
+const RELOAD_MARK = "meet-enihakole-reloaded-for";
+const inLiveRoom = () => Boolean(document.querySelector(".conference-fullscreen-target"));
+async function purgeCaches() {
+  try {
+    const regs = await navigator.serviceWorker?.getRegistrations();
+    await Promise.all((regs || []).map((reg) => reg.update().catch(() => undefined)));
+    const keys = await caches.keys();
+    await Promise.all(keys.filter((key) => key.startsWith("meet-enihakole-")).map((key) => caches.delete(key)));
+  } catch { /* Best effort. */ }
+}
+async function reloadForUpdate(remote: string) {
+  try {
+    if (sessionStorage.getItem(RELOAD_MARK) === remote) return; // already tried once for this version: never loop
+    sessionStorage.setItem(RELOAD_MARK, remote);
+  } catch { /* storage unavailable: still reload once below */ }
+  await purgeCaches();
+  window.location.reload();
+}
+let checking = false;
+async function checkForNewVersion() {
+  if (checking || typeof __APP_BUILD_ID__ === "undefined") return;
+  checking = true;
+  try {
+    const res = await fetch(`/version.json?t=${Date.now()}`, { cache: "no-store" });
+    if (!res.ok) return;
+    const data = (await res.json()) as { version?: string };
+    if (data.version && data.version !== __APP_BUILD_ID__ && !inLiveRoom()) await reloadForUpdate(data.version);
+  } catch { /* Offline or version file missing: keep running the current version. */ }
+  finally { checking = false; }
+}
+
 if ("serviceWorker" in navigator && import.meta.env.PROD) {
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js").catch(() => { /* App works normally without offline support. */ });
+  const hadController = Boolean(navigator.serviceWorker.controller);
+  let swReloaded = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    // A new service worker took control of a page that was already open: load the new version.
+    if (!hadController || swReloaded) return;
+    swReloaded = true;
+    if (inLiveRoom()) return; // the version check below reloads once the person has left the room
+    window.location.reload();
   });
+  const register = () => navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" })
+    .then((reg) => {
+      void reg.update().catch(() => undefined);
+      window.setInterval(() => void reg.update().catch(() => undefined), 5 * 60 * 1000);
+    })
+    .catch(() => { /* App works normally without offline support. */ });
+  if (document.readyState === "complete") void register(); else window.addEventListener("load", () => void register());
+}
+
+if (import.meta.env.PROD) {
+  void checkForNewVersion();
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") void checkForNewVersion(); });
+  window.addEventListener("pageshow", (event) => { if (event.persisted) void checkForNewVersion(); });
+  window.addEventListener("focus", () => void checkForNewVersion());
+  window.setInterval(() => void checkForNewVersion(), 2 * 60 * 1000);
 }
 
 createRoot(document.getElementById("root")!).render(
