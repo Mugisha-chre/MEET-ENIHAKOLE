@@ -33,6 +33,24 @@ function absoluteAppUrl(path: string): string {
 }
 
 
+// Traffic metadata is written in small batches instead of one database write per request, so a crowd joining at once
+// does not use up the database connections that the real requests (join, chat, presence) need.
+const trafficBuffer: Array<Record<string, unknown>> = [];
+let trafficTimer: NodeJS.Timeout | null = null;
+function flushTrafficEvents(): void {
+  trafficTimer = null;
+  if (!trafficBuffer.length) return;
+  const batch = trafficBuffer.splice(0, 500);
+  void PlatformEvent.insertMany(batch, { ordered: false }).catch(() => undefined);
+  if (trafficBuffer.length) trafficTimer = setTimeout(flushTrafficEvents, 1000);
+  trafficTimer?.unref?.();
+}
+function queueTrafficEvent(event: Record<string, unknown>): void {
+  if (trafficBuffer.length >= 5000) return; // Shed analytics, never real traffic, under extreme load.
+  trafficBuffer.push(event);
+  if (!trafficTimer) { trafficTimer = setTimeout(flushTrafficEvents, 3000); trafficTimer.unref?.(); }
+}
+
 export function createApp(): Express {
   const app = express();
   app.set("trust proxy", process.env.NODE_ENV === "production" ? 1 : false);
@@ -90,27 +108,36 @@ export function createApp(): Express {
     if (/^Bearer\s+\S+/i.test(header)) return `t:${crypto.createHash("sha256").update(header).digest("hex").slice(0, 32)}`;
     return `ip:${req.ip || "unknown"}`;
   };
+  const API_LIMIT_PER_MINUTE = Math.max(1000, Number(process.env.API_LIMIT_PER_MINUTE) || 60000);
+  const AUTH_LIMIT_PER_MINUTE = Math.max(300, Number(process.env.AUTH_LIMIT_PER_MINUTE) || 6000);
   const apiLimiter = rateLimit({
     windowMs: 60 * 1000,
-    limit: (req) => (/^Bearer\s+\S+/i.test(req.get("Authorization") || "") ? 600 : 1500),
+    limit: (req) => (/^Bearer\s+\S+/i.test(req.get("Authorization") || "") ? API_LIMIT_PER_MINUTE : API_LIMIT_PER_MINUTE * 5), // Effectively unlimited for real crowds, even from one shared Wi-Fi / carrier address; only a runaway script would ever reach it
     standardHeaders: "draft-7",
     legacyHeaders: false,
     keyGenerator: clientKey,
     validate: false,
     // LiveKit webhooks are independently authenticated by their signed JWT;
     // a busy room must not exhaust the browser API quota and drop lifecycle events.
-    skip: (req) => req.path.startsWith("/webhooks/") || roomCriticalPath.test(req.path) || req.path === "/auth/session-heartbeat",
+    // Reads (GET/HEAD/OPTIONS) are never throttled: many people loading the same pages at once must never see "Too many requests".
+    skip: (req) => ["GET", "HEAD", "OPTIONS"].includes(req.method) || req.path.startsWith("/webhooks/") || roomCriticalPath.test(req.path) || req.path === "/auth/session-heartbeat",
     handler: (_req, res) => {
       res.setHeader("Retry-After", "2");
       res.status(429).json({ error: "The server is busy for a moment. Please try again." });
     },
   });
   const authLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    limit: 20,
+    // Many people sign in at the same moment, often from one shared Wi-Fi / carrier address, so this is a very high
+    // safety ceiling per address rather than a small cap. Google verifies every credential, so abuse is not a risk here.
+    windowMs: 60 * 1000,
+    limit: AUTH_LIMIT_PER_MINUTE,
     standardHeaders: "draft-7",
     legacyHeaders: false,
-    message: { error: "Too many login attempts. Please try again later." },
+    validate: false,
+    handler: (_req, res) => {
+      res.setHeader("Retry-After", "1");
+      res.status(429).json({ error: "The server is busy for a moment. Please try again." });
+    },
   });
 
   app.get("/health", (_req: Request, res: Response) => {
@@ -128,13 +155,16 @@ export function createApp(): Express {
     res.on("finish", () => {
       if (req.path === "/webhooks/livekit") return;
       const requestPath = (req.path || "/").split("?")[0] ?? "/";
-      void PlatformEvent.create({ category: "traffic", action: "api_request", path: requestPath.slice(0, 300), method: req.method, statusCode: res.statusCode, durationMs: Date.now() - started }).catch(() => undefined);
+      queueTrafficEvent({ category: "traffic", action: "api_request", path: requestPath.slice(0, 300), method: req.method, statusCode: res.statusCode, durationMs: Date.now() - started });
     });
     next();
   });
 
-  app.use("/api", apiLimiter);
-  app.use("/api/auth/google", authLimiter);
+  // Request limits are off by default so crowds are never refused. Set RATE_LIMITS_ENABLED=true to switch the (very high) safety ceilings back on.
+  if (process.env.RATE_LIMITS_ENABLED === "true") {
+    app.use("/api", apiLimiter);
+    app.use("/api/auth/google", authLimiter);
+  }
 
   // Optional external scheduler endpoint. Use a long random secret in Render
   // and send it as a Bearer token; never put it in the URL/query string.

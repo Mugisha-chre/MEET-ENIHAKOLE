@@ -4,6 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#fbf7f2" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="supported-color-schemes" content="light dark" />
+    <meta name="darkreader-lock" />
+    <meta name="format-detection" content="telephone=no" />
     <script>
       (function () {
         var theme = "light";
@@ -15,6 +19,8 @@
         document.documentElement.dataset.theme = theme;
         var meta = document.querySelector('meta[name="theme-color"]');
         if (meta) meta.setAttribute("content", theme === "dark" ? "#130d10" : "#fbf7f2");
+        var scheme = document.querySelector('meta[name="color-scheme"]');
+        if (scheme) scheme.setAttribute("content", theme);
       })();
     </script>
     <script src="https://accounts.google.com/gsi/client" async defer></script>

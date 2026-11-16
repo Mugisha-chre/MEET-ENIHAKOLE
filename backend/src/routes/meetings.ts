@@ -539,8 +539,10 @@ router.post("/:slug/participant-profile", requireAuth, async (req, res) => {
     if (!isHost && !req.auth!.isGuest && (meeting.bannedUserIds || []).includes(req.auth!.userId)) return res.status(403).json({ error: "The host has blocked your account from this meeting." });
     if (meeting.status !== "live") return res.status(409).json({ error: "This meeting is not live." });
     const identityFromClient = typeof req.body?.identity === "string" ? req.body.identity.trim().slice(0, 200) : "";
-    const roomPeople = await listRoomPeople(`eni-${meeting.slug}`);
-    const participant = roomPeople.find((person) => identityFromClient ? person.identity === identityFromClient && person.userId === req.auth!.userId : person.userId === req.auth!.userId);
+    const findSelf = (people: Awaited<ReturnType<typeof listRoomPeople>>) => people.find((person) => identityFromClient ? person.identity === identityFromClient && person.userId === req.auth!.userId : person.userId === req.auth!.userId);
+    let participant = findSelf(await listRoomPeople(`eni-${meeting.slug}`));
+    // A person who has only just connected may not be in the shared short-lived list yet: look once more, fresh.
+    if (!participant) participant = findSelf(await listRoomPeople(`eni-${meeting.slug}`, { fresh: true }));
     if (!participant) return res.status(409).json({ error: "Your connection is still being registered. Please retry shortly." });
     const identity = participant.identity;
     const displayName = (req.auth!.displayName || participant.name || "Participant").replace(/[<>\u0000-\u001f]/g, "").trim().slice(0, 80);
@@ -590,7 +592,7 @@ router.post("/:slug/moderation", requireAuth, async (req, res) => {
     if (!meeting) return res.status(404).json({ error: "Meeting not found." });
     if (String(meeting.owner) !== req.auth!.userId) return res.status(403).json({ error: "Only the meeting host can manage participants." });
     const { identity, action } = parsed.data;
-    const people = await listRoomPeople(`eni-${meeting.slug}`);
+    const people = await listRoomPeople(`eni-${meeting.slug}`, { fresh: true });
     const target = people.find((person) => person.identity === identity);
     if (!target) return res.status(404).json({ error: "That participant is no longer connected." });
     if (target.role === "host" || target.userId === req.auth!.userId) return res.status(403).json({ error: "The host cannot moderate their own connection." });
@@ -837,7 +839,8 @@ router.post("/:slug/recording/consent", requireAuth, async (req, res) => {
     if (!meeting) return res.status(404).json({ error: "Meeting not found." });
     const recording = await Recording.findOne({ _id: parsed.data.recordingId, meeting: meeting._id, status: "consent_pending" });
     if (!recording) return res.status(409).json({ error: "This recording consent request is no longer active." });
-    const person = (await listRoomPeople(`eni-${meeting.slug}`)).find((item) => item.identity === parsed.data.identity && item.userId === req.auth!.userId);
+    const matchConsent = (people: Awaited<ReturnType<typeof listRoomPeople>>) => people.find((item) => item.identity === parsed.data.identity && item.userId === req.auth!.userId);
+    const person = matchConsent(await listRoomPeople(`eni-${meeting.slug}`)) || matchConsent(await listRoomPeople(`eni-${meeting.slug}`, { fresh: true }));
     if (!person) return res.status(403).json({ error: "Your connected meeting identity could not be verified." });
     const consent = recording.consents.find((entry: any) => entry.identity === parsed.data.identity && entry.userId === req.auth!.userId) as any;
     if (!consent) return res.status(403).json({ error: "This recording request was not addressed to your participant identity." });

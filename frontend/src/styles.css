@@ -1691,10 +1691,10 @@ html.is-scrolling .meeting-card:hover { transform: translateZ(0); box-shadow: no
 /* ===== Update round 5: letterboxed video, end-meeting confirmation, ended screen ===== */
 
 /* Video: on larger screens show the whole picture with black bars at the sides instead of cropping it. */
-.participant-card .lk-participant-tile video { background: #000; }
+.participant-card .lk-participant-tile video { background: transparent; }
 @media (min-width: 721px) {
   .participant-card .lk-participant-tile video { object-fit: contain; }
-  .participant-card .lk-participant-tile:has(video) { background: #000 !important; }
+  .participant-card.participant-cam-on .lk-participant-tile:has(video) { background: #000 !important; }
 }
 
 .confirm-end-panel { padding: 28px clamp(22px, 4vw, 32px) 24px; text-align: center; }
@@ -3585,10 +3585,10 @@ html[data-theme="light"] .room-control-dock .room-control-button.control-selecte
 
 /* 5) Guest: "Continue as Guest" looks like the Google button; names are collected in a responsive modal. */
 .guest-access-form { margin-top: 12px; }
-.guest-continue-button { box-sizing: border-box; display: flex; align-items: center; justify-content: center; gap: 10px; width: min(100%, 360px); height: 40px; margin: 4px auto 0; padding: 0 16px; border: 1px solid #dadce0; border-radius: 999px; background: #fff; color: #3c4043; font: inherit; font-size: 14px; font-weight: 500; letter-spacing: .01em; cursor: pointer; transition: background .15s ease, box-shadow .15s ease; -webkit-tap-highlight-color: transparent; }
-.guest-continue-button:hover { background: #f8f9fa; box-shadow: 0 1px 3px rgba(60,64,67,.25); }
-.guest-continue-button:active { background: #f1f3f4; }
-.guest-continue-button:focus-visible { outline: 2px solid #1a73e8; outline-offset: 2px; }
+.guest-continue-button { box-sizing: border-box; display: flex; align-items: center; justify-content: center; gap: 10px; width: min(100%, 360px); height: 40px; margin: 4px auto 0; padding: 0 16px; border: 1px solid rgba(222,120,150,.42); border-radius: 999px; background: linear-gradient(145deg, #5c1a32, #3f1424); color: #fbe9ee; font: inherit; font-size: 14px; font-weight: 500; letter-spacing: .01em; cursor: pointer; transition: background .15s ease, box-shadow .15s ease; -webkit-tap-highlight-color: transparent; }
+.guest-continue-button:hover { background: linear-gradient(145deg, #6a2038, #491829); box-shadow: 0 2px 10px rgba(63,20,36,.35); }
+.guest-continue-button:active { background: #3a1222; }
+.guest-continue-button:focus-visible { outline: 2px solid #de7896; outline-offset: 2px; }
 :root[data-theme="dark"] .guest-continue-button { background: linear-gradient(145deg, #5c1a32, #3f1424); border-color: rgba(222,120,150,.42); color: #fbe9ee; }
 :root[data-theme="dark"] .guest-continue-button:hover { background: linear-gradient(145deg, #6a2038, #491829); box-shadow: 0 2px 10px rgba(0,0,0,.3); }
 :root[data-theme="dark"] .guest-continue-button:active { background: #3a1222; }
@@ -3758,7 +3758,13 @@ html.no-pull-refresh, html.no-pull-refresh body { overscroll-behavior-y: none; }
 .filter-open-button i { position: absolute; top: 6px; right: 7px; width: 7px; height: 7px; border-radius: 50%; background: #d4426b; }
 :root[data-theme="light"] .filter-open-button { background: #fffdf9; border-color: #e8dad4; color: #4a2c37; }
 :root[data-theme="light"] .filter-open-button.filter-open-active { border-color: #8f2141; color: #8f2141; }
-@media (max-width: 720px) { .filter-bar { flex-wrap: wrap; row-gap: 10px; } .segmented-filter { max-width: 100%; } .filter-bar-end { width: 100%; justify-content: space-between; margin-left: 0; } }
+.filter-bar { flex-wrap: nowrap; }
+.filter-bar .segmented-filter { flex: 1 1 auto; min-width: 0; max-width: none; overflow-x: auto; scrollbar-width: none; }
+.filter-bar .segmented-filter::-webkit-scrollbar { display: none; }
+.filter-bar .segmented-filter button { flex: 0 0 auto; white-space: nowrap; }
+.filter-bar .filter-open-button { flex: 0 0 auto; white-space: nowrap; margin-left: 0; }
+.meeting-count-line { margin: -6px 0 14px; white-space: nowrap; }
+@media (max-width: 720px) { .filter-bar { flex-wrap: nowrap; gap: 8px; } .filter-bar .segmented-filter { max-width: none; } .filter-bar .filter-open-button { padding: 0 11px; } }
 .prayer-filter-content { display: flex; flex-direction: column; align-items: stretch; gap: 14px; }
 .prayer-filter-content > .modal-brand-icon, .prayer-filter-content > .section-overline, .prayer-filter-content > h2 { align-self: center; text-align: center; margin: 0; }
 .prayer-filter-group { display: grid; gap: 8px; }
@@ -3867,7 +3873,7 @@ html.theme-switching *, html.theme-switching *::before, html.theme-switching *::
 .room-top-people, .room-top-pip { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .room-top-people { color: var(--rt-fg); background: var(--rt-bg); border: 1px solid var(--rt-line); backdrop-filter: blur(8px); }
 .room-top-people b { font-size: 12px; }
-.room-top-pip { color: #fff; background: var(--burgundy, #8f2141); border: 1px solid rgba(255,255,255,.2); box-shadow: 0 4px 14px rgba(143,33,65,.35); }
+.room-top-pip { color: #fff; background: var(--burgundy, #8f2141); border: 1px solid rgba(255,255,255,.2); box-shadow: none; }
 .room-top-pip:hover { background: var(--burgundy-bright, #a92b4e); }
 .room-top-pip.is-active { color: #3a1e2b; background: #e8ca91; border-color: rgba(255,255,255,.45); box-shadow: none; }
 @media (max-width: 720px) { .room-top-bar { gap: 6px; } .room-top-title, .room-top-people, .room-top-pip { height: 32px; } .room-top-title { padding: 0 11px; font-size: 12px; } .room-top-people, .room-top-pip { padding: 0 10px; } }
@@ -3887,9 +3893,9 @@ html.theme-switching *, html.theme-switching *::before, html.theme-switching *::
 .room-tip-icon { flex: 0 0 auto; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 9px; color: #3a1e2b; background: #e8ca91; }
 .room-tip-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
 .room-tip-text { font-size: 12px; line-height: 1.45; }
-.room-tip-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
-.room-tip-action { min-height: 30px; padding: 0 12px; border: 0; border-radius: 8px; color: #2d1921; background: #e8ca91; font: inherit; font-size: 11px; font-weight: 800; cursor: pointer; }
-.room-tip-never { padding: 0; border: 0; color: rgba(255,247,244,.6); background: transparent; font: inherit; font-size: 10.5px; text-decoration: underline; cursor: pointer; }
+.room-tip-actions { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px clamp(6px, 2.4vw, 12px); min-width: 0; }
+.room-tip-action { flex: 0 1 auto; min-width: 0; max-width: 62%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-height: 30px; padding: 0 clamp(8px, 2.6vw, 12px); border: 0; border-radius: 8px; color: #2d1921; background: #e8ca91; font: inherit; font-size: 11px; font-weight: 800; cursor: pointer; }
+.room-tip-never { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0; border: 0; color: rgba(255,247,244,.6); background: transparent; font: inherit; font-size: 10.5px; text-decoration: underline; cursor: pointer; }
 .room-tip-close { flex: 0 0 auto; display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 50%; color: inherit; background: transparent; cursor: pointer; opacity: .75; }
 .conference-fullscreen-target[data-theme="light"] .room-tip { color: #4d303c; background: rgba(255,253,250,.98); border-color: #e4d2d7; box-shadow: 0 10px 28px rgba(70,39,52,.16); }
 .conference-fullscreen-target[data-theme="light"] .room-tip-icon, .conference-fullscreen-target[data-theme="light"] .room-tip-action { color: #fff; background: #8f2141; }
@@ -3928,3 +3934,35 @@ html.theme-switching *, html.theme-switching *::before, html.theme-switching *::
 .bible-footer button:disabled { opacity: .4; cursor: default; }
 .bible-footer .bible-share { flex: 1 1 auto; color: var(--bb-accent-fg); border-color: var(--bb-accent); background: var(--bb-accent); }
 @media (max-width: 720px) { .bible-modal { width: 100%; } }
+
+/* Room v3: call bar spacing is perfectly even (the gap between buttons equals the gap to both sides), and the reaction
+   picker is its own floating strip above the bar, independent from the More sheet. */
+.rd-pill { width: min(100%, 420px); padding: 12px 0; box-sizing: border-box; }
+.rd-row { width: 100%; gap: 0; justify-content: space-evenly; }
+@media (min-width: 721px) {
+  .rd-pill { width: min(100%, 700px); padding: 10px 0; justify-content: space-evenly; align-items: center; }
+  .rd-pill > .rd-row { display: contents; }
+}
+.rd-emoji-layer { position: absolute; inset: 0; z-index: 39; display: flex; align-items: flex-end; justify-content: center; padding: 0 12px; pointer-events: none; }
+.rd-emoji-pop { pointer-events: auto; display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; max-width: min(100%, 372px); box-sizing: border-box; padding: 8px 10px; margin-bottom: calc(var(--dock-space, 110px) + 4px); border-radius: 24px; background: #232324; box-shadow: 0 14px 34px rgba(0,0,0,.4); animation: modal-in .22s cubic-bezier(.22,1,.36,1); }
+.rd-emoji-pop button { display: grid; place-items: center; width: 46px; height: 46px; padding: 0; border: 0; border-radius: 50%; background: #4a4a4c; font-size: 24px; line-height: 1; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.rd-emoji-pop button:active { transform: scale(.9); }
+.conference-fullscreen-target[data-theme="light"] .rd-emoji-pop { background: #f3eaec; }
+.conference-fullscreen-target[data-theme="light"] .rd-emoji-pop button { background: #e4d6da; }
+
+/* Camera-off cards always use the accent dark red; never black (video element, LiveKit tile and avatar layers). */
+.participant-card.participant-cam-off, .participant-card.participant-cam-off .lk-participant-tile, .participant-card.participant-cam-off .lk-participant-media-video, .participant-card.participant-cam-off .lk-participant-tile video, .participant-card.participant-cam-off .participant-avatar { background: #2b1c23 !important; background-color: #2b1c23 !important; }
+.participant-card.participant-cam-off .lk-participant-tile video { opacity: 0 !important; }
+.participant-card.participant-cam-off .participant-avatar { background: transparent !important; }
+.participant-card.participant-cam-on:not(:has(.lk-participant-tile video)) { background: #2b1c23; }
+
+/* Keep our own palette in every browser: no forced/auto dark mode (Samsung Internet, Chrome auto-dark, Opera, MIUI), no forced colours, no text inflation. */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
+html, body, #root { forced-color-adjust: none; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+*, *::before, *::after { forced-color-adjust: none; }
+:root[data-theme="light"] body { background: #fbf7f2; color: #35212a; }
+:root[data-theme="dark"] body { background: #130d10; color: #f8f1ef; }
+input, textarea, select, button { -webkit-appearance: none; appearance: none; }
+input[type="checkbox"], input[type="radio"], input[type="date"], input[type="range"] { -webkit-appearance: auto; appearance: auto; }
+input:-webkit-autofill, textarea:-webkit-autofill, select:-webkit-autofill { -webkit-text-fill-color: currentColor; transition: background-color 600000s 0s, color 600000s 0s; caret-color: currentColor; }
+::selection { background: rgba(143,33,65,.35); color: inherit; }

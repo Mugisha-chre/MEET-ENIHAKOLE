@@ -42,28 +42,53 @@ export async function createJoinToken(input: {
   return token.toJwt();
 }
 
+type RoomPerson = { identity: string; name: string; picture: string; userId: string; role: "host" | "participant" };
+let sharedRoomService: RoomServiceClient | null = null;
+function roomService(): RoomServiceClient {
+  if (!sharedRoomService) sharedRoomService = new RoomServiceClient(liveKitHttpUrl(), liveKitKey(), liveKitSecret());
+  return sharedRoomService;
+}
+// Many people joining and polling at once used to make one LiveKit API call each, which LiveKit answers with "Too many requests".
+// Results are now shared per room for a moment and identical in-flight lookups are merged into a single call.
+const ROOM_PEOPLE_TTL_MS = 2_500;
+const roomPeopleCache = new Map<string, { at: number; people: RoomPerson[] }>();
+const roomPeopleInFlight = new Map<string, Promise<RoomPerson[]>>();
+
 /** Who is already in the room (name + photo + account identity), so the browser can load everyone before the person arrives. */
-export async function listRoomPeople(roomName: string): Promise<Array<{ identity: string; name: string; picture: string; userId: string; role: "host" | "participant" }>> {
+export async function listRoomPeople(roomName: string, options: { fresh?: boolean } = {}): Promise<RoomPerson[]> {
   if (!isLiveKitConfigured()) return [];
-  try {
-    const service = new RoomServiceClient(liveKitHttpUrl(), liveKitKey(), liveKitSecret());
-    const found = await Promise.race([
-      service.listParticipants(roomName),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 1500)),
-    ]);
-    return found.map((item) => {
-      let metadata: Record<string, unknown> = {};
-      try { metadata = JSON.parse(item.metadata || "{}") as Record<string, unknown>; } catch { /* Metadata is optional. */ }
-      const picture = typeof metadata.picture === "string" && metadata.picture.startsWith("https://") ? metadata.picture : "";
-      return {
-        identity: item.identity,
-        name: item.name || (typeof metadata.displayName === "string" ? metadata.displayName : ""),
-        picture,
-        userId: typeof metadata.userId === "string" ? metadata.userId : "",
-        role: metadata.role === "host" ? "host" : "participant",
-      };
-    });
-  } catch { return []; }
+  const cached = roomPeopleCache.get(roomName);
+  if (!options.fresh && cached && Date.now() - cached.at < ROOM_PEOPLE_TTL_MS) return cached.people;
+  const running = roomPeopleInFlight.get(roomName);
+  if (running) return running;
+  const lookup = (async (): Promise<RoomPerson[]> => {
+    try {
+      const found = await Promise.race([
+        roomService().listParticipants(roomName),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 3000)),
+      ]);
+      const people = found.map((item) => {
+        let metadata: Record<string, unknown> = {};
+        try { metadata = JSON.parse(item.metadata || "{}") as Record<string, unknown>; } catch { /* Metadata is optional. */ }
+        const picture = typeof metadata.picture === "string" && metadata.picture.startsWith("https://") ? metadata.picture : "";
+        return {
+          identity: item.identity,
+          name: item.name || (typeof metadata.displayName === "string" ? metadata.displayName : ""),
+          picture,
+          userId: typeof metadata.userId === "string" ? metadata.userId : "",
+          role: (metadata.role === "host" ? "host" : "participant") as "host" | "participant",
+        };
+      });
+      roomPeopleCache.set(roomName, { at: Date.now(), people });
+      if (roomPeopleCache.size > 500) { const oldest = roomPeopleCache.keys().next().value; if (oldest) roomPeopleCache.delete(oldest); }
+      return people;
+    } catch {
+      // A busy or briefly unreachable LiveKit API must never break joining: reuse the last known list.
+      return cached?.people ?? [];
+    } finally { roomPeopleInFlight.delete(roomName); }
+  })();
+  roomPeopleInFlight.set(roomName, lookup);
+  return lookup;
 }
 
 export type LiveKitModerationAction = "mute-mic" | "disable-camera" | "remove";
@@ -71,7 +96,7 @@ export type LiveKitModerationAction = "mute-mic" | "disable-camera" | "remove";
 /** Host-authorized moderation primitives. The API route verifies ownership before calling this helper. */
 export async function moderateLiveKitParticipant(roomName: string, identity: string, action: LiveKitModerationAction): Promise<{ found: boolean; userId: string }> {
   if (!isLiveKitConfigured()) throw new Error("LiveKit is not configured.");
-  const service = new RoomServiceClient(liveKitHttpUrl(), liveKitKey(), liveKitSecret());
+  const service = roomService();
   const people = await service.listParticipants(roomName);
   const target = people.find((person) => person.identity === identity);
   if (!target) return { found: false, userId: "" };
@@ -103,7 +128,7 @@ export async function moderateLiveKitParticipant(roomName: string, identity: str
 export async function closeLiveKitRoom(roomName: string): Promise<void> {
   if (!isLiveKitConfigured()) return;
   try {
-    const service = new RoomServiceClient(liveKitHttpUrl(), liveKitKey(), liveKitSecret());
+    const service = roomService();
     await service.deleteRoom(roomName);
   } catch (error) {
     // The end-meeting action remains idempotent if the room already disappeared.

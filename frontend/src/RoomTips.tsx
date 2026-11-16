@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { Lightbulb, X } from "lucide-react";
+import { Lightbulb, WifiOff, X } from "lucide-react";
+import { ConnectionQuality, ConnectionState, type Room } from "livekit-client";
 
 /**
  * Gentle, rotating "did you know" tips for the call room. One tip at a time, never while the person is busy
@@ -9,8 +10,8 @@ import { Lightbulb, X } from "lucide-react";
 export type RoomTip = { id: string; text: ReactNode; icon?: ReactNode; actionLabel?: string; onAction?: () => void };
 
 const STORAGE_KEY = "meet-enihakole-room-tips";
-const FIRST_DELAY_MS = 28_000;
-const GAP_MS = 55_000;
+const FIRST_DELAY_MS = 150_000; // first tip after two and a half minutes
+const GAP_MS = 150_000; // then one more every two and a half minutes (never while busy)
 const VISIBLE_MS = 10_000;
 const MAX_SHOWS = 3;
 type TipMemory = { shown: Record<string, number>; dismissed: string[] };
@@ -79,4 +80,55 @@ export function RoomTipCard({ tip, onHide, onDismissForever }: { tip: RoomTip; o
     </span>
     <button type="button" className="room-tip-close" onClick={onHide} aria-label="Dismiss tip"><X size={14}/></button>
   </div>;
+}
+
+/**
+ * Weak-connection tip. It appears only when the connection is really weak (LiveKit rates it "poor" or "lost", or the browser reports a
+ * 2G-class link) for several checks in a row, so a medium connection or a brief wobble never triggers it. It stays on screen until the
+ * connection recovers or the person closes it ("Got it" snoozes it for a few minutes, "Don't show again" turns it off for good).
+ */
+const WEAK_KEY = "meet-enihakole-weak-network-tip-off";
+const WEAK_SAMPLE_MS = 2000;
+const WEAK_SAMPLES_TO_SHOW = 3; // about 6 seconds of weak connection in a row
+const GOOD_SAMPLES_TO_HIDE = 3; // about 6 seconds of recovery before it goes away by itself
+const WEAK_SNOOZE_MS = 3 * 60_000;
+
+export function useWeakNetworkTip(room: Room | null | undefined) {
+  const [visible, setVisible] = useState(false);
+  const visibleRef = useRef(false);
+  const snoozedUntil = useRef(0);
+  const disabled = useRef((() => { try { return localStorage.getItem(WEAK_KEY) === "1"; } catch { return false; } })());
+  const set = useCallback((value: boolean) => { visibleRef.current = value; setVisible(value); }, []);
+
+  useEffect(() => {
+    if (!room) return;
+    let weak = 0;
+    let good = 0;
+    const timer = window.setInterval(() => {
+      if (disabled.current || room.state !== ConnectionState.Connected) { weak = 0; if (visibleRef.current) set(false); return; }
+      const quality = room.localParticipant?.connectionQuality;
+      const link = (navigator as Navigator & { connection?: { effectiveType?: string } }).connection?.effectiveType || "";
+      const isWeak = quality === ConnectionQuality.Poor || quality === ConnectionQuality.Lost || link === "slow-2g" || link === "2g";
+      const isGood = quality === ConnectionQuality.Excellent || quality === ConnectionQuality.Good;
+      if (isWeak) { weak += 1; good = 0; } else if (isGood) { good += 1; weak = 0; } else { weak = 0; } // unknown/medium readings reset the weak streak
+      if (!visibleRef.current && weak >= WEAK_SAMPLES_TO_SHOW && Date.now() >= snoozedUntil.current && document.visibilityState === "visible") set(true);
+      else if (visibleRef.current && good >= GOOD_SAMPLES_TO_HIDE) set(false);
+    }, WEAK_SAMPLE_MS);
+    return () => window.clearInterval(timer);
+  }, [room, set]);
+
+  const hide = useCallback(() => { snoozedUntil.current = Date.now() + WEAK_SNOOZE_MS; set(false); }, [set]);
+  const dismissForever = useCallback(() => {
+    disabled.current = true;
+    try { localStorage.setItem(WEAK_KEY, "1"); } catch { /* Off for this session at least. */ }
+    set(false);
+  }, [set]);
+  const tip: RoomTip = {
+    id: "weak-network",
+    icon: <WifiOff size={16}/>,
+    text: "Your connection is weak, so you may miss parts of what others say. Try moving to a new location with a stronger signal.",
+    actionLabel: "Got it",
+    onAction: () => undefined,
+  };
+  return { visible, tip, hide, dismissForever };
 }

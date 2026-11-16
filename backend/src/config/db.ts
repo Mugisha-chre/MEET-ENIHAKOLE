@@ -12,8 +12,9 @@ export async function connectDB(): Promise<void> {
     mongoose.set("strictQuery", true);
     connectionPromise = mongoose.connect(uri, {
       serverSelectionTimeoutMS: 10_000,
-      maxPoolSize: 10,
-      minPoolSize: 0,
+      maxPoolSize: Math.max(10, Number(process.env.MONGO_MAX_POOL_SIZE) || 50),
+      minPoolSize: 2,
+      waitQueueTimeoutMS: 20_000,
     }).then(() => {
       console.info("[database] MongoDB connected");
     }).catch((error: unknown) => {

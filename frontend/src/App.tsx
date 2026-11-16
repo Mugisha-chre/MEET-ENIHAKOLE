@@ -1,5 +1,5 @@
 import { createPortal } from "react-dom";
-import { createContext, memo, startTransition, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type RefObject, type FormEvent, type ReactNode, type TouchEvent as ReactTouchEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { createContext, memo, startTransition, useCallback, useId, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type RefObject, type FormEvent, type ReactNode, type TouchEvent as ReactTouchEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { LiveKitRoom, ParticipantTile, RoomAudioRenderer, isTrackReference, useChat, useIsMuted, useLocalParticipant, useParticipants, useRoomContext, useTracks, VideoTrack, type TrackReference } from "@livekit/components-react";
 import { ConnectionState, DisconnectReason, MediaDeviceFailure, ParticipantEvent, Room, RoomEvent, Track, VideoPresets, VideoQuality, type Participant, type RemoteParticipant, type RoomOptions, type VideoCaptureOptions } from "livekit-client";
@@ -17,9 +17,9 @@ import { api, ApiError, clearAuthToken, getRegisteredAuthToken, getGuestProfile,
 import { AdminCenterPage, AudioRecordingPlayer, RecordingsPage } from "./ManagementPages";
 import { clearCachePrefix, patchCache, readCache, removeCache, writeCache } from "./cache";
 import type { JoinSession, Meeting, PrivateConversationSummary, PrivateMessage, User } from "./types";
-import { GoogleContinueButton, ProfilePhoto, googleSignOut, preloadPhoto, preloadPhotoBriefly } from "./google";
+import { GoogleContinueButton, ProfilePhoto, avatarColor, googleSignOut, hiResPhoto, preloadPhoto, preloadPhotoBriefly } from "./google";
 import { BibleTab } from "./BibleTab";
-import { RoomTipCard, useRoomTips, type RoomTip } from "./RoomTips";
+import { RoomTipCard, useRoomTips, useWeakNetworkTip, type RoomTip } from "./RoomTips";
 
 interface AppContextValue {
   user: User | null;
@@ -419,6 +419,7 @@ export default function App() {
     root.dataset.theme = next;
     const themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
     if (themeColor) themeColor.content = next === "light" ? "#fbf7f2" : "#130d10";
+    const scheme = document.querySelector<HTMLMetaElement>('meta[name="color-scheme"]'); if (scheme) scheme.content = next;
     window.requestAnimationFrame(() => window.requestAnimationFrame(() => root.classList.remove("theme-switching")));
     try { localStorage.setItem(THEME_STORAGE_KEY, next); } catch { /* Theme still applies for this session. */ }
     startTransition(() => setTheme(next));
@@ -448,6 +449,7 @@ export default function App() {
     document.documentElement.dataset.theme = theme;
     const themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
     if (themeColor) themeColor.content = theme === "light" ? "#fbf7f2" : "#130d10";
+    const scheme = document.querySelector<HTMLMetaElement>('meta[name="color-scheme"]'); if (scheme) scheme.content = theme;
   }, [theme]);
 
   // Cache-first: cached lists render instantly, then refresh quietly in the background (skipped if fetched moments ago).
@@ -1070,20 +1072,18 @@ function MeetingsPage() {
     const requested = new URLSearchParams(window.location.search).get("filter");
     return requested === "past" || requested === "all" ? requested : "upcoming";
   });
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
+  // Newest created prayers first by default, in every tab.
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [filterOpen, setFilterOpen] = useState(false);
-  const localDay = (iso: string) => { const d = new Date(iso); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
-  const filtersActive = Boolean(dateFrom || dateTo || sortDir !== "asc");
+  const filtersActive = sortDir !== "desc";
   const list = visible.filter((meeting) => {
     if (filter === "upcoming") return meeting.status === "scheduled" || meeting.status === "live";
     if (filter === "past") return meeting.status === "ended" || meeting.status === "cancelled";
     return true;
-  }).filter((meeting) => {
-    const day = localDay(meeting.startsAt);
-    return (!dateFrom || day >= dateFrom) && (!dateTo || day <= dateTo);
-  }).sort((a, b) => (new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime()) * (sortDir === "asc" ? 1 : -1));
+  }).sort((a, b) => {
+    const stamp = (m: Meeting) => new Date(m.createdAt || m.startsAt).getTime() || 0;
+    return (stamp(a) - stamp(b)) * (sortDir === "asc" ? 1 : -1);
+  });
   // Switching between Upcoming / Past / All briefly shows the loading cards before the list appears.
   const [filtering, setFiltering] = useState(false);
   const filterTimer = useRef<number | undefined>(undefined);
@@ -1100,43 +1100,32 @@ function MeetingsPage() {
   return (
     <div className="meetings-page page-enter">
       <div className="page-title-row"><div><h1>Prayers</h1></div>{(user?.canCreateMeetings || user?.isAdmin) && <button className="button button-primary" onClick={() => openSchedule(false)}><Plus size={17}/> Create a prayer</button>}</div>
-      <div className="filter-bar"><div className="segmented-filter">{(["upcoming", "past", "all"] as const).map((value) => <button key={value} className={filter === value ? "filter-active" : ""} onClick={() => changeFilter(value)}>{value === "upcoming" ? "Upcoming" : value === "past" ? "Past prayers" : "All prayers"}</button>)}</div><div className="filter-bar-end"><button type="button" className={`filter-open-button ${filtersActive ? "filter-open-active" : ""}`} onClick={() => setFilterOpen(true)} aria-haspopup="dialog"><SlidersHorizontal size={15}/><span>Filter</span>{filtersActive && <i aria-hidden="true"/>}</button><span className="meeting-count">{showSkeleton ? "Loading…" : `${list.length} ${list.length === 1 ? "prayer" : "prayers"}`}</span></div></div>
-      {filterOpen && <PrayerFilterModal sortDir={sortDir} dateFrom={dateFrom} dateTo={dateTo} onClose={() => setFilterOpen(false)} onApply={(next) => { setSortDir(next.sortDir); setDateFrom(next.dateFrom); setDateTo(next.dateTo); setFilterOpen(false); }}/>}
+      <div className="filter-bar"><div className="segmented-filter">{(["upcoming", "past", "all"] as const).map((value) => <button key={value} className={filter === value ? "filter-active" : ""} onClick={() => changeFilter(value)}>{value === "upcoming" ? "Upcoming" : value === "past" ? "Past prayers" : "All prayers"}</button>)}</div><button type="button" className={`filter-open-button ${filtersActive ? "filter-open-active" : ""}`} onClick={() => setFilterOpen(true)} aria-haspopup="dialog"><SlidersHorizontal size={15}/><span>Filter</span>{filtersActive && <i aria-hidden="true"/>}</button></div>
+      <div className="meeting-count meeting-count-line">{showSkeleton ? "Loading…" : `${list.length} ${list.length === 1 ? "prayer" : "prayers"}`}</div>
+      {filterOpen && <PrayerFilterModal sortDir={sortDir} onClose={() => setFilterOpen(false)} onApply={(next) => { setSortDir(next.sortDir); setFilterOpen(false); }}/>}
       {showSkeleton ? <div className="meeting-card-grid" aria-busy="true" aria-label="Loading prayers">{Array.from({ length: 6 }, (_, index) => <MeetingCardSkeleton key={index}/>)}</div> : list.length ? <div className="meeting-card-grid">{list.map((meeting, index) => <MeetingCard key={meeting.slug} meeting={meeting} priority={index < 6}/>)}</div> : <div className="empty-state empty-large"><div className="empty-icon"><CalendarDays size={23}/></div><div><h3>{filter === "past" ? "No past prayers yet" : "A fresh page for your next prayer"}</h3><p>Online Prayers will appear here when they are scheduled.</p></div><Link className="button button-primary" to="/recordings"><AudioLines size={16}/> Recorded Prayers</Link></div>}
     </div>
   );
 }
 
-/** "Filter" on the Prayers page: sort by date (ascending / descending) and limit to a date range. */
-function PrayerFilterModal({ sortDir, dateFrom, dateTo, onClose, onApply }: { sortDir: "asc" | "desc"; dateFrom: string; dateTo: string; onClose: () => void; onApply: (next: { sortDir: "asc" | "desc"; dateFrom: string; dateTo: string }) => void }) {
+/** "Filter" on the Prayers page: sort by date (ascending / descending). */
+function PrayerFilterModal({ sortDir, onClose, onApply }: { sortDir: "asc" | "desc"; onClose: () => void; onApply: (next: { sortDir: "asc" | "desc" }) => void }) {
   const [dir, setDir] = useState(sortDir);
-  const [from, setFrom] = useState(dateFrom);
-  const [to, setTo] = useState(dateTo);
-  const invalid = Boolean(from && to && from > to);
   return createPortal(
     <Modal onClose={onClose}>
       <div className="auth-modal-content prayer-filter-content">
         <span className="modal-brand-icon"><SlidersHorizontal size={22}/></span>
         <p className="section-overline">FILTER PRAYERS</p>
-        <h2>Sort and filter by date</h2>
+        <h2>Sort prayers</h2>
         <div className="prayer-filter-group" role="radiogroup" aria-label="Sort by date">
-          <b>Sort by date</b>
           <div className="prayer-filter-choices">
             <button type="button" role="radio" aria-checked={dir === "asc"} className={dir === "asc" ? "is-selected" : ""} onClick={() => setDir("asc")}><ArrowUp size={15}/> Ascending<small>Oldest first</small></button>
             <button type="button" role="radio" aria-checked={dir === "desc"} className={dir === "desc" ? "is-selected" : ""} onClick={() => setDir("desc")}><ArrowDown size={15}/> Descending<small>Newest first</small></button>
           </div>
         </div>
-        <div className="prayer-filter-group">
-          <b>Date range</b>
-          <div className="prayer-filter-dates">
-            <label><span>From</span><input type="date" value={from} max={to || undefined} onChange={(event) => setFrom(event.target.value)}/></label>
-            <label><span>To</span><input type="date" value={to} min={from || undefined} onChange={(event) => setTo(event.target.value)}/></label>
-          </div>
-          {invalid && <div className="inline-error" role="alert">The start date must be before the end date.</div>}
-        </div>
         <div className="prayer-filter-actions">
-          <button type="button" className="button button-soft" onClick={() => { setDir("asc"); setFrom(""); setTo(""); }}>Reset</button>
-          <button type="button" className="button button-primary" disabled={invalid} onClick={() => onApply({ sortDir: dir, dateFrom: from, dateTo: to })}>Apply</button>
+          <button type="button" className="button button-soft" onClick={() => setDir("desc")}>Reset</button>
+          <button type="button" className="button button-primary" onClick={() => onApply({ sortDir: dir })}>Apply</button>
         </div>
       </div>
     </Modal>,
@@ -2032,7 +2021,9 @@ function RdMicIcon({ off = false }: { off?: boolean }) {
   return <svg viewBox="0 0 24 24" width="26" height="26" fill="none" aria-hidden="true"><defs><mask id="rd-mic-cut"><rect width="24" height="24" fill="#fff"/>{off && <path d="M3.5 3.5 20.5 20.5" stroke="#000" strokeWidth="4.6" strokeLinecap="round"/>}</mask></defs><g mask="url(#rd-mic-cut)" stroke="currentColor" strokeLinecap="round" strokeWidth="2"><rect x="8.5" y="2.5" width="7" height="12" rx="3.5" fill="currentColor" stroke="none"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3.2M8.6 21.2h6.8"/></g>{off && <path d="M3.5 3.5 20.5 20.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>}</svg>;
 }
 function RdSpeakerIcon({ off = false }: { off?: boolean }) {
-  return <svg viewBox="0 0 24 24" width="26" height="26" fill="none" aria-hidden="true"><defs><mask id="rd-spk-cut"><rect width="24" height="24" fill="#fff"/>{off && <path d="M3.5 3.5 20.5 20.5" stroke="#000" strokeWidth="4.6" strokeLinecap="round"/>}</mask></defs><g mask="url(#rd-spk-cut)"><path d="M3 8.6h3.6L11.6 5c.6-.5 1.4-.1 1.4.7v12.6c0 .8-.8 1.2-1.4.7l-5-4.6H3c-.6 0-1-.4-1-1v-3.8c0-.6.4-1 1-1z" fill="currentColor"/>{!off && <path d="M16 8.6a5 5 0 0 1 0 6.8M18.6 5.8a9 9 0 0 1 0 12.4" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>}</g>{off && <path d="M3.5 3.5 20.5 20.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>}</svg>;
+  const maskId = `rd-spk-cut-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
+  // A balanced speaker: square back, flared cone and (when on) two sound waves, all centred on the same horizontal line.
+  return <svg viewBox="0 0 24 24" width="26" height="26" fill="none" aria-hidden="true"><defs><mask id={maskId}><rect width="24" height="24" fill="#fff"/>{off && <path d="M4 4 20 20" stroke="#000" strokeWidth="4.6" strokeLinecap="round"/>}</mask></defs><g mask={`url(#${maskId})`}><path d="M3.5 9.2h2.6l5-4.1c.65-.53 1.6-.07 1.6.77v12.26c0 .84-.95 1.3-1.6.77l-5-4.1H3.5c-.55 0-1-.45-1-1v-3.6c0-.55.45-1 1-1z" fill="currentColor"/>{!off && <path d="M15.8 8.7a4.7 4.7 0 0 1 0 6.6M18.5 5.9a8.6 8.6 0 0 1 0 12.2" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>}{off && <path d="M16 9.5l5 5M21 9.5l-5 5" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>}</g></svg>;
 }
 function RdShareIcon() { return <svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" aria-hidden="true"><path fillRule="evenodd" d="M5 4h14a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3h-4.4l.9 2h1.1a1 1 0 1 1 0 2H8.4a1 1 0 1 1 0-2h1.1l.9-2H5a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3zm0 2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1z"/><circle cx="12" cy="9.2" r="2"/><path d="M8 15c0-2 1.8-3 4-3s4 1 4 3z"/></svg>; }
 function RdHangupIcon() { return <svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor" aria-hidden="true"><path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08a.96.96 0 0 1-.29-.7c0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28a11.27 11.27 0 0 0-2.67-1.85.996.996 0 0 1-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/></svg>; }
@@ -2389,7 +2380,7 @@ type PipVideoElement = HTMLVideoElement & {
   webkitPresentationMode?: string;
   autoPictureInPicture?: boolean;
 };
-type PipSource = { track: Track | null; name: string; key: string };
+type PipSource = { track: Track | null; name: string; key: string; identity?: string; picture?: string };
 
 function isPictureInPictureSupported(): boolean {
   if (typeof document === "undefined") return false;
@@ -2430,40 +2421,89 @@ function useRoomPictureInPicture(room: Room, title: string) {
       if (!track || publication.isMuted || track.mediaStreamTrack?.readyState === "ended") return null;
       return track;
     };
+    // The floating window follows the current speaker: their live camera when it is on, otherwise a large profile photo.
+    let lastSpeakerId = "";
+    const trackSpeaker = () => { const first = room.activeSpeakers.find((participant) => !participant.isLocal); if (first) lastSpeakerId = first.identity; };
     const pickSource = (): PipSource => {
       const remotes = Array.from(room.remoteParticipants.values());
-      const label = (participant: Participant) => participant.name || participant.identity || "Participant";
+      const label = (participant: Participant) => participantName(participant) || participant.identity || "Participant";
       for (const participant of remotes) {
         const track = usableTrack(participant, Track.Source.ScreenShare);
         if (track) return { track, name: label(participant), key: `${track.mediaStreamTrack?.id ?? track.sid}` };
       }
       const speakers = room.activeSpeakers.filter((participant) => !participant.isLocal);
-      for (const participant of [...speakers, ...remotes]) {
-        const track = usableTrack(participant, Track.Source.Camera);
-        if (track) return { track, name: label(participant), key: `${track.mediaStreamTrack?.id ?? track.sid}` };
+      const focus = speakers[0] ?? remotes.find((participant) => participant.identity === lastSpeakerId) ?? remotes[0];
+      if (focus) {
+        const track = usableTrack(focus, Track.Source.Camera);
+        if (track) return { track, name: label(focus), key: `${track.mediaStreamTrack?.id ?? track.sid}` };
+        return { track: null, name: label(focus), key: `card:${focus.identity}`, identity: focus.identity, picture: participantPicture(focus.metadata, focus.identity) };
       }
-      const person = speakers[0] ?? remotes[0];
-      if (person) return { track: null, name: label(person), key: `card:${person.identity}` };
       const own = usableTrack(room.localParticipant, Track.Source.Camera);
       if (own) return { track: own, name: "You", key: `${own.mediaStreamTrack?.id ?? own.sid}` };
-      return { track: null, name: title, key: "card:room" };
+      const self = room.localParticipant;
+      return { track: null, name: participantName(self) || title, key: `card:${self.identity}`, identity: self.identity, picture: participantPicture(self.metadata, self.identity) };
     };
 
-    const drawCard = (name: string) => {
+    // Profile photos are loaded with CORS so they can be painted on the canvas that feeds the floating window.
+    const photos = new Map<string, HTMLImageElement | "loading" | "failed">();
+    const photoFor = (picture?: string): HTMLImageElement | null => {
+      const url = picture ? hiResPhoto(picture, 512) : "";
+      if (!url) return null;
+      const hit = photos.get(url);
+      if (hit instanceof HTMLImageElement) return hit;
+      if (hit) return null;
+      photos.set(url, "loading");
+      const img = new Image();
+      img.crossOrigin = "anonymous"; img.referrerPolicy = "no-referrer"; img.decoding = "async";
+      img.onload = () => { photos.set(url, img); if (current && !current.track) drawCard(current); };
+      img.onerror = () => photos.set(url, "failed");
+      img.src = url;
+      return null;
+    };
+
+    const drawCard = (source: PipSource) => {
       const g = canvas.getContext("2d");
       if (!g) return;
       const w = canvas.width; const h = canvas.height;
-      g.fillStyle = "#1b1117"; g.fillRect(0, 0, w, h);
-      const gradient = g.createLinearGradient(w / 2 - 70, h / 2 - 110, w / 2 + 70, h / 2 + 30);
-      gradient.addColorStop(0, "#a92b4e"); gradient.addColorStop(1, "#7a1a37");
-      g.fillStyle = gradient; g.beginPath(); g.arc(w / 2, h / 2 - 40, 70, 0, Math.PI * 2); g.fill();
-      const initials = name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase() ?? "").join("") || "E";
-      g.fillStyle = "#fff"; g.textAlign = "center"; g.textBaseline = "middle";
-      g.font = "700 56px system-ui, sans-serif"; g.fillText(initials, w / 2, h / 2 - 38);
-      g.font = "600 26px system-ui, sans-serif"; g.fillStyle = "#f5e9ec";
-      g.fillText(name.length > 28 ? `${name.slice(0, 27)}…` : name, w / 2, h / 2 + 62);
-      g.font = "500 16px system-ui, sans-serif"; g.fillStyle = "#c9aab4";
-      g.fillText("MEET ENIHAKOLE · Live", w / 2, h / 2 + 96);
+      const name = source.name;
+      const speaking = Boolean(source.identity && room.activeSpeakers.some((participant) => participant.identity === source.identity));
+      g.fillStyle = "#140c10"; g.fillRect(0, 0, w, h);
+      const glow = g.createRadialGradient(w / 2, h / 2 - 24, 40, w / 2, h / 2 - 24, w * 0.6);
+      glow.addColorStop(0, "rgba(169,43,78,.34)"); glow.addColorStop(1, "rgba(20,12,16,0)");
+      g.fillStyle = glow; g.fillRect(0, 0, w, h);
+
+      const cx = w / 2; const cy = h / 2 - 22; const radius = 112;
+      g.lineWidth = speaking ? 7 : 3; g.strokeStyle = speaking ? "#e8ca91" : "rgba(255,255,255,.2)";
+      g.beginPath(); g.arc(cx, cy, radius + 10, 0, Math.PI * 2); g.stroke();
+      g.save(); g.beginPath(); g.arc(cx, cy, radius, 0, Math.PI * 2); g.closePath(); g.clip();
+      const photo = photoFor(source.picture);
+      if (photo && photo.naturalWidth > 0) {
+        const side = Math.min(photo.naturalWidth, photo.naturalHeight);
+        g.drawImage(photo, (photo.naturalWidth - side) / 2, (photo.naturalHeight - side) / 2, side, side, cx - radius, cy - radius, radius * 2, radius * 2);
+      } else {
+        g.fillStyle = avatarColor(name); g.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
+        const letter = Array.from(name.replace(/[<>]/g, "").trim())[0]?.toUpperCase() || "E";
+        g.fillStyle = "#fff"; g.textAlign = "center"; g.textBaseline = "middle"; g.font = "600 120px system-ui, sans-serif"; g.fillText(letter, cx, cy + 6);
+      }
+      g.restore();
+
+      g.textAlign = "center"; g.textBaseline = "middle";
+      g.font = "700 28px system-ui, sans-serif"; g.fillStyle = "#fff7f4";
+      g.fillText(name.length > 26 ? `${name.slice(0, 25)}…` : name, cx, cy + radius + 40);
+      g.font = "600 15px system-ui, sans-serif"; g.fillStyle = speaking ? "#e8ca91" : "#c9aab4";
+      g.fillText(speaking ? "Speaking now" : "MEET ENIHAKOLE · Live", cx, cy + radius + 68);
+
+      // Your own microphone and camera state, so the floating window always shows it (the buttons live in the window's own controls).
+      const chip = (x: number, label: string, on: boolean) => {
+        g.font = "700 13px system-ui, sans-serif";
+        const width = g.measureText(label).width + 34;
+        g.fillStyle = "rgba(255,255,255,.1)"; g.beginPath(); if (typeof g.roundRect === "function") g.roundRect(x, 14, width, 28, 14); else g.rect(x, 14, width, 28); g.fill();
+        g.fillStyle = on ? "#4ade80" : "#f87171"; g.beginPath(); g.arc(x + 15, 28, 5, 0, Math.PI * 2); g.fill();
+        g.fillStyle = "#fff7f4"; g.textAlign = "left"; g.fillText(label, x + 26, 29);
+        return x + width + 8;
+      };
+      const next = chip(14, room.localParticipant.isMicrophoneEnabled ? "Mic on" : "Mic off", room.localParticipant.isMicrophoneEnabled);
+      chip(next, room.localParticipant.isCameraEnabled ? "Camera on" : "Camera off", room.localParticipant.isCameraEnabled);
     };
 
     // Tells Chrome this page is a live call (camera/microphone in use) so it may float the call by itself when the user leaves the app.
@@ -2483,11 +2523,11 @@ function useRoomPictureInPicture(room: Room, title: string) {
       if (next.track) {
         next.track.attach(video);
       } else {
-        drawCard(next.name);
+        drawCard(next);
         if (!canvasStream) canvasStream = canvas.captureStream(2);
         video.srcObject = canvasStream;
         // Keep the card producing frames so the floating window never freezes.
-        canvasTimer = window.setInterval(() => drawCard(next.name), 1000);
+        canvasTimer = window.setInterval(() => drawCard(next), 1000);
       }
       void video.play().catch(() => undefined);
     };
@@ -2549,11 +2589,14 @@ function useRoomPictureInPicture(room: Room, title: string) {
     // Home button, app switcher or opening a notification can hide the page without a clean visibility event on some browsers.
     const onPageHide = () => { if (document.visibilityState === "hidden" || document.hidden) { flagCapture(); void enter(true); } };
     window.addEventListener("pagehide", onPageHide);
+    // Screen off, app switcher or the tab being frozen by the system: float the call too.
+    document.addEventListener("freeze", onPageHide);
     const session = navigator.mediaSession;
     try { session?.setActionHandler("enterpictureinpicture" as MediaSessionAction, () => { void enter(true); }); }
     catch { /* This browser has no automatic-PiP media action. */ }
 
     const events = [RoomEvent.ActiveSpeakersChanged, RoomEvent.TrackSubscribed, RoomEvent.TrackUnsubscribed, RoomEvent.TrackMuted, RoomEvent.TrackUnmuted, RoomEvent.ParticipantConnected, RoomEvent.ParticipantDisconnected, RoomEvent.LocalTrackPublished, RoomEvent.LocalTrackUnpublished, RoomEvent.Connected, RoomEvent.Reconnected] as const;
+    room.on(RoomEvent.ActiveSpeakersChanged, trackSpeaker);
     events.forEach((event) => room.on(event, schedule));
     apply(); // Warm start: the floating window opens instantly with a ready picture.
 
@@ -2562,8 +2605,10 @@ function useRoomPictureInPicture(room: Room, title: string) {
       controls.current = null;
       window.clearTimeout(scheduleTimer); window.clearInterval(canvasTimer);
       events.forEach((event) => room.off(event, schedule));
+      room.off(RoomEvent.ActiveSpeakersChanged, trackSpeaker);
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("pagehide", onPageHide);
+      document.removeEventListener("freeze", onPageHide);
       try { session?.setActionHandler("enterpictureinpicture" as MediaSessionAction, null); } catch { /* Optional. */ }
       video.removeEventListener("enterpictureinpicture", onEnter);
       video.removeEventListener("leavepictureinpicture", onLeave);
@@ -3204,6 +3249,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
   const [reactionsOpen, setReactionsOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   useBackClose(moreOpen, () => setMoreOpen(false));
+  useBackClose(reactionsOpen, () => setReactionsOpen(false));
   useBackClose(notesOpen, () => setNotesOpen(false));
   useBackClose(messagesOpen, () => setMessagesOpen(false));
   useBackClose(peopleOpen, () => setPeopleOpen(false));
@@ -4456,7 +4502,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
   const openPeopleTab = () => { setPeopleViewTab("people"); setPeopleOpen(true); setMessagesOpen(false); setDirectContact(null); setNotesOpen(false); setBibleOpen(false); };
   const copyInviteLink = () => {
     const url = `${window.location.origin}/share/${encodeURIComponent(meeting.slug)}`;
-    const done = () => window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Invitation link copied." } }));
+    const done = () => window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: `${kindOf(meeting) === "prayer" ? "Prayer" : "Meeting"} link copied.` } }));
     const fallback = () => { try { const box = document.createElement("textarea"); box.value = url; box.style.position = "fixed"; box.style.opacity = "0"; document.body.appendChild(box); box.select(); document.execCommand("copy"); box.remove(); done(); } catch { window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: url } })); } };
     if (navigator.clipboard?.writeText) navigator.clipboard.writeText(url).then(done).catch(fallback); else fallback();
   };
@@ -4464,7 +4510,8 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
   const bibleNav = <nav className="meeting-panel-tabs" aria-label="Meeting tools"><button type="button" className="meeting-panel-tab" onClick={() => { setBibleOpen(false); setMessagesOpen(true); }}>Messages</button><button type="button" className="meeting-panel-tab" onClick={() => { setBibleOpen(false); setPeopleViewTab("people"); setPeopleOpen(true); }}>People</button><button type="button" className="meeting-panel-tab" onClick={() => { setBibleOpen(false); setPeopleViewTab("private"); setPeopleOpen(true); }}>Private chats</button><button type="button" className="meeting-panel-tab" onClick={() => { setBibleOpen(false); setNotesOpen(true); }}>Notes</button><button type="button" className="meeting-panel-tab meeting-panel-tab-active" aria-current="page">Bible</button></nav>;
 
   // Rotating tips: one at a time, spaced out, and only when nothing else needs the person's attention.
-  const tipsBusy = messagesOpen || peopleOpen || notesOpen || bibleOpen || moreOpen || Boolean(deviceMenu) || videoQualityMenuOpen || Boolean(directContact) || Boolean(messageToast) || Boolean(moderatorRequest) || Boolean(privateNotice) || fullscreenPrompt || presenceToasts.length > 0 || Boolean(mediaModal) || Boolean(screenShare);
+  const tipsBusy = messagesOpen || peopleOpen || notesOpen || bibleOpen || moreOpen || reactionsOpen || Boolean(deviceMenu) || videoQualityMenuOpen || Boolean(directContact) || Boolean(messageToast) || Boolean(moderatorRequest) || Boolean(privateNotice) || fullscreenPrompt || presenceToasts.length > 0 || Boolean(mediaModal) || Boolean(screenShare);
+  const weakNet = useWeakNetworkTip(room);
   const { tip: activeTip, hide: hideTip, dismissForever: dismissTip } = useRoomTips((): RoomTip[] => {
     const standalone = window.matchMedia("(display-mode: standalone)").matches || (navigator as unknown as { standalone?: boolean }).standalone === true;
     const installEvent = (window as unknown as { __pwaPrompt?: PwaPromptEvent }).__pwaPrompt;
@@ -4476,13 +4523,13 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
       !standalone && (Boolean(installEvent) || isIos) && { id: "install", text: installEvent ? "Install MEET ENIHAKOLE for faster joining and a steadier call." : "Install MEET ENIHAKOLE: tap Share in Safari, then Add to Home Screen.", actionLabel: installEvent ? "Install app" : undefined, onAction: installEvent ? () => { void installEvent.prompt().catch(() => undefined); (window as unknown as { __pwaPrompt?: Event }).__pwaPrompt = undefined; } : undefined },
       { id: "bible", text: "Read the Bible together in Kinyarwanda. Find it under More.", actionLabel: "Open Bible", onAction: openBibleTab },
       { id: "notes", text: "Write prayer points together in shared Notes, under More.", actionLabel: "Open notes", onAction: () => { setNotesOpen(true); setMessagesOpen(false); setPeopleOpen(false); setBibleOpen(false); } },
-      { id: "reactions", text: "Send a quick 🙏 or 👏 with the emoji button without interrupting anyone.", actionLabel: "Open reactions", onAction: () => { setMoreView("reactions"); setMoreOpen(true); } },
+      { id: "reactions", text: "Send a quick 🙏 or 👏 with the emoji button without interrupting anyone.", actionLabel: "Open reactions", onAction: () => { setMoreOpen(false); setReactionsOpen(true); } },
       role !== "host" && { id: "hand", text: "Raise your hand from More when you would like to speak." },
       { id: "private", text: "You can send someone a private message from the People tab.", actionLabel: "Open people", onAction: openPeopleTab },
-      role === "host" && { id: "invite", text: "Invite others: copy the meeting link from More.", actionLabel: "Copy link", onAction: copyInviteLink },
+      role === "host" && { id: "invite", text: `Invite others: copy the ${kindOf(meeting)} link from More.`, actionLabel: "Copy link", onAction: copyInviteLink },
     ];
     return list.filter((item): item is RoomTip => Boolean(item));
-  }, tipsBusy);
+  }, tipsBusy || weakNet.visible);
 
   return <div className={`conference-fullscreen-target ${fullScreen ? "is-fullscreen" : ""} ${pseudoFull ? "is-pseudo-fullscreen" : ""} ${fullScreen && controlsVisible ? "controls-shown" : ""}`} data-theme={theme} ref={fullScreenRef} style={{ "--dock-space": fullScreen ? (controlsVisible ? `${dockHeight}px` : "0px") : `${dockHeight || 110}px` } as CSSProperties}>
     <div className="conference-media-area">
@@ -4504,7 +4551,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
             const hand = Boolean(raisedHands[participant.identity]);
             const speaking = participant.identity === localIdentity ? localVoiceActivity.speaking : participant.isSpeaking;
             const cameraVideoOn = isTrackReference(trackRef!) && Boolean(trackRef!.publication?.track) && !trackRef!.publication?.isMuted;
-            return <div className={`participant-card ${speaking && cameraVideoOn ? "participant-speaking" : ""} ${isHost ? "participant-host" : ""} ${participant.identity === localIdentity ? "participant-local" : ""} ${participant.identity === spotlightIdentity ? "participant-spotlight" : ""}`} key={participant.identity}>
+            return <div className={`participant-card ${speaking && cameraVideoOn ? "participant-speaking" : ""} ${cameraVideoOn ? "participant-cam-on" : "participant-cam-off"} ${isHost ? "participant-host" : ""} ${participant.identity === localIdentity ? "participant-local" : ""} ${participant.identity === spotlightIdentity ? "participant-spotlight" : ""}`} key={participant.identity}>
               <ParticipantTile trackRef={trackRef!} />
               <ParticipantAvatar trackRef={trackRef!} participant={participant} />
               {isHost && <span className="participant-role-label">HOST</span>}
@@ -4527,16 +4574,17 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
               <button type="button" data-popover="videoinput" className="rd-chevron" onClick={() => setDeviceMenu(deviceMenu === "videoinput" ? null : "videoinput")} aria-label="Choose camera" title="Choose camera"><ChevronDown size={11} strokeWidth={3}/></button>
             </div>
             <div className="rd-slot"><RdButton label={speakerOff ? "Turn speaker on" : "Turn speaker off"} on={!speakerOff} onClick={() => setSpeakerOff((value) => !value)} icon={<RdSpeakerIcon off={speakerOff}/>}/></div>
-            <div className="rd-slot"><RdButton label="Send a reaction" on={moreOpen && moreView === "reactions"} onClick={() => { setDeviceMenu(null); setMoreView("reactions"); setMoreOpen(true); }} icon={<Smile size={26} strokeWidth={2.2}/>} aria-haspopup="dialog"/></div>
+            <div className="rd-slot" data-popover="reactions"><RdButton label="Send a reaction" on={reactionsOpen} onClick={() => { setDeviceMenu(null); setMoreOpen(false); setReactionsOpen((open) => !open); }} icon={<Smile size={26} strokeWidth={2.2}/>} aria-haspopup="dialog" aria-expanded={reactionsOpen}/></div>
           </div>
           <div className="rd-row">
             <div className="rd-slot"><RdButton label="Open room messages" on={messagesOpen} onClick={() => { setMessagesOpen(true); setPeopleOpen(false); setDirectContact(null); setNotesOpen(false); }} icon={<MessageCircle size={24} strokeWidth={2.2}/>} badge={chatMessages.length > 0 ? <i className="rd-badge">{chatMessages.length > 99 ? "99+" : chatMessages.length}</i> : null}/></div>
             <div className="rd-slot"><RdButton label="See who is in the meeting" on={peopleOpen} onClick={() => { setPeopleViewTab("people"); setPeopleOpen(true); setMessagesOpen(false); setDirectContact(null); setNotesOpen(false); }} icon={<Users size={24} strokeWidth={2.2}/>} badge={<i className="rd-badge rd-badge-count">{participants.length}</i>}/></div>
-            <div className="rd-slot"><RdButton label="More actions" on={moreOpen} onClick={() => { setMoreOpen((open) => !open); setMoreView("actions"); setDeviceMenu(null); }} icon={<RdDotsIcon/>} aria-haspopup="dialog" aria-expanded={moreOpen}/></div>
+            <div className="rd-slot"><RdButton label="More actions" on={moreOpen} onClick={() => { setMoreOpen((open) => !open); setMoreView("actions"); setDeviceMenu(null); setReactionsOpen(false); }} icon={<RdDotsIcon/>} aria-haspopup="dialog" aria-expanded={moreOpen}/></div>
             <div className="rd-slot"><RdButton label="Leave the meeting" danger onClick={onLeaveClick ?? onLeave} icon={<RdHangupIcon/>}/></div>
           </div>
         </div>
       </div>
+      {reactionsOpen && <div className="rd-emoji-layer"><div className="rd-emoji-pop" data-popover="reactions" role="group" aria-label="Choose a reaction">{REACTION_SET.map((emoji) => <button type="button" key={emoji} onClick={() => { void react(emoji); setReactionsOpen(false); }} aria-label={`Send ${emoji}`}>{emoji}</button>)}</div></div>}
       {moreOpen && <div className="rd-more-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setMoreOpen(false); }}>
         <section className="rd-more-sheet" role="dialog" aria-modal="true" aria-label="More call actions">
           <header className="rd-more-head">{moreView === "reactions" ? <button type="button" className="rd-more-icon" onClick={() => setMoreView("actions")} aria-label="Back to actions"><ArrowLeft size={18}/></button> : <span className="rd-more-grip" aria-hidden="true"/>}<b>{moreView === "reactions" ? "Send a reaction" : "More"}</b><button type="button" className="rd-more-icon" onClick={() => setMoreOpen(false)} aria-label="Close"><X size={18}/></button></header>
@@ -4545,7 +4593,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
             <RdButton label={isScreenShareEnabled ? "Stop sharing screen" : "Share screen"} on={isScreenShareEnabled} onClick={() => { setMoreOpen(false); void toggleScreenShare(); }} icon={<RdShareIcon/>}/>
             <RdButton label="Open collaborative meeting notes" onClick={() => { setMoreOpen(false); setNotesOpen(true); setMessagesOpen(false); setPeopleOpen(false); setDirectContact(null); }} icon={<FileText size={24} strokeWidth={2.2}/>}/>
             <RdButton label="Open the Bible (Kinyarwanda)" on={bibleOpen} onClick={openBibleTab} icon={<BookOpen size={24} strokeWidth={2.2}/>}/>
-            <RdButton label="Copy invitation link" onClick={() => { setMoreOpen(false); copyInviteLink(); }} icon={<Link2 size={24} strokeWidth={2.2}/>}/>
+            <RdButton label={kindOf(meeting) === "prayer" ? "Copy prayer link" : "Copy meeting link"} onClick={() => { setMoreOpen(false); copyInviteLink(); }} icon={<Link2 size={24} strokeWidth={2.2}/>}/>
             <RdButton label="Choose camera video quality" on={videoQualityMenuOpen} onClick={() => { setMoreOpen(false); setVideoQualityMenuOpen(true); setDeviceMenu(null); }} icon={<Settings2 size={24} strokeWidth={2.2}/>}/>
             {RECORDING_UI_ENABLED && role === "host" && <RdButton label={recordingState?.status === "recording" ? "Stop audio recording" : recordingState?.status === "failed" && recordingState.canRetry ? "Retry audio upload" : "Start audio-only recording"} on={recordingState?.status === "recording"} disabled={recordingBusy || recordingState?.status === "uploading" || recordingState?.status === "consent_pending"} onClick={() => recordingState?.status === "recording" ? void stopRecording() : recordingState?.status === "uploading" || recordingState?.status === "consent_pending" ? undefined : recordingState?.status === "failed" && recordingState.canRetry ? void retryRecordingUpload() : void startRecording()} icon={recordingBusy ? <LoaderCircle size={24} className="spin"/> : <span className="meeting-recording-dot rd-record-dot"/>}/>}
             <RdButton label={theme === "light" ? "Switch to dark mode" : "Switch to light mode"} onClick={() => { toggleTheme(); setMoreOpen(false); }} icon={theme === "light" ? <Moon size={24} strokeWidth={2.2}/> : <Sun size={24} strokeWidth={2.2}/>}/>
@@ -4575,12 +4623,13 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
               </div>}
             </RoomSheet>}
     </div>
-    {(fullscreenPrompt || moderatorRequest || privateNotice || presenceToasts.length > 0 || messageToast || activeTip) && <div className="room-bottom-notifications" aria-live="polite">
+    {(fullscreenPrompt || moderatorRequest || privateNotice || presenceToasts.length > 0 || messageToast || activeTip || weakNet.visible) && <div className="room-bottom-notifications" aria-live="polite">
       {fullscreenPrompt && !fullScreen && <div className="fullscreen-fallback-prompt" role="status"><span>Fullscreen needs your permission. Tap once to enter.</span><button type="button" onClick={() => void toggleFullscreen()}>Enter fullscreen <Maximize2 size={15}/></button></div>}
       {moderatorRequest && <div className="moderator-request-banner" role="status"><span>{moderatorRequest.hostName} asks you to turn on your {moderatorRequest.media === "microphone" ? "microphone" : "camera"}. You choose whether to allow it.</span><button type="button" onClick={() => void acceptModeratorRequest()}>Review request</button><button type="button" className="request-dismiss" onClick={() => setModeratorRequest(null)} aria-label="Dismiss request"><X size={15}/></button></div>}
       {privateNotice && <div className="room-private-notice" role="status"><span><MessageCircle size={16}/> Private message from <b>{privateNotice.name}</b></span><button type="button" onClick={() => openPrivateContact(privateNotice)}>Open chat</button><button type="button" className="notice-dismiss" onClick={() => setPrivateNotice(null)} aria-label="Dismiss notification"><X size={14}/></button></div>}
       {presenceToasts.length > 0 && <div className="room-presence-stack" aria-live="polite">{presenceToasts.map((toast) => <div className={`room-presence-toast room-presence-${toast.kind}`} key={toast.id} role="status"><span className="room-presence-icon">{toast.kind === "joined" ? <LogIn size={15}/> : <LogOut size={15}/>}</span><span className="room-presence-text"><b>{toast.name}</b> {toast.kind === "joined" ? "joined the meeting" : "left the meeting"}</span></div>)}</div>}
       {messageToast && <button type="button" className="room-message-toast" key={messageToast.id} onClick={() => { setMessagesOpen(true); setPeopleOpen(false); }} aria-label={`Open message from ${messageToast.name}`}><span className="room-message-toast-icon"><MessageCircle size={16}/></span><span className="room-message-toast-body"><b>{messageToast.name}</b><span>{messageToast.text}</span></span></button>}
+      {weakNet.visible && <RoomTipCard tip={weakNet.tip} onHide={weakNet.hide} onDismissForever={weakNet.dismissForever}/>}
       {activeTip && !messageToast && <RoomTipCard tip={activeTip} onHide={hideTip} onDismissForever={dismissTip}/>}
     </div>}
     {mediaModal && <MediaPermissionModal

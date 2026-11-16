@@ -71,7 +71,7 @@ export function warmServer(): void {
  * same moment) is sent a few at a time instead of all at once, identical in-flight GETs are shared, and a busy server
  * (429/502/503/504) is retried quietly with back-off, so people never see a "Too many requests" error.
  */
-const MAX_PARALLEL_REQUESTS = 6;
+const MAX_PARALLEL_REQUESTS = 20;
 const MAX_ATTEMPTS = 6;
 let activeRequests = 0;
 const waitingRequests: Array<() => void> = [];
