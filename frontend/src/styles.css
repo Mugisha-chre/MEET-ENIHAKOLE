@@ -4071,12 +4071,12 @@ input:-webkit-autofill, textarea:-webkit-autofill, select:-webkit-autofill { -we
 @media (prefers-reduced-motion: reduce) { .participant-grid > .participant-card { animation: none !important; } }
 .participant-grid-wrap { touch-action: pan-y; }
 
-/* ===== Notices (toasts, messages, tips, warnings): equal 12px gap on the sides and above the call bar (the bar keeps 10px of its own top padding) ===== */
-.room-bottom-notifications, .is-fullscreen .room-bottom-notifications, .is-pseudo-fullscreen .room-bottom-notifications { width: min(560px, calc(100% - 24px)); bottom: calc(var(--dock-space, 110px) + 2px); }
-@media (max-width: 720px) { .room-bottom-notifications, .is-fullscreen .room-bottom-notifications, .is-pseudo-fullscreen .room-bottom-notifications { width: calc(100% - 24px); bottom: calc(var(--dock-space, 110px) + 2px); } }
-.conference-fullscreen-target > .toast-message, .conference-fullscreen-target.is-fullscreen > .toast-message, .conference-fullscreen-target.is-pseudo-fullscreen > .toast-message { bottom: calc(var(--dock-space, 110px) + 2px); }
-.conference-fullscreen-target:has(.room-bottom-notifications) > .toast-message { bottom: calc(var(--dock-space, 110px) + 70px); }
-.conference-fullscreen-target > .global-tip-lane { bottom: calc(var(--dock-space, 0px) + 2px); }
+/* ===== Notices (toasts, messages, tips, warnings): 12px gap on the sides and a short 10px gap above the call bar / the edge where the participant cards end ===== */
+.room-bottom-notifications, .is-fullscreen .room-bottom-notifications, .is-pseudo-fullscreen .room-bottom-notifications { width: min(560px, calc(100% - 24px)); bottom: calc(var(--dock-space, 110px) + 10px); }
+@media (max-width: 720px) { .room-bottom-notifications, .is-fullscreen .room-bottom-notifications, .is-pseudo-fullscreen .room-bottom-notifications { width: calc(100% - 24px); bottom: calc(var(--dock-space, 110px) + 10px); } }
+.conference-fullscreen-target > .toast-message, .conference-fullscreen-target.is-fullscreen > .toast-message, .conference-fullscreen-target.is-pseudo-fullscreen > .toast-message { bottom: calc(var(--dock-space, 110px) + 10px); }
+.conference-fullscreen-target:has(.room-bottom-notifications) > .toast-message { bottom: calc(var(--dock-space, 110px) + 80px); }
+.conference-fullscreen-target > .global-tip-lane { bottom: calc(var(--dock-space, 0px) + 10px); }
 .global-tip-lane { bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
 .toast-message { bottom: 12px; }
 @media (max-width: 720px) { .toast-message { bottom: calc(12px + env(safe-area-inset-bottom, 0px)); } }
@@ -4096,3 +4096,40 @@ input:-webkit-autofill, textarea:-webkit-autofill, select:-webkit-autofill { -we
 .rs-list { grid-template-columns: minmax(0, 1fr); }
 .rs-option { min-width: 0; max-width: 100%; box-sizing: border-box; }
 .rs-option-label { display: block; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ===== Emoji picker: one horizontal row, swipe / wheel to scroll, scrollbar hidden ===== */
+.rd-emoji-grid.rd-emoji-row, .rd-more-emojis.rd-emoji-row { display: flex; flex-wrap: nowrap; grid-template-columns: none; justify-content: flex-start; gap: 8px; padding: 2px; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; scrollbar-width: none; -ms-overflow-style: none; touch-action: pan-x; }
+.rd-emoji-row::-webkit-scrollbar { display: none; width: 0; height: 0; }
+.rd-emoji-pop .rd-emoji-row button, .rd-more-emojis.rd-emoji-row button { flex: 0 0 auto; width: 46px; height: 46px; max-width: none; aspect-ratio: auto; border-radius: 12px; }
+
+/* ===== Floating reactions: smaller on phones, spread over separate lanes, a bit faster, gone at about 75% of the screen ===== */
+.reaction-float { left: clamp(30px, var(--x, 50%), calc(100% - 30px)); animation: reaction-rise-smooth 3.2s linear forwards !important; }
+.reaction-float .animated-emoji, .reaction-float .animated-emoji-fallback { width: calc(46px * var(--rs, 1)); height: calc(46px * var(--rs, 1)); }
+.reaction-float .animated-emoji-fallback { font-size: calc(36px * var(--rs, 1)); line-height: calc(46px * var(--rs, 1)); }
+.reaction-float b { max-width: 96px; padding: 2px 8px; font-size: 9.5px; }
+@media (max-width: 720px) {
+  .reaction-float .animated-emoji, .reaction-float .animated-emoji-fallback { width: calc(38px * var(--rs, 1)); height: calc(38px * var(--rs, 1)); }
+  .reaction-float .animated-emoji-fallback { font-size: calc(30px * var(--rs, 1)); line-height: calc(38px * var(--rs, 1)); }
+  .reaction-float b { max-width: 78px; font-size: 9px; }
+}
+.reaction-float-stack[data-dense="true"] .reaction-float b { display: none; }
+@keyframes reaction-rise-smooth {
+  0%   { opacity: 0; transform: translate3d(-50%, 0, 0) scale(.8); }
+  10%  { opacity: 1; transform: translate3d(-50%, -7.5cqh, 0) scale(1); }
+  70%  { opacity: 1; }
+  100% { opacity: 0; transform: translate3d(-50%, -75cqh, 0) scale(1); }
+}
+@supports not (height: 1cqh) {
+  @keyframes reaction-rise-smooth {
+    0%   { opacity: 0; transform: translate3d(-50%, 0, 0) scale(.8); }
+    10%  { opacity: 1; transform: translate3d(-50%, -6dvh, 0) scale(1); }
+    70%  { opacity: 1; }
+    100% { opacity: 0; transform: translate3d(-50%, -60dvh, 0) scale(1); }
+  }
+}
+
+/* ===== Participant cards: with many people the avatar shrinks so the speaking-voice wave stays inside the card ===== */
+@supports (width: 1cqw) {
+  .participant-grid-count-5 .participant-avatar-stack { --av: max(34px, min(44cqh, 46cqw, 130px)); }
+  .participant-grid-count-6 .participant-avatar-stack, .participant-grid-count-7 .participant-avatar-stack, .participant-grid-count-8 .participant-avatar-stack { --av: max(30px, min(38cqh, 40cqw, 110px)); }
+}

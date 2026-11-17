@@ -1965,20 +1965,20 @@ type PrivateDataSignal =
   | { kind: "private-message"; recipientUserId: string; message: PrivateMessage }
   | { kind: "moderator-request"; recipientUserId: string; media: "microphone" | "camera"; hostName: string }
   | { kind: "moderator-media-control"; recipientUserId: string; media: "microphone" | "camera"; action: "disable"; hostName: string };
-const REACTION_LIFETIME = 5000;
+const REACTION_LIFETIME = 3400;
 const PRIVATE_MESSAGE_TOPIC = "meet-enihakole-private";
 /** Reactions use a fixed horizontal launch point and a vertical-only travel distance. */
 function makeReaction(id: string, emoji: string, name: string): FloatingReaction {
-  return { id, emoji, name, x: 12 + Math.random() * 76, rise: 65, scale: 0.9 + Math.random() * 0.35, animated: true };
+  return { id, emoji, name, x: 12 + Math.random() * 76, rise: 65, scale: 0.92 + Math.random() * 0.16, animated: true };
 }
 /** Animated Noto emoji (the same set Google Meet uses). Falls back to the native emoji if an image cannot load. */
-const ANIMATED_EMOJI_CODE: Record<string, string> = { "🙏": "1f64f", "❤️": "2764_fe0f", "👏": "1f44f", "🙌": "1f64c", "😊": "1f60a", "🎉": "1f389", "✨": "2728", "💛": "1f49b", "🕊️": "1f54a_fe0f", "👍": "1f44d", "😂": "1f602", "🔥": "1f525" };
+const ANIMATED_EMOJI_CODE: Record<string, string> = { "🙏": "1f64f", "❤️": "2764_fe0f", "👏": "1f44f", "🙌": "1f64c", "😊": "1f60a", "🎉": "1f389", "✨": "2728", "💛": "1f49b", "🕊️": "1f54a_fe0f", "👍": "1f44d", "😂": "1f602", "🔥": "1f525", "😍": "1f60d", "🤗": "1f917", "🥳": "1f973", "💪": "1f4aa", "🤝": "1f91d", "😮": "1f62e", "😢": "1f622", "💯": "1f4af" };
 const animatedEmojiUrl = (emoji: string) => `https://fonts.gstatic.com/s/e/notoemoji/latest/${ANIMATED_EMOJI_CODE[emoji] || "1f64f"}/512.webp`;
 const failedAnimatedEmoji = new Set<string>();
 /** Performance guard: animated emoji run on every device (phones included). If a device struggles, fewer play at the same time instead of switching to static emoji. */
 const isTouchDevice = typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches;
-const MAX_FLOATING_REACTIONS = 8;
-let animatedCap = isTouchDevice ? 3 : 4;
+const MAX_FLOATING_REACTIONS = 14;
+let animatedCap = isTouchDevice ? 4 : 5; // how many DIFFERENT animated emoji can play together (copies of the same emoji share one decoded image, so they cost almost nothing)
 let lowPerformanceMode = false;
 let emojiPreloadStarted = false;
 /** Warms the browser cache one emoji at a time while the browser is idle, so joining a room never competes with 12 large downloads. */
@@ -2008,6 +2008,22 @@ function PickerEmoji({ emoji }: { emoji: string }) {
   const [hot, setHot] = useState(false);
   return <span className="picker-emoji" onPointerEnter={() => setHot(true)} onPointerDown={() => setHot(true)} onPointerLeave={() => setHot(false)} onFocus={() => setHot(true)} onBlur={() => setHot(false)}><AnimatedEmoji emoji={emoji} animated={hot}/></span>;
 }
+/** Most important emoji first; the ones this person sends most often move to the front (remembered on this device). */
+const EMOJI_USAGE_KEY = "meet-emoji-usage";
+const readEmojiUsage = (): Record<string, number> => { try { return JSON.parse(localStorage.getItem(EMOJI_USAGE_KEY) || "{}") as Record<string, number>; } catch { return {}; } };
+const orderedReactions = (usage: Record<string, number>) => REACTION_SET.map((emoji, index) => ({ emoji, index })).sort((a, b) => (usage[b.emoji] || 0) - (usage[a.emoji] || 0) || a.index - b.index).map((entry) => entry.emoji);
+const recordEmojiUsage = (emoji: string) => { const usage = readEmojiUsage(); usage[emoji] = (usage[emoji] || 0) + 1; try { localStorage.setItem(EMOJI_USAGE_KEY, JSON.stringify(usage)); } catch { /* Storage unavailable. */ } return usage; };
+/** One horizontal, swipeable row with no visible scrollbar; the mouse wheel scrolls it sideways on desktop. */
+function EmojiRow({ className, children }: { className: string; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const element = ref.current; if (!element) return;
+    const onWheel = (event: WheelEvent) => { if (Math.abs(event.deltaY) > Math.abs(event.deltaX) && element.scrollWidth > element.clientWidth) { element.scrollLeft += event.deltaY; event.preventDefault(); } };
+    element.addEventListener("wheel", onWheel, { passive: false });
+    return () => element.removeEventListener("wheel", onWheel);
+  }, []);
+  return <div ref={ref} className={className} role="group" aria-label="Choose a reaction">{children}</div>;
+}
 /** Screen indicator: one short dash per screen of people (only with two or more screens); the current one is longer and brighter. */
 const ParticipantDots = memo(function ParticipantDots({ pages, current, onSelect }: { pages: number; current: number; onSelect: (page: number) => void }) {
   const MAX_VISIBLE = 7;
@@ -2031,15 +2047,25 @@ function pushReaction(id: string, emoji: string, name: string) {
 const ReactionLayer = memo(function ReactionLayer() {
   const [items, setItems] = useState<FloatingReaction[]>([]);
   const itemsRef = useRef<FloatingReaction[]>([]);
+  const slotTimes = useRef<number[]>([]);
   itemsRef.current = items;
   useEffect(() => {
     preloadAnimatedEmojis();
     const listener = (incoming: FloatingReaction) => {
       const current = itemsRef.current;
-      const animatedNow = current.filter((item) => item.animated).length;
-      const item = { ...incoming, animated: !lowPerformanceMode && animatedNow < animatedCap };
+      const playing = new Set(current.filter((entry) => entry.animated).map((entry) => entry.emoji));
+      // Spread the launch points: always use the lane that was used longest ago, so many emoji sent at once never touch each other.
+      const lanes = window.innerWidth < 720 ? 5 : 7;
+      const times = slotTimes.current;
+      while (times.length < lanes) times.push(0);
+      times.length = lanes;
+      let lane = 0; let oldest = Infinity;
+      for (let index = 0; index < lanes; index += 1) { const value = times[index] + Math.random() * 30; if (value < oldest) { oldest = value; lane = index; } }
+      times[lane] = Date.now();
+      const x = 14 + lane * (72 / (lanes - 1)) + (Math.random() * 3 - 1.5);
+      const item = { ...incoming, x, animated: !lowPerformanceMode && (playing.has(incoming.emoji) || playing.size < animatedCap) };
       setItems([...current.slice(-(MAX_FLOATING_REACTIONS - 1)), item]);
-      window.setTimeout(() => setItems((list) => list.filter((entry) => entry.id !== item.id)), REACTION_LIFETIME + 400);
+      window.setTimeout(() => setItems((list) => list.filter((entry) => entry.id !== item.id)), REACTION_LIFETIME + 500);
     };
     reactionListeners.add(listener);
     return () => { reactionListeners.delete(listener); };
@@ -2054,7 +2080,7 @@ const ReactionLayer = memo(function ReactionLayer() {
       if (last && warm > 20) { frames += 1; if (now - last > 55) slow += 1; }
       last = now;
       if (frames >= 60) {
-        if (slow / frames > 0.5 && animatedCap > 1) { animatedCap -= 1; setItems((list) => { let kept = 0; return list.map((item) => (item.animated && ++kept > animatedCap ? { ...item, animated: false } : item)); }); }
+        if (slow / frames > 0.5 && animatedCap > 1) { animatedCap -= 1; setItems((list) => { const allowed = new Set<string>(); return list.map((item) => { if (!item.animated) return item; if (allowed.has(item.emoji) || allowed.size < animatedCap) { allowed.add(item.emoji); return item; } return { ...item, animated: false }; }); }); }
         frames = 0; slow = 0;
       }
       raf = requestAnimationFrame(tick);
@@ -2063,12 +2089,12 @@ const ReactionLayer = memo(function ReactionLayer() {
     return () => cancelAnimationFrame(raf);
   }, [active]);
   if (!items.length) return null;
-  return <div className="reaction-float-stack" aria-live="polite">{items.map((reaction) => <div className="reaction-float" key={reaction.id} style={{ "--x": `${reaction.x}%`, "--rise": `${reaction.rise}%`, "--rs": reaction.scale } as CSSProperties} onAnimationEnd={(event) => { if (event.target === event.currentTarget) setItems((list) => list.filter((entry) => entry.id !== reaction.id)); }}><span className="reaction-emoji"><AnimatedEmoji emoji={reaction.emoji} animated={reaction.animated}/></span><b>{reaction.name}</b></div>)}</div>;
+  return <div className="reaction-float-stack" aria-live="polite" data-dense={items.length > 5 ? "true" : "false"}>{items.map((reaction) => <div className="reaction-float" key={reaction.id} style={{ "--x": `${reaction.x}%`, "--rise": `${reaction.rise}%`, "--rs": reaction.scale } as CSSProperties} onAnimationEnd={(event) => { if (event.target === event.currentTarget) setItems((list) => list.filter((entry) => entry.id !== reaction.id)); }}><span className="reaction-emoji"><AnimatedEmoji emoji={reaction.emoji} animated={reaction.animated}/></span><b>{reaction.name}</b></div>)}</div>;
 });
 // Anything a person can press: a tap on these must keep doing its own job and never toggle fullscreen.
 const INTERACTIVE_SELECTOR = ".screen-annotate-layer.is-drawing, .screen-annotate-toolbar, button, a, input, textarea, select, label, summary, [role='button'], [role='dialog'], [data-popover], .room-device-menu, .reaction-picker, .messages-modal-backdrop, .room-alert, .room-message-toast, .room-presence-stack, .modal-backdrop";
 const PARTICIPANTS_PER_SCREEN = 6;
-const REACTION_SET = ["🙏", "❤️", "👏", "🙌", "😊", "🎉", "✨", "💛", "🕊️", "👍", "😂", "🔥"];
+const REACTION_SET = ["🙏", "❤️", "👏", "🙌", "😊", "🎉", "✨", "💛", "🕊️", "👍", "😂", "🔥", "😍", "🤗", "🥳", "💪", "🤝", "😮", "😢", "💯"];
 
 // People we already know about before the room connects (from the join response and our own token), so names and photos are there from the first frame.
 const knownPeople = new Map<string, { name: string; picture: string }>();
@@ -2488,7 +2514,26 @@ function isPictureInPictureSupported(): boolean {
   return Boolean(document.pictureInPictureEnabled) || typeof probe.webkitSetPresentationMode === "function";
 }
 
-function useRoomPictureInPicture(room: Room, title: string) {
+type DocumentPipApi = { requestWindow: (options?: { width?: number; height?: number }) => Promise<Window> };
+const PIP_ICONS = {
+  mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>',
+  micOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/><line x1="2" x2="22" y1="2" y2="22"/></svg>',
+  cam: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg>',
+  camOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"/><rect x="2" y="6" width="14" height="12" rx="2"/><line x1="2" x2="22" y1="2" y2="22"/></svg>',
+  hangup: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="transform:rotate(135deg)"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>',
+};
+const PIP_WINDOW_CSS = `html,body{margin:0;height:100%;background:#140c10;overflow:hidden;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+.stage{position:relative;width:100%;height:100%;background:#140c10}.stage video{display:block;width:100%;height:100%;object-fit:cover;background:#140c10}
+.bar{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;gap:14px;padding:26px 12px 12px;background:linear-gradient(to top,rgba(10,5,8,.72),rgba(10,5,8,0));opacity:0;transform:translateY(6px);transition:opacity .2s ease,transform .2s ease}
+.stage:hover .bar,.stage:focus-within .bar{opacity:1;transform:none}
+.bar button{display:grid;place-items:center;width:40px;height:40px;padding:0;border:0;border-radius:50%;color:#fff;background:rgba(58,58,60,.92);cursor:pointer;transition:background-color .15s ease,transform .12s ease}
+.bar button:hover{background:rgba(88,88,92,.96)}.bar button:active{transform:scale(.93)}
+.bar button.off{color:#2a2a2c;background:#fff}.bar button.off:hover{background:#ececef}
+.bar button.leave{width:44px;height:44px;color:#fff;background:#ee1c47}.bar button.leave:hover{background:#ff2d58}
+.bar svg{display:block;width:20px;height:20px}.bar button.leave svg{width:21px;height:21px}`;
+function useRoomPictureInPicture(room: Room, title: string, onLeave?: () => void) {
+  const leaveRef = useRef(onLeave);
+  leaveRef.current = onLeave;
   const [supported] = useState(isPictureInPictureSupported);
   const [active, setActive] = useState(false);
   const controls = useRef<{ enter: (automatic: boolean) => Promise<boolean>; exit: () => Promise<void> } | null>(null);
@@ -2512,8 +2557,10 @@ function useRoomPictureInPicture(room: Room, title: string) {
     let current: PipSource | null = null;
     let enteredAutomatically = false;
     let disposed = false;
+    let docWin: Window | null = null; // Chrome/Edge desktop: our own floating window with a styled leave button
+    const docPipApi = (window as unknown as { documentPictureInPicture?: DocumentPipApi }).documentPictureInPicture;
 
-    const isPip = () => document.pictureInPictureElement === video || (video as PipVideoElement).webkitPresentationMode === "picture-in-picture";
+    const isPip = () => Boolean(docWin) || document.pictureInPictureElement === video || (video as PipVideoElement).webkitPresentationMode === "picture-in-picture";
 
     const usableTrack = (participant: Participant, source: Track.Source): Track | null => {
       const publication = participant.getTrackPublication(source);
@@ -2643,9 +2690,53 @@ function useRoomPictureInPicture(room: Room, title: string) {
       video.addEventListener("loadedmetadata", done);
     });
 
+    /** Opens the call in a floating window we draw ourselves (microphone, red leave button, camera). Falls back to the native window if the browser refuses. */
+    const enterDocPip = async (): Promise<boolean> => {
+      if (!docPipApi) return false;
+      try {
+        const pw = await docPipApi.requestWindow({ width: 360, height: 220 });
+        const doc = pw.document;
+        doc.title = title;
+        const style = doc.createElement("style"); style.textContent = PIP_WINDOW_CSS; doc.head.appendChild(style);
+        const stage = doc.createElement("div"); stage.className = "stage";
+        const bar = doc.createElement("div"); bar.className = "bar";
+        const makeButton = (label: string, className: string, onClick: () => void) => {
+          const button = doc.createElement("button"); button.type = "button"; button.className = className; button.setAttribute("aria-label", label); button.title = label;
+          button.addEventListener("click", onClick); bar.appendChild(button); return button;
+        };
+        const camButton = makeButton("Camera", "", () => { void room.localParticipant.setCameraEnabled(!room.localParticipant.isCameraEnabled).catch(() => undefined); });
+        const leaveButton = makeButton("Leave call", "leave", () => { leaveRef.current?.(); try { pw.close(); } catch { /* Already closed. */ } });
+        const micButton = makeButton("Microphone", "", () => { void room.localParticipant.setMicrophoneEnabled(!room.localParticipant.isMicrophoneEnabled).catch(() => undefined); });
+        leaveButton.innerHTML = PIP_ICONS.hangup;
+        const sync = () => {
+          const micOn = room.localParticipant.isMicrophoneEnabled; const camOn = room.localParticipant.isCameraEnabled;
+          micButton.className = micOn ? "" : "off"; micButton.innerHTML = micOn ? PIP_ICONS.mic : PIP_ICONS.micOff;
+          camButton.className = camOn ? "" : "off"; camButton.innerHTML = camOn ? PIP_ICONS.cam : PIP_ICONS.camOff;
+        };
+        sync();
+        const syncTimer = window.setInterval(sync, 400);
+        video.className = ""; video.removeAttribute("style");
+        stage.appendChild(video); stage.appendChild(bar); doc.body.appendChild(stage);
+        docWin = pw;
+        pw.addEventListener("pagehide", () => {
+          window.clearInterval(syncTimer);
+          docWin = null; enteredAutomatically = false;
+          video.className = "room-pip-source"; video.removeAttribute("style");
+          if (!disposed) document.body.appendChild(video);
+          setActive(false);
+        });
+        setActive(true);
+        void video.play().catch(() => undefined);
+        return true;
+      } catch {
+        docWin = null;
+        return false;
+      }
+    };
     const enter = async (automatic: boolean) => {
       if (disposed || room.state !== ConnectionState.Connected) return false;
       if (isPip()) return true;
+      if (!automatic && docPipApi && (await enterDocPip())) return true;
       try {
         apply();
         video.classList.add("room-pip-source-live");
@@ -2663,6 +2754,7 @@ function useRoomPictureInPicture(room: Room, title: string) {
       }
     };
     const exit = async () => {
+      if (docWin) { try { docWin.close(); } catch { /* Already closed. */ } return; }
       try {
         if (document.pictureInPictureElement === video) await document.exitPictureInPicture();
         else if (video.webkitPresentationMode === "picture-in-picture") video.webkitSetPresentationMode?.("inline");
@@ -3348,6 +3440,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
   const mediaAttemptRef = useRef(0);
   const [messageText, setMessageText] = useState("");
   const [reactionsOpen, setReactionsOpen] = useState(false);
+  const [emojiOrder, setEmojiOrder] = useState<string[]>(() => orderedReactions(readEmojiUsage()));
   const [moreOpen, setMoreOpen] = useState(false);
   useBackClose(moreOpen, () => setMoreOpen(false));
   useBackClose(reactionsOpen, () => setReactionsOpen(false));
@@ -3410,7 +3503,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
   useBackgroundCall(room, meeting.title, onLeave);
   useCallWakeLock(room);
   useCallKeepAlive(room);
-  const pip = useRoomPictureInPicture(room, meeting.title);
+  const pip = useRoomPictureInPicture(room, meeting.title, onLeave);
   // Back button inside the call: stay in the room and float the call (picture-in-picture) instead of dropping out of it.
   useBackClose(isActive, () => {
     if (document.visibilityState === "hidden" || pip.active) return;
@@ -4485,6 +4578,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
     await broadcast({ kind: "hand", raised: next });
   }
   async function react(emoji: string) {
+    setEmojiOrder(orderedReactions(recordEmojiUsage(emoji)));
     const id = `${localIdentity}-${Date.now()}`;
     pushReaction(id, emoji, localParticipant.name || "You");
     await broadcast({ kind: "reaction", emoji, id });
@@ -4694,11 +4788,11 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
           </div>
         </div>
       </div>
-      {reactionsOpen && <div className="rd-emoji-layer"><div className="rd-emoji-pop" data-popover="reactions" role="group" aria-label="Choose a reaction"><header className="rd-emoji-head"><b>Reactions</b><button type="button" className="rd-emoji-close" onClick={() => setReactionsOpen(false)} aria-label="Close reactions"><X size={16}/></button></header><div className="rd-emoji-grid">{REACTION_SET.map((emoji) => <button type="button" key={emoji} onClick={() => { void react(emoji); }} aria-label={`Send ${emoji}`}><PickerEmoji emoji={emoji}/></button>)}</div></div></div>}
+      {reactionsOpen && <div className="rd-emoji-layer"><div className="rd-emoji-pop" data-popover="reactions" role="group" aria-label="Choose a reaction"><header className="rd-emoji-head"><b>Reactions</b><button type="button" className="rd-emoji-close" onClick={() => setReactionsOpen(false)} aria-label="Close reactions"><X size={16}/></button></header><EmojiRow className="rd-emoji-grid rd-emoji-row">{emojiOrder.map((emoji) => <button type="button" key={emoji} onClick={() => { void react(emoji); }} aria-label={`Send ${emoji}`}><PickerEmoji emoji={emoji}/></button>)}</EmojiRow></div></div>}
       {moreOpen && <div className="rd-more-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setMoreOpen(false); }}>
         <section className="rd-more-sheet" role="dialog" aria-modal="true" aria-label="More call actions">
           <header className="rd-more-head">{moreView === "reactions" ? <button type="button" className="rd-more-icon" onClick={() => setMoreView("actions")} aria-label="Back to actions"><ArrowLeft size={18}/></button> : <span className="rd-more-grip" aria-hidden="true"/>}<b>{moreView === "reactions" ? "Send a reaction" : "More"}</b><button type="button" className="rd-more-icon" onClick={() => setMoreOpen(false)} aria-label="Close"><X size={18}/></button></header>
-          {moreView === "reactions" ? <div className="rd-more-emojis" role="group" aria-label="Choose a reaction">{REACTION_SET.map((emoji) => <button type="button" key={emoji} onClick={() => { void react(emoji); setMoreOpen(false); }} aria-label={`Send ${emoji}`}><PickerEmoji emoji={emoji}/></button>)}</div> : <div className="rd-more-grid">
+          {moreView === "reactions" ? <EmojiRow className="rd-more-emojis rd-emoji-row">{emojiOrder.map((emoji) => <button type="button" key={emoji} onClick={() => { void react(emoji); setMoreOpen(false); }} aria-label={`Send ${emoji}`}><PickerEmoji emoji={emoji}/></button>)}</EmojiRow> : <div className="rd-more-grid">
             <RdButton label={handRaised ? "Lower your hand" : "Raise your hand"} on={handRaised} onClick={() => { void toggleHand(); setMoreOpen(false); }} icon={<Hand size={24} strokeWidth={2.2}/>}/>
             <RdButton label={isScreenShareEnabled ? "Stop sharing screen" : "Share screen"} on={isScreenShareEnabled} onClick={() => { setMoreOpen(false); void toggleScreenShare(); }} icon={<RdShareIcon/>}/>
             <RdButton label="Open collaborative meeting notes" onClick={() => { setMoreOpen(false); setNotesOpen(true); setMessagesOpen(false); setPeopleOpen(false); setDirectContact(null); }} icon={<FileText size={24} strokeWidth={2.2}/>}/>
