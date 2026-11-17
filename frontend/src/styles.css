@@ -4177,3 +4177,6 @@ input:-webkit-autofill, textarea:-webkit-autofill, select:-webkit-autofill { -we
   background: #fbeef0 !important; border-color: #8b0a1f !important; color: #8b0a1f !important; outline: none;
 }
 :root[data-theme="light"] .confirm-end-backdrop .confirm-end-panel .confirm-end-actions .button.button-soft * { color: inherit !important; }
+
+/* Reactions start at the bottom and only travel up: the stack never slides into place. */
+.reaction-float-stack { transition: none !important; }

@@ -1989,6 +1989,24 @@ function makeReaction(id: string, emoji: string, name: string): FloatingReaction
 const ANIMATED_EMOJI_CODE: Record<string, string> = { "🙏": "1f64f", "❤️": "2764_fe0f", "👏": "1f44f", "🙌": "1f64c", "😊": "1f60a", "🎉": "1f389", "✨": "2728", "💛": "1f49b", "🕊️": "1f54a_fe0f", "👍": "1f44d", "😂": "1f602", "🔥": "1f525", "😍": "1f60d", "🤗": "1f917", "🥳": "1f973", "💪": "1f4aa", "🤝": "1f91d", "😮": "1f62e", "😢": "1f622", "💯": "1f4af" };
 const animatedEmojiUrl = (emoji: string) => `https://fonts.gstatic.com/s/e/notoemoji/latest/${ANIMATED_EMOJI_CODE[emoji] || "1f64f"}/512.webp`;
 const failedAnimatedEmoji = new Set<string>();
+const loadedAnimatedEmoji = new Set<string>();
+const emojiLoading = new Map<string, Promise<boolean>>();
+/** Resolves true once the animated image is downloaded AND decoded, false if it failed or took too long (the native glyph, which is always instant, is used then). */
+function waitForEmoji(emoji: string, timeoutMs = 2500): Promise<boolean> {
+  if (loadedAnimatedEmoji.has(emoji)) return Promise.resolve(true);
+  if (failedAnimatedEmoji.has(emoji) || !ANIMATED_EMOJI_CODE[emoji]) return Promise.resolve(false);
+  let load = emojiLoading.get(emoji);
+  if (!load) {
+    load = new Promise<boolean>((resolve) => {
+      const img = new Image(); img.decoding = "async";
+      img.onload = () => { void (typeof img.decode === "function" ? img.decode().catch(() => undefined) : Promise.resolve()).then(() => { loadedAnimatedEmoji.add(emoji); resolve(true); }); };
+      img.onerror = () => { failedAnimatedEmoji.add(emoji); resolve(false); };
+      img.src = animatedEmojiUrl(emoji);
+    });
+    emojiLoading.set(emoji, load);
+  }
+  return Promise.race([load, new Promise<boolean>((resolve) => window.setTimeout(() => resolve(false), timeoutMs))]);
+}
 /** Performance guard: animated emoji run on every device (phones included). If a device struggles, fewer play at the same time instead of switching to static emoji. */
 const isTouchDevice = typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches;
 const MAX_FLOATING_REACTIONS = 14;
@@ -2005,7 +2023,7 @@ function preloadAnimatedEmojis() {
     const emoji = queue.shift();
     if (!emoji) return;
     const img = new Image(); img.decoding = "async";
-    img.onload = () => idle(next);
+    img.onload = () => { loadedAnimatedEmoji.add(emoji); idle(next); };
     img.onerror = () => { failedAnimatedEmoji.add(emoji); idle(next); };
     img.src = animatedEmojiUrl(emoji);
   };
@@ -2076,7 +2094,7 @@ const ReactionLayer = memo(function ReactionLayer() {
   }, [items.length]);
   useEffect(() => {
     preloadAnimatedEmojis();
-    const listener = (incoming: FloatingReaction) => {
+    const insert = (incoming: FloatingReaction, imageReady: boolean) => {
       const current = itemsRef.current;
       const playing = new Set(current.filter((entry) => entry.animated).map((entry) => entry.emoji));
       // Spread the launch points: always use the lane that was used longest ago, so many emoji sent at once never touch each other.
@@ -2088,9 +2106,14 @@ const ReactionLayer = memo(function ReactionLayer() {
       for (let index = 0; index < lanes; index += 1) { const value = times[index] + Math.random() * 30; if (value < oldest) { oldest = value; lane = index; } }
       times[lane] = Date.now();
       const x = 14 + lane * (72 / (lanes - 1)) + (Math.random() * 3 - 1.5);
-      const item = { ...incoming, x, animated: !lowPerformanceMode && (playing.has(incoming.emoji) || playing.size < animatedCap) };
+      const item = { ...incoming, x, animated: imageReady && !lowPerformanceMode && (playing.has(incoming.emoji) || playing.size < animatedCap) };
       setItems([...current.slice(-(MAX_FLOATING_REACTIONS - 1)), item]);
       window.setTimeout(() => setItems((list) => list.filter((entry) => entry.id !== item.id)), REACTION_LIFETIME + 500);
+    };
+    // An emoji only floats up once its picture is ready, so a name is never seen alone; if the picture is slow, the native emoji is shown right away instead.
+    const listener = (incoming: FloatingReaction) => {
+      if (lowPerformanceMode || loadedAnimatedEmoji.has(incoming.emoji) || !ANIMATED_EMOJI_CODE[incoming.emoji]) { insert(incoming, loadedAnimatedEmoji.has(incoming.emoji)); return; }
+      void waitForEmoji(incoming.emoji).then((ok) => insert(incoming, ok));
     };
     reactionListeners.add(listener);
     return () => { reactionListeners.delete(listener); };
