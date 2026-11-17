@@ -14,12 +14,18 @@ const FIRST_DELAY_MS = 150_000; // first tip after two and a half minutes
 const GAP_MS = 150_000; // then one more every two and a half minutes (never while busy)
 const VISIBLE_MS = 10_000;
 const MAX_SHOWS = 3;
-type TipMemory = { shown: Record<string, number>; dismissed: string[] };
+// The install tip is the one that matters most for people who have not installed the app yet, so it keeps coming back more often
+// (and "Don't show again" only rests it for a few days instead of removing it for good).
+const INSTALL_TIP_ID = "install";
+const INSTALL_MAX_SHOWS = 12;
+const INSTALL_REST_MS = 3 * 24 * 60 * 60 * 1000;
+const maxShowsFor = (id: string) => (id === INSTALL_TIP_ID ? INSTALL_MAX_SHOWS : MAX_SHOWS);
+type TipMemory = { shown: Record<string, number>; dismissed: string[]; restUntil?: Record<string, number> };
 
 function readMemory(): TipMemory {
   try {
     const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null") as Partial<TipMemory> | null;
-    return { shown: parsed?.shown && typeof parsed.shown === "object" ? parsed.shown : {}, dismissed: Array.isArray(parsed?.dismissed) ? parsed.dismissed : [] };
+    return { shown: parsed?.shown && typeof parsed.shown === "object" ? parsed.shown : {}, dismissed: Array.isArray(parsed?.dismissed) ? parsed.dismissed : [], restUntil: parsed?.restUntil && typeof parsed.restUntil === "object" ? parsed.restUntil : {} };
   } catch { return { shown: {}, dismissed: [] }; }
 }
 function saveMemory(memory: TipMemory) { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(memory)); } catch { /* Tips still rotate this session. */ } }
@@ -46,10 +52,11 @@ export function useRoomTips(getTips: () => RoomTip[], busy: boolean) {
         return;
       }
       if (busyRef.current || now < nextAt.current || document.visibilityState !== "visible") return;
-      const eligible = getTipsRef.current().filter((item) => !memory.current.dismissed.includes(item.id) && (memory.current.shown[item.id] ?? 0) < MAX_SHOWS);
+      const eligible = getTipsRef.current().filter((item) => !memory.current.dismissed.includes(item.id) && (memory.current.shown[item.id] ?? 0) < maxShowsFor(item.id) && now >= (memory.current.restUntil?.[item.id] ?? 0));
       if (eligible.length === 0) { nextAt.current = now + GAP_MS * 2; return; }
       // Least-shown first, so every tip gets its turn before any repeats; never the same one twice in a row.
-      const ordered = [...eligible].sort((a, b) => (memory.current.shown[a.id] ?? 0) - (memory.current.shown[b.id] ?? 0));
+      // The install tip goes first whenever it is eligible (people who have not installed the app yet see it more often).
+      const ordered = [...eligible].sort((a, b) => (a.id === INSTALL_TIP_ID ? 0 : 1) - (b.id === INSTALL_TIP_ID ? 0 : 1) || (memory.current.shown[a.id] ?? 0) - (memory.current.shown[b.id] ?? 0));
       const chosen = ordered.find((item) => item.id !== lastShown.current) ?? ordered[0];
       lastShown.current = chosen.id;
       memory.current = { ...memory.current, shown: { ...memory.current.shown, [chosen.id]: (memory.current.shown[chosen.id] ?? 0) + 1 } };
@@ -63,7 +70,8 @@ export function useRoomTips(getTips: () => RoomTip[], busy: boolean) {
   const hide = useCallback(() => { setTip(null); nextAt.current = Date.now() + GAP_MS; }, []);
   const dismissForever = useCallback(() => {
     const current = tipRef.current;
-    if (current) { memory.current = { ...memory.current, dismissed: [...memory.current.dismissed, current.id] }; saveMemory(memory.current); }
+    if (current && current.id === INSTALL_TIP_ID) { memory.current = { ...memory.current, restUntil: { ...memory.current.restUntil, [current.id]: Date.now() + INSTALL_REST_MS } }; saveMemory(memory.current); }
+    else if (current) { memory.current = { ...memory.current, dismissed: [...memory.current.dismissed, current.id] }; saveMemory(memory.current); }
     hide();
   }, [hide]);
   return { tip, hide, dismissForever };

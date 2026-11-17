@@ -11,7 +11,7 @@ import {
   PictureInPicture2, Hand, Send, MonitorUp, MicOff, Maximize2, Minimize2, ChevronLeft, ChevronRight, Smile, ChevronDown, Download,
   MousePointer2, MoveUpRight, Eraser, Eye, EyeOff, PenLine, Undo2, Settings2,
   BookOpen, Smartphone, Headphones, LifeBuoy, Mail,
-  FileText, Bold, Italic, Underline, List, ListOrdered, Heading1, Heading2, IndentIncrease, IndentDecrease, Lightbulb,
+  Repeat, FileText, Bold, Italic, Underline, List, ListOrdered, Heading1, Heading2, IndentIncrease, IndentDecrease, Lightbulb,
 } from "lucide-react";
 import { api, ApiError, clearAuthToken, getRegisteredAuthToken, getGuestProfile, saveAuthToken, saveGuestAuthToken, type MeetingNotesPayload } from "./api";
 import { AdminCenterPage, AudioRecordingPlayer, RecordingsPage } from "./ManagementPages";
@@ -30,6 +30,7 @@ interface AppContextValue {
   completeAuth: (user: User, token: string) => void;
   openSchedule: (instant?: boolean) => void;
   signOut: () => void;
+  logoutNow: () => void;
   theme: "light" | "dark";
   toggleTheme: () => void;
 }
@@ -575,8 +576,8 @@ export default function App() {
   const livePublicMeetings = useMemo(() => publicMeetings.filter((meeting) => meeting.meetingType === "prayer").map((meeting) => expireMeetingLocally(meeting, clock)), [publicMeetings, clock]);
 
   const contextValue = useMemo<AppContextValue>(() => ({
-    user, meetings: liveMeetings, publicMeetings: livePublicMeetings, loadingMeetings, refreshMeetings, openAuth, completeAuth, openSchedule, signOut, theme, toggleTheme,
-  }), [user, liveMeetings, livePublicMeetings, loadingMeetings, refreshMeetings, openAuth, completeAuth, openSchedule, signOut, theme, toggleTheme]);
+    user, meetings: liveMeetings, publicMeetings: livePublicMeetings, loadingMeetings, refreshMeetings, openAuth, completeAuth, openSchedule, signOut, logoutNow: performLogout, theme, toggleTheme,
+  }), [user, liveMeetings, livePublicMeetings, loadingMeetings, refreshMeetings, openAuth, completeAuth, openSchedule, signOut, performLogout, theme, toggleTheme]);
 
   return (
     <AppContext.Provider value={contextValue}>
@@ -869,7 +870,11 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
   const [helpOpen, setHelpOpen] = useState(false);
   const { user, openAuth, openSchedule, signOut } = useAppContext();
   const location = useLocation();
-  const active = location.pathname === "/meetings" ? "meetings" : location.pathname === "/recordings" ? "recordings" : location.pathname === "/admin" ? "admin" : "home";
+  const routeActive = location.pathname === "/meetings" ? "meetings" : location.pathname === "/recordings" ? "recordings" : location.pathname === "/admin" ? "admin" : "home";
+  // The tapped link turns active on the spot (no gray in-between), then the route catches up.
+  const [pendingActive, setPendingActive] = useState<string | null>(null);
+  useEffect(() => { setPendingActive(null); }, [location.pathname]);
+  const active = pendingActive ?? routeActive;
   useEffect(() => {
     let start: { x: number; y: number } | null = null;
     const blocked = (target: EventTarget | null) => {
@@ -923,11 +928,11 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
           <span className="brand-words"><strong>MEET</strong><b>ENIHAKOLE</b><small>GATHER IN FAITH</small></span>
         </Link>
         <div className="sidebar-label">WORKSPACE</div>
-        <nav className="side-navigation" aria-label="Main navigation" onClick={(event) => { const link = (event.target as HTMLElement).closest(".side-link") as HTMLElement | null; if (link) link.blur(); }}>
-          <Link to="/" className={`side-link ${active === "home" ? "side-link-active" : ""}`}><Home size={18} /><span>Home</span></Link>
-          <Link to="/meetings" className={`side-link ${active === "meetings" ? "side-link-active" : ""}`}><HeartHandshake size={18} /><span>Prayers</span></Link>
-          {RECORDING_UI_ENABLED && <Link to="/recordings" className={`side-link ${active === "recordings" ? "side-link-active" : ""}`}><AudioLines size={18} /><span>Recorded prayers</span></Link>}
-          {user?.isAdmin && <Link to="/admin" className={`side-link ${active === "admin" ? "side-link-active" : ""}`}><ShieldCheck size={18} /><span>Admin center</span></Link>}
+        <nav className="side-navigation" aria-label="Main navigation" onClick={(event) => { const link = (event.target as HTMLElement).closest(".side-link") as HTMLElement | null; if (link) { link.blur(); const target = link.getAttribute("data-nav"); if (target) setPendingActive(target); } }}>
+          <Link data-nav="home" to="/" className={`side-link ${active === "home" ? "side-link-active" : ""}`}><Home size={18} /><span>Home</span></Link>
+          <Link data-nav="meetings" to="/meetings" className={`side-link ${active === "meetings" ? "side-link-active" : ""}`}><HeartHandshake size={18} /><span>Prayers</span></Link>
+          {RECORDING_UI_ENABLED && <Link data-nav="recordings" to="/recordings" className={`side-link ${active === "recordings" ? "side-link-active" : ""}`}><AudioLines size={18} /><span>Recorded prayers</span></Link>}
+          {user?.isAdmin && <Link data-nav="admin" to="/admin" className={`side-link ${active === "admin" ? "side-link-active" : ""}`}><ShieldCheck size={18} /><span>Admin center</span></Link>}
         </nav>
         <div className="sidebar-bottom">
           <SidebarThemeSwitch />
@@ -977,9 +982,10 @@ function Dashboard() {
     .filter((meeting) => meeting.meetingType === "prayer")
     .filter((meeting, index, array) => array.findIndex((other) => other.slug === meeting.slug) === index)
     .filter((meeting) => meeting.status === "scheduled" || meeting.status === "live")
-    .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime())
-    .slice(0, 3);
+    // Live prayers always come first, then the soonest scheduled ones.
+    .sort((a, b) => (a.status === "live" ? 0 : 1) - (b.status === "live" ? 0 : 1) || new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
   const liveCount = upcoming.filter((meeting) => meeting.status === "live").length;
+  const upcomingCount = upcoming.length - liveCount;
 
   return (
     <div className="dashboard-page page-enter">
@@ -1009,8 +1015,8 @@ function Dashboard() {
       <section className="section-block">
         <div className="section-heading"><div><p className="section-overline">YOUR SPACE</p><h2>At a glance</h2></div><button className="text-action" onClick={() => navigate("/meetings")}>View prayers <ArrowRight size={15}/></button></div>
         <div className="stats-grid">
-          <div className="stat-card"><span className="stat-icon stat-burgundy"><CalendarDays size={19}/></span><div><span className="stat-label">Upcoming Prayers</span><strong>{loadingMeetings ? "—" : upcoming.filter((m) => m.status === "scheduled").length.toString().padStart(2, "0")}</strong></div><button type="button" className="stat-continue" onClick={() => navigate("/meetings")} aria-label="Continue to Upcoming Prayers">Continue<ArrowRight size={14}/></button><span className="stat-sheen"/></div>
-          <div className="stat-card"><span className="stat-icon stat-gold"><Video size={19}/></span><div><span className="stat-label">Live right now</span><strong>{loadingMeetings ? "—" : String(liveCount).padStart(2, "0")}</strong>{liveCount > 0 && <small>Join the conversation</small>}</div><button type="button" className="stat-continue" onClick={() => navigate("/meetings")} aria-label="Continue to live prayers">Continue<ArrowRight size={14}/></button><span className="stat-sheen"/></div>
+          <div className="stat-card"><span className="stat-icon stat-burgundy"><CalendarDays size={19}/></span><div><span className="stat-label">Upcoming Prayers</span><strong>{loadingMeetings ? "—" : String(upcomingCount).padStart(2, "0")}</strong></div><button type="button" className="stat-continue" onClick={() => navigate("/meetings")} aria-label="Continue to Upcoming Prayers">Continue<ArrowRight size={14}/></button><span className="stat-sheen"/></div>
+          <div className="stat-card"><span className="stat-icon stat-gold"><Video size={19}/></span><div><span className="stat-label">Live right now</span><strong>{loadingMeetings ? "—" : String(liveCount).padStart(2, "0")}</strong>{liveCount > 0 && <small>Join the prayer</small>}</div><button type="button" className="stat-continue" onClick={() => navigate("/meetings")} aria-label="Continue to live prayers">Continue<ArrowRight size={14}/></button><span className="stat-sheen"/></div>
           <div className="stat-card"><span className="stat-icon stat-rose"><Users size={19}/></span><div><span className="stat-label">Your community</span><strong>ENIHAKOLE</strong></div><span className="stat-sheen"/></div>
         </div>
       </section>
@@ -1081,6 +1087,8 @@ function MeetingsPage() {
     return true;
   }).sort((a, b) => {
     const stamp = (m: Meeting) => new Date(m.createdAt || m.startsAt).getTime() || 0;
+    // In Upcoming, prayers that are live right now are listed first.
+    if (filter === "upcoming" && (a.status === "live") !== (b.status === "live")) return a.status === "live" ? -1 : 1;
     return (stamp(a) - stamp(b)) * (sortDir === "asc" ? 1 : -1);
   });
   // Switching between Upcoming / Past / All briefly shows the loading cards before the list appears.
@@ -1144,12 +1152,14 @@ function MediaToggle({ on, onChange, onIcon, offIcon, onLabel, offLabel, onHint,
 
 function MeetingPage() {
   const { slug = "" } = useParams();
-  const { user, meetings: knownMeetings, publicMeetings: knownPublic, openAuth, completeAuth, signOut } = useAppContext();
+  const { user, meetings: knownMeetings, publicMeetings: knownPublic, openAuth, completeAuth, logoutNow } = useAppContext();
   const cacheKey = `meeting:${user?.id ?? "guest"}:${slug}`;
   const [meeting, setMeeting] = useState<Meeting | null>(() => readCache<Meeting>(cacheKey)?.value ?? [...knownMeetings, ...knownPublic].find((item) => item.slug === slug) ?? null);
   const [cameraOn, setCameraOn] = useState(false);
   const [guestName, setGuestName] = useState(() => getGuestProfile(slug)?.displayName || "");
   const [guestModalOpen, setGuestModalOpen] = useState(false);
+  const [identityChoiceOpen, setIdentityChoiceOpen] = useState(false);
+  const [switchProfileOpen, setSwitchProfileOpen] = useState(false);
   const [micOn, setMicOn] = useState(true);
   const [loading, setLoading] = useState(() => !readCache(cacheKey) && ![...knownMeetings, ...knownPublic].some((item) => item.slug === slug));
   const [joining, setJoining] = useState(false);
@@ -1213,7 +1223,7 @@ function MeetingPage() {
   }, [waitingForStart, slug, cacheKey]);
 
   useEffect(() => { if (user?.picture) void preloadPhoto(user.picture, 512); }, [user?.picture]);
-  useEffect(() => { if (user) setError((current) => current === IDENTITY_NEEDED_MESSAGE ? "" : current); }, [user]);
+  useEffect(() => { if (user) { setIdentityChoiceOpen(false); setError((current) => current === IDENTITY_NEEDED_MESSAGE ? "" : current); } }, [user]);
   useEffect(() => {
     const tick = window.setInterval(() => setClockNow(Date.now() + serverClockOffsetRef.current), 1000);
     return () => window.clearInterval(tick);
@@ -1297,7 +1307,7 @@ function MeetingPage() {
       setError(`Not Yet Open. Please return at ${formatTime(meeting.startsAt, meeting.timezone)}.`);
       return;
     }
-    if (!user && !getGuestProfile(slug)) { setError(IDENTITY_NEEDED_MESSAGE); return; }
+    if (!user && !getGuestProfile(slug)) { setError(""); setIdentityChoiceOpen(true); return; }
     if (joining || mediaPrompt) return;
     await continueJoin(micOn, cameraOn);
   }
@@ -1354,21 +1364,25 @@ function MeetingPage() {
     if (!meeting) return;
     setError("");
     const result = await api.guestSession(slug, displayName);
+    // Switching from a Google account to a guest: the old account is only left once the guest session really exists.
+    if (user) logoutNow();
     saveGuestAuthToken(result.token, { guestId: result.guestId, displayName: result.displayName, meetingSlug: slug });
     setGuestName(result.displayName);
     setError((current) => current === IDENTITY_NEEDED_MESSAGE ? "" : current);
     setGuestModalOpen(false);
   }
 
-  async function googleCredential(credential: string) {
+  async function googleCredential(credential: string): Promise<boolean> {
     setError("");
     try {
       const result = await api.googleSignIn(credential);
       // Have the profile photo ready first so the logged-in state appears instantly, with no spinner and no page reload.
       await preloadPhotoBriefly(result.user.picture, 512, 1200);
       completeAuth(result.user, result.token);
+      return true;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not log in with Google.");
+      return false;
     }
   }
 
@@ -1396,8 +1410,8 @@ function MeetingPage() {
           <div className="join-cover join-cover-thumb"><img className="join-cover-img" src={meetingImage(meeting)} alt={meeting.title} decoding="async" fetchPriority="high" draggable={false}/><div className="thumb-corner"><span className={`meeting-status thumb-status ${meeting.status === "live" ? "meeting-status-live" : ""}`}><span/>{getMeetingStateLabel(meeting)}</span><button type="button" className="thumb-share-button" onClick={share} aria-label="Share invitation"><Share2 size={15}/><span>Share invitation</span></button></div></div>
           <form className="join-form" onSubmit={join}>
             <div className="join-form-heading"><h2>{ended ? `This ${kind} has ended` : notYetOpen ? "Not Yet Open" : meeting.status === "live" ? `Join the ${kind}` : meeting.isOwner ? `Your ${kind} is ready` : "You're in the right place"}</h2><p>{ended ? "This invitation is now closed. Available audio and notes are below." : notYetOpen ? `This ${kind} opens at ${formatTime(meeting.startsAt, meeting.timezone)}. Please check again when it becomes available.` : meeting.status === "live" ? "Enter your details and come on in." : "The room becomes available automatically at its scheduled start time."}</p></div>
-            {user && !ended && <div className="join-identity"><ProfilePhoto src={user.picture} name={user.displayName} className="join-identity-photo"/><span><b>{user.displayName}</b><small>{user.email}</small></span><button type="button" className="error-link" onClick={signOut}><LogOut size={12}/> Logout</button></div>}
-            {!user && !ended && <div className="join-google"><GoogleContinueButton oneTap onCredential={(credential) => void googleCredential(credential)}/><div className="guest-access-form"><div className="guest-access-divider"><span>OR</span></div>{guestModalOpen && createPortal(<GuestNameModal initialName={getGuestProfile(slug)?.displayName || guestName} onClose={() => setGuestModalOpen(false)} onSave={saveGuest}/>, document.body)}{getGuestProfile(slug) ? <div className="join-identity guest-identity"><ProfilePhoto name={getGuestProfile(slug)?.displayName || guestName} className="join-identity-photo"/><span><b>{getGuestProfile(slug)?.displayName}</b><small>Temporary guest · this meeting only</small></span><button type="button" className="guest-change-name" onClick={() => setGuestModalOpen(true)}>Change</button></div> : <button type="button" className="guest-continue-button" onClick={() => setGuestModalOpen(true)}><UserRound size={18}/><span>Continue as Guest</span></button>}</div></div>}
+            {user && !ended && <div className="join-identity"><ProfilePhoto src={user.picture} name={user.displayName} className="join-identity-photo"/><span><b>{user.displayName}</b><small>{user.email}</small></span><button type="button" className="error-link" onClick={() => { setError(""); setSwitchProfileOpen(true); }}><Repeat size={12}/> Switch profile</button>{switchProfileOpen && createPortal(<SwitchProfileModal user={user} error={error} onClose={() => { setSwitchProfileOpen(false); setError(""); }} onGoogleCredential={async (credential) => { if (await googleCredential(credential)) setSwitchProfileOpen(false); }} onGuest={() => { setSwitchProfileOpen(false); setGuestModalOpen(true); }}/>, document.body)}{guestModalOpen && createPortal(<GuestNameModal initialName={guestName} onClose={() => setGuestModalOpen(false)} onSave={saveGuest}/>, document.body)}</div>}
+            {!user && !ended && <div className="join-google"><GoogleContinueButton oneTap onCredential={(credential) => void googleCredential(credential)}/><div className="guest-access-form"><div className="guest-access-divider"><span>OR</span></div>{guestModalOpen && createPortal(<GuestNameModal initialName={getGuestProfile(slug)?.displayName || guestName} onClose={() => setGuestModalOpen(false)} onSave={saveGuest}/>, document.body)}{identityChoiceOpen && !user && createPortal(<JoinIdentityModal onClose={() => setIdentityChoiceOpen(false)} onGoogleCredential={async (credential) => { await googleCredential(credential); }} onGuest={() => { setIdentityChoiceOpen(false); setGuestModalOpen(true); }}/>, document.body)}{getGuestProfile(slug) ? <div className="join-identity guest-identity"><ProfilePhoto name={getGuestProfile(slug)?.displayName || guestName} className="join-identity-photo"/><span><b>{getGuestProfile(slug)?.displayName}</b><small>Temporary guest · this meeting only</small></span><button type="button" className="guest-change-name" onClick={() => setGuestModalOpen(true)}>Change</button></div> : <button type="button" className="guest-continue-button" onClick={() => setGuestModalOpen(true)}><UserRound size={18}/><span>Continue as Guest</span></button>}</div></div>}
             {!ended && <div className="join-preferences"><MediaToggle on={cameraOn} onChange={setCameraOn} onIcon={<Video size={16}/>} offIcon={<VideoOff size={16}/>} onLabel="Camera is on" offLabel="Camera is off" onHint="Join with video" offHint="Join without video"/><MediaToggle on={micOn} onChange={setMicOn} onIcon={<Mic size={16}/>} offIcon={<MicOff size={16}/>} onLabel="Microphone is on" offLabel="Microphone is off" onHint="Join with audio" offHint="Join muted"/></div>}
             {error && <div className="inline-error" role="alert">{error}{error.includes("Login") && <button type="button" className="error-link" onClick={openAuth}>Login</button>}</div>}
             {ended ? <div className="meeting-ended-actions"><Link to="/meetings" className="button button-soft button-full"><ArrowLeft size={16}/> {meeting.meetingType === "prayer" ? "Back to prayers" : "Back to meetings"}</Link>{(meeting.isOwner || meeting.isParticipant) && <button type="button" className="button button-primary button-full" onClick={() => setPastNotesOpen(true)}><FileText size={16}/> View meeting notes</button>}{pastRecording && <section className="meeting-ended-audio"><div><AudioLines size={20}/><span><b>Audio recording</b><small>{pastRecording.recording.meetingTitle}</small></span></div><AudioRecordingPlayer src={pastRecording.playbackUrl} title={pastRecording.recording.meetingTitle}/><small>Available until {formatDate(pastRecording.expiresAt)}</small></section>}{pastRecordingError && !pastRecordingLoading && !pastRecording && <p className="meeting-audio-unavailable">{pastRecordingError}</p>}</div> : <><button className={`button button-primary button-full join-submit ${notYetOpen ? "join-submit-locked" : ""}`} type="submit" disabled={joining || notYetOpen}>{joining ? <LoaderCircle size={17} className="spin"/> : notYetOpen ? <Clock3 size={17}/> : meeting.isOwner ? <Video size={17}/> : <DoorOpen size={17}/>} {joining ? "Joining…" : notYetOpen ? "Not Yet Open" : meeting.status === "scheduled" ? `Open ${kind}` : `Join ${kind}`}<ArrowRight size={16}/></button>{notYetOpen && <div className="meeting-not-yet-open" role="status"><Clock3 size={16}/><span><b>Opens {formatDate(meeting.startsAt, { weekday: "short" }, meeting.timezone)}</b><small>{formatTime(meeting.startsAt, meeting.timezone)} · {meeting.timezone || "Scheduled time"}</small></span></div>}</>}
@@ -2773,19 +2787,37 @@ function useRoomPictureInPicture(room: Room, title: string, onLeave?: () => void
     video.addEventListener("webkitpresentationmodechanged", onSafariMode);
 
     // Leaving the page: float the call (works without a tap where the browser allows automatic PiP).
+    const retryTimers: number[] = [];
+    const clearRetries = () => { while (retryTimers.length) window.clearTimeout(retryTimers.pop()); };
+    // Home / Recent: float the call right away; if the browser is not ready on the first try, retry a couple of times while the page is still hidden.
+    const floatNow = () => {
+      flagCapture();
+      void enter(true).then((floated) => {
+        if (floated || disposed) return;
+        clearRetries();
+        [250, 900].forEach((delay) => retryTimers.push(window.setTimeout(() => { if (!disposed && document.visibilityState === "hidden" && !isPip()) void enter(true); }, delay)));
+      });
+    };
     const onVisibility = () => {
-      if (document.visibilityState === "hidden") { flagCapture(); void enter(true); }
-      else if (enteredAutomatically && isPip()) void exit();
+      if (document.visibilityState === "hidden") floatNow();
+      else {
+        // Back in the app: the call returns to its normal room view (the floating window closes).
+        clearRetries();
+        if (enteredAutomatically) enteredAutomatically = false;
+        if (isPip() && !docWin) void exit();
+      }
     };
     document.addEventListener("visibilitychange", onVisibility);
     // Home button, app switcher or opening a notification can hide the page without a clean visibility event on some browsers.
-    const onPageHide = () => { if (document.visibilityState === "hidden" || document.hidden) { flagCapture(); void enter(true); } };
+    const onPageHide = () => { if (document.visibilityState === "hidden" || document.hidden) floatNow(); };
     window.addEventListener("pagehide", onPageHide);
     // Screen off, app switcher or the tab being frozen by the system: float the call too.
     document.addEventListener("freeze", onPageHide);
     const session = navigator.mediaSession;
     try { session?.setActionHandler("enterpictureinpicture" as MediaSessionAction, () => { void enter(true); }); }
     catch { /* This browser has no automatic-PiP media action. */ }
+    // A live call counts as "playing media", which is what lets Chrome float it automatically from Home / Recent.
+    try { if (session) { session.playbackState = "playing"; if (typeof MediaMetadata !== "undefined") session.metadata = new MediaMetadata({ title, artist: "MEET ENIHAKOLE" }); } } catch { /* Optional. */ }
 
     const events = [RoomEvent.ActiveSpeakersChanged, RoomEvent.TrackSubscribed, RoomEvent.TrackUnsubscribed, RoomEvent.TrackMuted, RoomEvent.TrackUnmuted, RoomEvent.ParticipantConnected, RoomEvent.ParticipantDisconnected, RoomEvent.LocalTrackPublished, RoomEvent.LocalTrackUnpublished, RoomEvent.Connected, RoomEvent.Reconnected] as const;
     room.on(RoomEvent.ActiveSpeakersChanged, trackSpeaker);
@@ -2802,6 +2834,7 @@ function useRoomPictureInPicture(room: Room, title: string, onLeave?: () => void
       window.removeEventListener("pagehide", onPageHide);
       document.removeEventListener("freeze", onPageHide);
       try { session?.setActionHandler("enterpictureinpicture" as MediaSessionAction, null); } catch { /* Optional. */ }
+      clearRetries();
       video.removeEventListener("enterpictureinpicture", onEnter);
       video.removeEventListener("leavepictureinpicture", onLeave);
       video.removeEventListener("webkitpresentationmodechanged", onSafariMode);
@@ -2821,7 +2854,8 @@ function useRoomPictureInPicture(room: Room, title: string, onLeave?: () => void
   }, [active]);
 
   const enterAuto = useCallback(async () => (controls.current ? controls.current.enter(true) : false), []);
-  return { supported, active, toggle, enterAuto };
+  const exit = useCallback(async () => { await controls.current?.exit(); }, []);
+  return { supported, active, toggle, enterAuto, exit };
 }
 
 /**
@@ -3506,7 +3540,9 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
   const pip = useRoomPictureInPicture(room, meeting.title, onLeave);
   // Back button inside the call: stay in the room and float the call (picture-in-picture) instead of dropping out of it.
   useBackClose(isActive, () => {
-    if (document.visibilityState === "hidden" || pip.active) return;
+    if (document.visibilityState === "hidden") return;
+    // Already floating and the person is back in the page: Back returns the call to its normal view.
+    if (pip.active) { void pip.exit(); return; }
     void (pip.supported ? pip.enterAuto() : Promise.resolve(false)).then((floated) => {
       if (!floated) window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "You're still in the call. Press Home to float it, or use Leave to exit." } }));
     });
@@ -4878,6 +4914,46 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
     {directContact && <div className="messages-modal-backdrop private-chat-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setDirectContact(null); }}><section className="messages-modal private-chat-modal" role="dialog" aria-modal="true" aria-label={`Private conversation with ${directContact.name}`}><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setDirectContact(null)} aria-label="Back to call"><ArrowLeft size={18}/></button><ProfilePhoto src={directContact.picture} name={directContact.name} size={64} className="private-chat-avatar"/><div className="meeting-panel-heading"><b>{directContact.name}</b><small>Private one-to-one conversation</small></div><button className="room-icon-button" onClick={() => setDirectContact(null)} aria-label="Close private messages"><X size={18}/></button></header><nav className="meeting-panel-tabs" aria-label="Meeting tools"><button type="button" className="meeting-panel-tab" onClick={() => { setDirectContact(null); setPeopleViewTab("people"); setPeopleOpen(true); }}>People</button><button type="button" className="meeting-panel-tab meeting-panel-tab-active" aria-current="page" onClick={() => { setDirectContact(null); setPeopleViewTab("private"); setPeopleOpen(true); }}>Private chats</button><button type="button" className="meeting-panel-tab" onClick={() => { setDirectContact(null); setMessagesOpen(true); }}>Messages</button><button type="button" className="meeting-panel-tab" onClick={() => { setDirectContact(null); setNotesOpen(true); }}>Notes</button></nav><div className="messages-modal-body private-chat-body">{privateLoading ? <div className="messages-empty"><LoaderCircle size={23} className="spin"/><span>Loading private conversation…</span></div> : privateMessages.length === 0 ? <div className="messages-empty"><MessageCircle size={25}/><b>No private messages yet</b><span>Only you and {directContact.name} can see this conversation.</span></div> : privateMessages.map((message) => <article className={`chat-message ${message.senderUserId === localUserId ? "chat-message-own" : ""}`} key={message.id}><span className="chat-message-author">{message.senderUserId === localUserId ? "You" : message.senderName}</span><p>{message.message}</p><time>{new Date(message.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></article>)}<div ref={privateChatEndRef}/></div><form className="messages-composer" onSubmit={sendPrivateMessage}><input value={privateDraft} onChange={(event) => setPrivateDraft(event.target.value)} placeholder={`Message ${directContact.name} privately…`} maxLength={2000} aria-label="Private message"/><button className="button button-primary" type="submit" disabled={!privateDraft.trim() || privateSending || privateLoading} aria-label="Send private message">{privateSending ? <LoaderCircle size={17} className="spin"/> : <Send size={17}/>}</button></form></section></div>}
     {role === "host" && <span className="room-host-sr" aria-hidden="true">{meeting.ownerName} is hosting</span>}
   </div>;
+}
+
+/** Shown when someone presses Join without being identified: a centred dialog on desktop and a bottom sheet on phones (shared Modal), so they can pick Google or Guest straight away. */
+function JoinIdentityModal({ onClose, onGoogleCredential, onGuest }: { onClose: () => void; onGoogleCredential: (credential: string) => Promise<void>; onGuest: () => void }) {
+  return <Modal onClose={onClose} wide={false}>
+    <div className="auth-modal-content join-identity-modal">
+      <span className="modal-brand-icon"><AudioLines size={23}/></span>
+      <p className="section-overline">ONE QUICK STEP</p>
+      <h2>How would you like to join?</h2>
+      <p className="modal-subtitle">Continue with Google, or join as a guest with just your name.</p>
+      <div className="form-stack">
+        <GoogleContinueButton onCredential={(credential) => void onGoogleCredential(credential)}/>
+        <div className="guest-access-divider"><span>OR</span></div>
+        <button type="button" className="guest-continue-button" onClick={onGuest}><UserRound size={18}/><span>Continue as Guest</span></button>
+      </div>
+      <p className="auth-legal"><ShieldCheck size={13}/> Guest access is limited to this meeting.</p>
+    </div>
+  </Modal>;
+}
+
+/** Switch profile for a logged-in person: pick another Google account or continue as a guest. Closing it changes nothing, so the current account stays logged in. */
+function SwitchProfileModal({ user, error, onClose, onGoogleCredential, onGuest }: { user: User; error: string; onClose: () => void; onGoogleCredential: (credential: string) => Promise<void>; onGuest: () => void }) {
+  const [busy, setBusy] = useState(false);
+  return <Modal onClose={onClose} wide={false}>
+    <div className="auth-modal-content join-identity-modal">
+      <span className="modal-brand-icon"><Repeat size={22}/></span>
+      <p className="section-overline">SWITCH PROFILE</p>
+      <h2>Who is joining?</h2>
+      <p className="modal-subtitle">Choose another Google account or join as a guest. Close this and you stay logged in as {user.displayName}.</p>
+      <div className="join-identity switch-profile-current"><ProfilePhoto src={user.picture} name={user.displayName} className="join-identity-photo"/><span><b>{user.displayName}</b><small>{user.email} · current</small></span></div>
+      <div className="form-stack">
+        <GoogleContinueButton onCredential={(credential) => { setBusy(true); void onGoogleCredential(credential).finally(() => setBusy(false)); }}/>
+        {busy && <div className="auth-busy"><LoaderCircle size={16} className="spin"/> Switching…</div>}
+        {error && <div className="inline-error" role="alert">{error}</div>}
+        <div className="guest-access-divider"><span>OR</span></div>
+        <button type="button" className="guest-continue-button" onClick={onGuest}><UserRound size={18}/><span>Continue as Guest</span></button>
+      </div>
+      <p className="auth-legal"><ShieldCheck size={13}/> Your current account is only left once the new profile is ready.</p>
+    </div>
+  </Modal>;
 }
 
 /** Asks a guest for first and last name (one field each). Works as a bottom sheet on phones through the shared Modal. */

@@ -4133,3 +4133,24 @@ input:-webkit-autofill, textarea:-webkit-autofill, select:-webkit-autofill { -we
   .participant-grid-count-5 .participant-avatar-stack { --av: max(34px, min(44cqh, 46cqw, 130px)); }
   .participant-grid-count-6 .participant-avatar-stack, .participant-grid-count-7 .participant-avatar-stack, .participant-grid-count-8 .participant-avatar-stack { --av: max(30px, min(38cqh, 40cqw, 110px)); }
 }
+
+/* ===== Sidebar links: the active page switches instantly, never fading through gray ===== */
+.side-link, .side-link *, .side-link svg { transition: none !important; }
+.side-link.side-link-active, .side-link.side-link-active:hover, .side-link.side-link-active:active, .side-link.side-link-active:focus, .side-link.side-link-active:focus-visible { color: #fff !important; }
+.side-link.side-link-active svg, .side-link.side-link-active span { color: #fff !important; }
+
+/* ===== "No, stay in the room": always dark-red border + text in light mode, in every context (normal, fullscreen, focus, press) ===== */
+:root[data-theme="light"] .confirm-prompt-backdrop .confirm-prompt-panel .confirm-end-actions .button.button-soft,
+:root[data-theme="light"] .conference-fullscreen-target .confirm-prompt-panel .confirm-end-actions .button.button-soft,
+:root[data-theme="light"] .conference-fullscreen-target .modal-panel.confirm-prompt-panel .button.button-soft {
+  background: #fff !important; border: 1px solid #8b0a1f !important; color: #8b0a1f !important; font-weight: 800; box-shadow: none !important; opacity: 1 !important;
+}
+:root[data-theme="light"] .confirm-prompt-backdrop .confirm-prompt-panel .confirm-end-actions .button.button-soft:hover:not(:disabled),
+:root[data-theme="light"] .confirm-prompt-backdrop .confirm-prompt-panel .confirm-end-actions .button.button-soft:focus,
+:root[data-theme="light"] .confirm-prompt-backdrop .confirm-prompt-panel .confirm-end-actions .button.button-soft:focus-visible,
+:root[data-theme="light"] .confirm-prompt-backdrop .confirm-prompt-panel .confirm-end-actions .button.button-soft:active,
+:root[data-theme="light"] .conference-fullscreen-target .confirm-prompt-panel .confirm-end-actions .button.button-soft:hover:not(:disabled),
+:root[data-theme="light"] .conference-fullscreen-target .confirm-prompt-panel .confirm-end-actions .button.button-soft:active {
+  background: #fbeef0 !important; border-color: #8b0a1f !important; color: #8b0a1f !important; outline: none;
+}
+:root[data-theme="light"] .confirm-prompt-backdrop .confirm-prompt-panel .confirm-end-actions .button.button-soft * { color: inherit !important; }
