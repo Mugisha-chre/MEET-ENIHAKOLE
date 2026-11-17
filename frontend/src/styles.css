@@ -4158,7 +4158,7 @@ input:-webkit-autofill, textarea:-webkit-autofill, select:-webkit-autofill { -we
 /* ===== Presenting: the participant strip scrolls sideways without showing a scrollbar ===== */
 .participant-grid-wrap.has-screen-share .participant-grid { scrollbar-width: none !important; -ms-overflow-style: none; }
 .participant-grid-wrap.has-screen-share .participant-grid::-webkit-scrollbar { display: none !important; width: 0; height: 0; }
-/* Reactions rise from the bottom edge of the participant strip when it is shown. */
+/* Reactions rise from the bottom edge of the participant cards. */
 .reaction-float-stack { bottom: var(--reaction-bottom, var(--dock-space, 0px)) !important; }
 
 /* ===== "Keep meeting open": dark-red border + text in light mode, normal and full screen alike ===== */

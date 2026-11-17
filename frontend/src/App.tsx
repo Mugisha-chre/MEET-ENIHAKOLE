@@ -2064,11 +2064,11 @@ const ReactionLayer = memo(function ReactionLayer() {
   const slotTimes = useRef<number[]>([]);
   const stackRef = useRef<HTMLDivElement>(null);
   itemsRef.current = items;
-  // While someone is presenting, emojis start at the bottom edge of the participant cards strip instead of floating up from the dock line.
+  // Emojis always start at the bottom edge of the participant cards (the strip while presenting, the card grid otherwise).
   useLayoutEffect(() => {
     const stack = stackRef.current;
     if (!stack) return;
-    const strip = document.querySelector<HTMLElement>(".participant-grid-wrap.has-screen-share .participant-grid");
+    const strip = document.querySelector<HTMLElement>(".participant-grid-wrap.has-screen-share .participant-grid") ?? document.querySelector<HTMLElement>(".participant-grid-wrap .participant-grid");
     const holder = stack.offsetParent as HTMLElement | null;
     if (!strip || !holder) { stack.style.removeProperty("--reaction-bottom"); return; }
     const gap = holder.getBoundingClientRect().bottom - strip.getBoundingClientRect().bottom;
