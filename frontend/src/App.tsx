@@ -8,7 +8,7 @@ import {
   CheckCircle2, CircleHelp, Clock3, Copy, DoorOpen, HeartHandshake, Home,
   Link2, LoaderCircle, LogIn, LogOut, Menu, Mic, Plus, Share2, ShieldCheck,
   SlidersHorizontal, ArrowUp, ArrowDown, UserRound, Users, Video, VideoOff, X, Sun, Moon, MessageCircle,
-  PictureInPicture2, Hand, Send, MonitorUp, MicOff, Maximize2, Minimize2, ChevronLeft, ChevronRight, Smile, ChevronDown, ChevronUp, Download,
+  PictureInPicture2, Hand, Send, MonitorUp, MicOff, Maximize2, Minimize2, ChevronLeft, ChevronRight, Smile, ChevronDown, Download,
   MousePointer2, MoveUpRight, Eraser, Eye, EyeOff, PenLine, Undo2, Settings2,
   BookOpen, Smartphone, Headphones, LifeBuoy, Mail,
   FileText, Bold, Italic, Underline, List, ListOrdered, Heading1, Heading2, IndentIncrease, IndentDecrease, Lightbulb,
@@ -1975,15 +1975,11 @@ function makeReaction(id: string, emoji: string, name: string): FloatingReaction
 const ANIMATED_EMOJI_CODE: Record<string, string> = { "🙏": "1f64f", "❤️": "2764_fe0f", "👏": "1f44f", "🙌": "1f64c", "😊": "1f60a", "🎉": "1f389", "✨": "2728", "💛": "1f49b", "🕊️": "1f54a_fe0f", "👍": "1f44d", "😂": "1f602", "🔥": "1f525" };
 const animatedEmojiUrl = (emoji: string) => `https://fonts.gstatic.com/s/e/notoemoji/latest/${ANIMATED_EMOJI_CODE[emoji] || "1f64f"}/512.webp`;
 const failedAnimatedEmoji = new Set<string>();
-/** Performance guard: weak devices, data-saver and reduced-motion use the native emoji; a frame-rate monitor can switch it on at runtime. */
-const MAX_ANIMATED_REACTIONS = 4;
+/** Performance guard: animated emoji run on every device (phones included). If a device struggles, fewer play at the same time instead of switching to static emoji. */
+const isTouchDevice = typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches;
 const MAX_FLOATING_REACTIONS = 8;
-let lowPerformanceMode = (() => {
-  try {
-    const nav = navigator as Navigator & { deviceMemory?: number; connection?: { saveData?: boolean } };
-    return Boolean(nav.connection?.saveData) || (nav.deviceMemory !== undefined && nav.deviceMemory <= 2) || (navigator.hardwareConcurrency || 8) <= 2 || window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  } catch { return false; }
-})();
+let animatedCap = isTouchDevice ? 3 : 4;
+let lowPerformanceMode = false;
 let emojiPreloadStarted = false;
 /** Warms the browser cache one emoji at a time while the browser is idle, so joining a room never competes with 12 large downloads. */
 function preloadAnimatedEmojis() {
@@ -2007,26 +2003,11 @@ function AnimatedEmoji({ emoji, className = "", animated = true }: { emoji: stri
   if (!animated || failed || lowPerformanceMode || !ANIMATED_EMOJI_CODE[emoji]) return <span className={`animated-emoji-fallback ${className}`} aria-hidden="true">{emoji}</span>;
   return <img className={`animated-emoji ${className}`} src={animatedEmojiUrl(emoji)} width={56} height={56} alt="" aria-hidden="true" draggable={false} decoding="async" loading="eager" onError={() => { failedAnimatedEmoji.add(emoji); setFailed(true); }} />;
 }
-/** Picker emoji: a static glyph at rest; the animated version plays only for the one emoji being hovered or focused. */
+/** Picker emoji: a static glyph at rest; the animated version plays for the one emoji being hovered, pressed or focused (mouse and touch alike). */
 function PickerEmoji({ emoji }: { emoji: string }) {
   const [hot, setHot] = useState(false);
-  const canAnimate = !lowPerformanceMode && typeof window !== "undefined" && window.matchMedia("(hover: hover)").matches;
-  return <span className="picker-emoji" onPointerEnter={() => setHot(true)} onPointerLeave={() => setHot(false)} onFocus={() => setHot(true)} onBlur={() => setHot(false)}><AnimatedEmoji emoji={emoji} animated={canAnimate && hot}/></span>;
+  return <span className="picker-emoji" onPointerEnter={() => setHot(true)} onPointerDown={() => setHot(true)} onPointerLeave={() => setHot(false)} onFocus={() => setHot(true)} onBlur={() => setHot(false)}><AnimatedEmoji emoji={emoji} animated={hot}/></span>;
 }
-/** Screen indicator: one short dash per screen of people (only with two or more screens); the current one is longer and brighter. */
-const ParticipantDots = memo(function ParticipantDots({ pages, current, onSelect }: { pages: number; current: number; onSelect: (page: number) => void }) {
-  const MAX_VISIBLE = 7;
-  const start = pages <= MAX_VISIBLE ? 0 : Math.max(0, Math.min(pages - MAX_VISIBLE, current - Math.floor(MAX_VISIBLE / 2)));
-  const end = Math.min(pages, start + MAX_VISIBLE);
-  const dots: number[] = []; for (let i = start; i < end; i += 1) dots.push(i);
-  const onKey = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (event.key === "ArrowRight") { event.preventDefault(); onSelect(current + 1); }
-    else if (event.key === "ArrowLeft") { event.preventDefault(); onSelect(current - 1); }
-  };
-  return <div className="participant-dots" role="tablist" aria-label={`Participant screens, screen ${current + 1} of ${pages}`} onKeyDown={onKey}>
-    {dots.map((index) => <button key={index} type="button" role="tab" aria-selected={index === current} aria-label={`Screen ${index + 1} of ${pages}`} tabIndex={index === current ? 0 : -1} className={`participant-dot ${index === current ? "is-active" : ""} ${(index === start && start > 0) || (index === end - 1 && end < pages) ? "is-edge" : ""}`} onClick={() => onSelect(index)}><span/></button>)}
-  </div>;
-});
 /** Reactions live in their own tiny component, so each emoji re-renders only itself and never the whole room. */
 const reactionListeners = new Set<(reaction: FloatingReaction) => void>();
 function pushReaction(id: string, emoji: string, name: string) {
@@ -2042,23 +2023,24 @@ const ReactionLayer = memo(function ReactionLayer() {
     const listener = (incoming: FloatingReaction) => {
       const current = itemsRef.current;
       const animatedNow = current.filter((item) => item.animated).length;
-      const item = { ...incoming, animated: !lowPerformanceMode && animatedNow < MAX_ANIMATED_REACTIONS };
+      const item = { ...incoming, animated: !lowPerformanceMode && animatedNow < animatedCap };
       setItems([...current.slice(-(MAX_FLOATING_REACTIONS - 1)), item]);
       window.setTimeout(() => setItems((list) => list.filter((entry) => entry.id !== item.id)), REACTION_LIFETIME + 400);
     };
     reactionListeners.add(listener);
     return () => { reactionListeners.delete(listener); };
   }, []);
-  // Frame monitor: if the device cannot keep up while reactions are floating, fall back to native emoji for the rest of the session.
+  // Frame monitor: if the device cannot keep up while reactions float, fewer play at once (never fewer than one).
   const active = items.length > 0;
   useEffect(() => {
-    if (!active || lowPerformanceMode) return;
-    let raf = 0; let last = 0; let slow = 0; let frames = 0;
+    if (!active) return;
+    let raf = 0; let last = 0; let slow = 0; let frames = 0; let warm = 0;
     const tick = (now: number) => {
-      if (last) { frames += 1; if (now - last > 50) slow += 1; }
+      warm += 1;
+      if (last && warm > 20) { frames += 1; if (now - last > 55) slow += 1; }
       last = now;
-      if (frames >= 40) {
-        if (slow / frames > 0.35) { lowPerformanceMode = true; setItems((list) => list.map((item) => ({ ...item, animated: false }))); return; }
+      if (frames >= 60) {
+        if (slow / frames > 0.5 && animatedCap > 1) { animatedCap -= 1; setItems((list) => { let kept = 0; return list.map((item) => (item.animated && ++kept > animatedCap ? { ...item, animated: false } : item)); }); }
         frames = 0; slow = 0;
       }
       raf = requestAnimationFrame(tick);
@@ -3367,7 +3349,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
   const [fullScreen, setFullScreen] = useState(false);
   const [pseudoFull, setPseudoFull] = useState(false);
   const [fullscreenPrompt, setFullscreenPrompt] = useState(false);
-  const [controlsVisible, setControlsVisible] = useState(true); // the call bar stays open (also in fullscreen) until the person collapses it with the toggle button
+  const controlsVisible = true; // the call bar always stays visible, also in fullscreen and when tapping the screen
   const [pageAnim, setPageAnim] = useState<{ dir: "next" | "prev"; n: number }>({ dir: "next", n: 0 });
   const swipeStart = useRef<{ x: number; y: number; t: number } | null>(null);
   const [dockHeight, setDockHeight] = useState(0);
@@ -4595,12 +4577,6 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
   const currentPage = Math.min(page, pages - 1);
   const visibleParticipants = visualParticipants.slice(currentPage * PARTICIPANTS_PER_SCREEN, currentPage * PARTICIPANTS_PER_SCREEN + PARTICIPANTS_PER_SCREEN);
 
-  const toggleDock = () => {
-    setControlsVisible((visible) => {
-      if (visible) { setDeviceMenu(null); setReactionsOpen(false); setMoreOpen(false); }
-      return !visible;
-    });
-  };
   const goToPage = (target: number) => {
     const next = Math.max(0, Math.min(pages - 1, target));
     if (next === currentPage) return;
@@ -4620,6 +4596,8 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
     if (Math.abs(dx) < 48 || Math.abs(dx) < Math.abs(dy) * 1.4 || Date.now() - start.t > 900) return;
     goToPage(currentPage + (dx < 0 ? 1 : -1));
   };
+  // Opening any tab (messages, people, notes, a private chat…) closes the emoji picker straight away.
+  useEffect(() => { if (messagesOpen || peopleOpen || notesOpen || directContact) setReactionsOpen(false); }, [messagesOpen, peopleOpen, notesOpen, directContact]);
   const openPeopleTab = () => { setPeopleViewTab("people"); setPeopleOpen(true); setMessagesOpen(false); setDirectContact(null); setNotesOpen(false); };
   const copyInviteLink = () => {
     const url = `${window.location.origin}/share/${encodeURIComponent(meeting.slug)}`;
@@ -4702,7 +4680,6 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
           </div>
         </div>
       </div>
-      <button type="button" className={`rd-dock-toggle ${controlsVisible ? "is-open" : "is-collapsed"}`} onClick={toggleDock} aria-label={controlsVisible ? "Hide call controls" : "Show call controls"} aria-expanded={controlsVisible} aria-controls="room-call-controls" title={controlsVisible ? "Hide controls" : "Show controls"}>{controlsVisible ? <ChevronDown size={20} strokeWidth={2.6}/> : <ChevronUp size={20} strokeWidth={2.6}/>}</button>
       {reactionsOpen && <div className="rd-emoji-layer"><div className="rd-emoji-pop" data-popover="reactions" role="group" aria-label="Choose a reaction"><header className="rd-emoji-head"><b>Reactions</b><button type="button" className="rd-emoji-close" onClick={() => setReactionsOpen(false)} aria-label="Close reactions"><X size={16}/></button></header><div className="rd-emoji-grid">{REACTION_SET.map((emoji) => <button type="button" key={emoji} onClick={() => { void react(emoji); }} aria-label={`Send ${emoji}`}><PickerEmoji emoji={emoji}/></button>)}</div></div></div>}
       {moreOpen && <div className="rd-more-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setMoreOpen(false); }}>
         <section className="rd-more-sheet" role="dialog" aria-modal="true" aria-label="More call actions">
@@ -4744,7 +4721,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
     {(fullscreenPrompt || moderatorRequest || privateNotice || presenceToasts.length > 0 || messageToast || activeTip || weakNet.visible) && <div className="room-bottom-notifications" aria-live="polite">
       {fullscreenPrompt && !fullScreen && <div className="fullscreen-fallback-prompt" role="status"><span>Fullscreen needs your permission. Tap once to enter.</span><button type="button" onClick={() => void toggleFullscreen()}>Enter fullscreen <Maximize2 size={15}/></button></div>}
       {moderatorRequest && <div className="moderator-request-banner" role="status"><span>{moderatorRequest.hostName}: turn on your {moderatorRequest.media === "microphone" ? "mic" : "camera"}?</span><button type="button" onClick={() => void acceptModeratorRequest()}>Allow</button><button type="button" className="request-dismiss" onClick={() => setModeratorRequest(null)} aria-label="Dismiss request"><X size={15}/></button></div>}
-      {privateNotice && <div className="room-private-notice" role="status"><span><MessageCircle size={16}/> Private message from <b>{privateNotice.name}</b></span><button type="button" onClick={() => openPrivateContact(privateNotice)}>Open chat</button><button type="button" className="notice-dismiss" onClick={() => setPrivateNotice(null)} aria-label="Dismiss notification"><X size={14}/></button></div>}
+      {privateNotice && <div className="room-private-notice" role="status"><span className="room-message-toast-icon"><MessageCircle size={16}/></span><span className="room-private-body"><b>{privateNotice.name}</b><span>Sent you a private message</span></span><button type="button" onClick={() => openPrivateContact(privateNotice)}>Open chat</button><button type="button" className="notice-dismiss" onClick={() => setPrivateNotice(null)} aria-label="Dismiss notification"><X size={14}/></button></div>}
       {presenceToasts.length > 0 && <div className="room-presence-stack" aria-live="polite">{presenceToasts.map((toast) => <div className={`room-presence-toast room-presence-${toast.kind}`} key={toast.id} role="status"><span className="room-presence-icon">{toast.kind === "joined" ? <LogIn size={15}/> : <LogOut size={15}/>}</span><span className="room-presence-text"><b>{toast.name}</b> {toast.kind === "joined" ? "joined the meeting" : "left the meeting"}</span></div>)}</div>}
       {messageToast && <button type="button" className="room-message-toast" key={messageToast.id} onClick={() => { setMessagesOpen(true); setPeopleOpen(false); }} aria-label={`Open message from ${messageToast.name}`}><span className="room-message-toast-icon"><MessageCircle size={16}/></span><span className="room-message-toast-body"><b>{messageToast.name}</b><span>{messageToast.text}</span></span></button>}
       {weakNet.visible && <RoomTipCard tip={weakNet.tip} onHide={weakNet.hide} onDismissForever={weakNet.dismissForever}/>}

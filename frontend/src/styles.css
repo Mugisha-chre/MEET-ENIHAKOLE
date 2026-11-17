@@ -4048,22 +4048,6 @@ input:-webkit-autofill, textarea:-webkit-autofill, select:-webkit-autofill { -we
 .picker-emoji .animated-emoji { width: 32px !important; height: 32px !important; }
 @media (prefers-reduced-motion: reduce) { .reaction-float .animated-emoji-fallback { animation: none; } }
 
-/* ===== Collapsible call bar: always shown (also in fullscreen) until the person collapses it with the handle; it slides down out of view and slides back up ===== */
-.room-control-dock.rd-dock { padding-top: 30px; }
-.conference-fullscreen-target .room-control-dock.rd-dock { transition: transform .42s cubic-bezier(.22,1,.36,1), margin-bottom .42s cubic-bezier(.22,1,.36,1), visibility 0s linear 0s; will-change: transform; }
-.conference-fullscreen-target .room-control-dock.rd-dock.dock-open { transform: translateY(0); opacity: 1; visibility: visible; pointer-events: auto; }
-.conference-fullscreen-target .room-control-dock.rd-dock.dock-hidden { transform: translateY(calc(100% + 28px)); opacity: 1; visibility: hidden; pointer-events: none; transition: transform .42s cubic-bezier(.4,0,.2,1), margin-bottom .42s cubic-bezier(.4,0,.2,1), visibility 0s linear .42s; }
-/* Outside fullscreen the bar is part of the layout: collapsing also gives its space back to the participant area, leaving only the handle strip. */
-.conference-fullscreen-target:not(.is-fullscreen):not(.is-pseudo-fullscreen) .room-control-dock.rd-dock.dock-hidden { margin-bottom: calc(44px + env(safe-area-inset-bottom, 0px) - var(--dock-h, 110px)); }
-.rd-dock-toggle { position: absolute; z-index: 14; left: 50%; bottom: calc(var(--dock-space, 110px) - 28px); transform: translateX(-50%); display: grid; place-items: center; width: 58px; height: 24px; padding: 0; border: 0; border-radius: 12px; color: #fff; background: #232324; box-shadow: 0 4px 12px rgba(0,0,0,.35); cursor: pointer; -webkit-tap-highlight-color: transparent; transition: bottom .42s cubic-bezier(.22,1,.36,1), background-color .2s ease, transform .15s ease; }
-.rd-dock-toggle::before { content: ""; position: absolute; inset: -10px -8px; }
-.rd-dock-toggle:active { transform: translateX(-50%) scale(.94); }
-.rd-dock-toggle:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
-@media (hover: hover) { .rd-dock-toggle:hover { background: #3a3a3c; } }
-.conference-fullscreen-target[data-theme="light"] .rd-dock-toggle { color: #8f2141; background: #fffdfa; border: 1px solid rgba(143,33,65,.16); box-shadow: 0 4px 14px rgba(67,36,49,.18); }
-@media (hover: hover) { .conference-fullscreen-target[data-theme="light"] .rd-dock-toggle:hover { background: #fbeef1; } }
-@media (prefers-reduced-motion: reduce) { .conference-fullscreen-target .room-control-dock.rd-dock, .rd-dock-toggle { transition-duration: .01s !important; } }
-
 /* ===== Screen indicator (dashes) between the participant cards and the call bar ===== */
 .participant-dots { position: relative; z-index: 3; flex: 0 0 auto; display: flex; align-items: center; justify-content: center; gap: 0; min-height: 22px; padding: 6px 0 0; }
 .participant-dot { display: grid; place-items: center; min-width: 22px; height: 22px; padding: 0 3px; border: 0; border-radius: 8px; background: transparent; cursor: pointer; -webkit-tap-highlight-color: transparent; }
@@ -4087,14 +4071,28 @@ input:-webkit-autofill, textarea:-webkit-autofill, select:-webkit-autofill { -we
 @media (prefers-reduced-motion: reduce) { .participant-grid > .participant-card { animation: none !important; } }
 .participant-grid-wrap { touch-action: pan-y; }
 
-/* ===== Smaller bottom margin for toasts, messages, notifications, tips and warnings (one small gap remains) ===== */
-.room-bottom-notifications { bottom: calc(var(--dock-space, 110px) + 10px); transition: bottom .42s cubic-bezier(.22,1,.36,1); }
-@media (max-width: 720px) { .room-bottom-notifications { bottom: calc(var(--dock-space, 110px) + 8px); } }
-.is-fullscreen .room-bottom-notifications, .is-pseudo-fullscreen .room-bottom-notifications { bottom: calc(var(--dock-space, 0px) + 8px); }
-.conference-fullscreen-target > .toast-message, .conference-fullscreen-target.is-fullscreen > .toast-message, .conference-fullscreen-target.is-pseudo-fullscreen > .toast-message { bottom: calc(var(--dock-space, 110px) + 10px); transition: bottom .42s cubic-bezier(.22,1,.36,1); }
-.conference-fullscreen-target:has(.room-bottom-notifications) > .toast-message { bottom: calc(var(--dock-space, 110px) + 78px); }
-.conference-fullscreen-target > .global-tip-lane { bottom: calc(var(--dock-space, 0px) + 10px); transition: bottom .42s cubic-bezier(.22,1,.36,1); }
-.global-tip-lane { bottom: calc(10px + env(safe-area-inset-bottom, 0px)); }
+/* ===== Notices (toasts, messages, tips, warnings): equal 12px gap on the sides and above the call bar (the bar keeps 10px of its own top padding) ===== */
+.room-bottom-notifications, .is-fullscreen .room-bottom-notifications, .is-pseudo-fullscreen .room-bottom-notifications { width: min(560px, calc(100% - 24px)); bottom: calc(var(--dock-space, 110px) + 2px); }
+@media (max-width: 720px) { .room-bottom-notifications, .is-fullscreen .room-bottom-notifications, .is-pseudo-fullscreen .room-bottom-notifications { width: calc(100% - 24px); bottom: calc(var(--dock-space, 110px) + 2px); } }
+.conference-fullscreen-target > .toast-message, .conference-fullscreen-target.is-fullscreen > .toast-message, .conference-fullscreen-target.is-pseudo-fullscreen > .toast-message { bottom: calc(var(--dock-space, 110px) + 2px); }
+.conference-fullscreen-target:has(.room-bottom-notifications) > .toast-message { bottom: calc(var(--dock-space, 110px) + 70px); }
+.conference-fullscreen-target > .global-tip-lane { bottom: calc(var(--dock-space, 0px) + 2px); }
+.global-tip-lane { bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
 .toast-message { bottom: 12px; }
 @media (max-width: 720px) { .toast-message { bottom: calc(12px + env(safe-area-inset-bottom, 0px)); } }
-.conference-fullscreen-target.is-fullscreen .room-presence-stack, .conference-fullscreen-target.is-fullscreen .room-message-toast { bottom: calc(8px + var(--dock-space, 0px)); }
+.conference-fullscreen-target.is-fullscreen .room-presence-stack, .conference-fullscreen-target.is-fullscreen .room-message-toast { bottom: calc(2px + var(--dock-space, 0px)); }
+
+/* ===== Private message notice: same layout as the normal message toast (icon, name, text, left aligned) ===== */
+.room-bottom-notifications .room-private-notice { align-items: center; justify-content: flex-start; text-align: left; gap: 10px; }
+.room-private-notice > .room-message-toast-icon { flex: 0 0 28px; width: 28px; height: 28px; padding: 0; display: grid; place-items: center; }
+.room-private-notice > .room-private-body { min-width: 0; flex: 1 1 auto; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; font-size: 12px; line-height: 1.4; text-align: left; }
+.room-private-notice > .room-private-body b { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; letter-spacing: .02em; }
+.room-private-notice > .room-private-body > span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.room-private-notice > .room-private-body > span { display: block; }
+@media (max-width: 720px) { .room-bottom-notifications .room-private-notice { flex-wrap: nowrap; padding: 10px 12px 10px 11px; } .room-private-notice > .room-private-body { font-size: 12px; } }
+
+/* ===== Microphone / camera / speaker lists: no horizontal scroll, long names end with an ellipsis ===== */
+.rs-body { overflow-x: hidden; }
+.rs-list { grid-template-columns: minmax(0, 1fr); }
+.rs-option { min-width: 0; max-width: 100%; box-sizing: border-box; }
+.rs-option-label { display: block; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
