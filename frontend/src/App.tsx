@@ -2062,7 +2062,18 @@ const ReactionLayer = memo(function ReactionLayer() {
   const [items, setItems] = useState<FloatingReaction[]>([]);
   const itemsRef = useRef<FloatingReaction[]>([]);
   const slotTimes = useRef<number[]>([]);
+  const stackRef = useRef<HTMLDivElement>(null);
   itemsRef.current = items;
+  // While someone is presenting, emojis start at the bottom edge of the participant cards strip instead of floating up from the dock line.
+  useLayoutEffect(() => {
+    const stack = stackRef.current;
+    if (!stack) return;
+    const strip = document.querySelector<HTMLElement>(".participant-grid-wrap.has-screen-share .participant-grid");
+    const holder = stack.offsetParent as HTMLElement | null;
+    if (!strip || !holder) { stack.style.removeProperty("--reaction-bottom"); return; }
+    const gap = holder.getBoundingClientRect().bottom - strip.getBoundingClientRect().bottom;
+    stack.style.setProperty("--reaction-bottom", `${Math.max(0, Math.round(gap))}px`);
+  }, [items.length]);
   useEffect(() => {
     preloadAnimatedEmojis();
     const listener = (incoming: FloatingReaction) => {
@@ -2103,7 +2114,7 @@ const ReactionLayer = memo(function ReactionLayer() {
     return () => cancelAnimationFrame(raf);
   }, [active]);
   if (!items.length) return null;
-  return <div className="reaction-float-stack" aria-live="polite" data-dense={items.length > 5 ? "true" : "false"}>{items.map((reaction) => <div className="reaction-float" key={reaction.id} style={{ "--x": `${reaction.x}%`, "--rise": `${reaction.rise}%`, "--rs": reaction.scale } as CSSProperties} onAnimationEnd={(event) => { if (event.target === event.currentTarget) setItems((list) => list.filter((entry) => entry.id !== reaction.id)); }}><span className="reaction-emoji"><AnimatedEmoji emoji={reaction.emoji} animated={reaction.animated}/></span><b>{reaction.name}</b></div>)}</div>;
+  return <div className="reaction-float-stack" ref={stackRef} aria-live="polite" data-dense={items.length > 5 ? "true" : "false"}>{items.map((reaction) => <div className="reaction-float" key={reaction.id} style={{ "--x": `${reaction.x}%`, "--rise": `${reaction.rise}%`, "--rs": reaction.scale } as CSSProperties} onAnimationEnd={(event) => { if (event.target === event.currentTarget) setItems((list) => list.filter((entry) => entry.id !== reaction.id)); }}><span className="reaction-emoji"><AnimatedEmoji emoji={reaction.emoji} animated={reaction.animated}/></span><b>{reaction.name}</b></div>)}</div>;
 });
 // Anything a person can press: a tap on these must keep doing its own job and never toggle fullscreen.
 const INTERACTIVE_SELECTOR = ".screen-annotate-layer.is-drawing, .screen-annotate-toolbar, button, a, input, textarea, select, label, summary, [role='button'], [role='dialog'], [data-popover], .room-device-menu, .reaction-picker, .messages-modal-backdrop, .room-alert, .room-message-toast, .room-presence-stack, .modal-backdrop";

@@ -4154,3 +4154,26 @@ input:-webkit-autofill, textarea:-webkit-autofill, select:-webkit-autofill { -we
   background: #fbeef0 !important; border-color: #8b0a1f !important; color: #8b0a1f !important; outline: none;
 }
 :root[data-theme="light"] .confirm-prompt-backdrop .confirm-prompt-panel .confirm-end-actions .button.button-soft * { color: inherit !important; }
+
+/* ===== Presenting: the participant strip scrolls sideways without showing a scrollbar ===== */
+.participant-grid-wrap.has-screen-share .participant-grid { scrollbar-width: none !important; -ms-overflow-style: none; }
+.participant-grid-wrap.has-screen-share .participant-grid::-webkit-scrollbar { display: none !important; width: 0; height: 0; }
+/* Reactions rise from the bottom edge of the participant strip when it is shown. */
+.reaction-float-stack { bottom: var(--reaction-bottom, var(--dock-space, 0px)) !important; }
+
+/* ===== "Keep meeting open": dark-red border + text in light mode, normal and full screen alike ===== */
+:root[data-theme="light"] .confirm-end-backdrop .confirm-end-panel .confirm-end-actions .button.button-soft,
+:root[data-theme="light"] .conference-fullscreen-target .confirm-end-backdrop .confirm-end-panel .confirm-end-actions .button.button-soft,
+:root[data-theme="light"] .conference-fullscreen-target[data-theme="light"] .confirm-end-panel .confirm-end-actions .button.button-soft,
+.conference-fullscreen-target[data-theme="light"] .confirm-end-panel .confirm-end-actions .button.button-soft {
+  background: #fff !important; border: 1px solid #8b0a1f !important; color: #8b0a1f !important; font-weight: 800; box-shadow: none !important; opacity: 1 !important;
+}
+:root[data-theme="light"] .confirm-end-backdrop .confirm-end-panel .confirm-end-actions .button.button-soft:hover:not(:disabled),
+:root[data-theme="light"] .confirm-end-backdrop .confirm-end-panel .confirm-end-actions .button.button-soft:focus,
+:root[data-theme="light"] .confirm-end-backdrop .confirm-end-panel .confirm-end-actions .button.button-soft:focus-visible,
+:root[data-theme="light"] .confirm-end-backdrop .confirm-end-panel .confirm-end-actions .button.button-soft:active,
+:root[data-theme="light"] .conference-fullscreen-target .confirm-end-panel .confirm-end-actions .button.button-soft:hover:not(:disabled),
+.conference-fullscreen-target[data-theme="light"] .confirm-end-panel .confirm-end-actions .button.button-soft:hover:not(:disabled) {
+  background: #fbeef0 !important; border-color: #8b0a1f !important; color: #8b0a1f !important; outline: none;
+}
+:root[data-theme="light"] .confirm-end-backdrop .confirm-end-panel .confirm-end-actions .button.button-soft * { color: inherit !important; }
