@@ -2008,6 +2008,20 @@ function PickerEmoji({ emoji }: { emoji: string }) {
   const [hot, setHot] = useState(false);
   return <span className="picker-emoji" onPointerEnter={() => setHot(true)} onPointerDown={() => setHot(true)} onPointerLeave={() => setHot(false)} onFocus={() => setHot(true)} onBlur={() => setHot(false)}><AnimatedEmoji emoji={emoji} animated={hot}/></span>;
 }
+/** Screen indicator: one short dash per screen of people (only with two or more screens); the current one is longer and brighter. */
+const ParticipantDots = memo(function ParticipantDots({ pages, current, onSelect }: { pages: number; current: number; onSelect: (page: number) => void }) {
+  const MAX_VISIBLE = 7;
+  const start = pages <= MAX_VISIBLE ? 0 : Math.max(0, Math.min(pages - MAX_VISIBLE, current - Math.floor(MAX_VISIBLE / 2)));
+  const end = Math.min(pages, start + MAX_VISIBLE);
+  const dots: number[] = []; for (let i = start; i < end; i += 1) dots.push(i);
+  const onKey = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "ArrowRight") { event.preventDefault(); onSelect(current + 1); }
+    else if (event.key === "ArrowLeft") { event.preventDefault(); onSelect(current - 1); }
+  };
+  return <div className="participant-dots" role="tablist" aria-label={`Participant screens, screen ${current + 1} of ${pages}`} onKeyDown={onKey}>
+    {dots.map((index) => <button key={index} type="button" role="tab" aria-selected={index === current} aria-label={`Screen ${index + 1} of ${pages}`} tabIndex={index === current ? 0 : -1} className={`participant-dot ${index === current ? "is-active" : ""} ${(index === start && start > 0) || (index === end - 1 && end < pages) ? "is-edge" : ""}`} onClick={() => onSelect(index)}><span/></button>)}
+  </div>;
+});
 /** Reactions live in their own tiny component, so each emoji re-renders only itself and never the whole room. */
 const reactionListeners = new Set<(reaction: FloatingReaction) => void>();
 function pushReaction(id: string, emoji: string, name: string) {
