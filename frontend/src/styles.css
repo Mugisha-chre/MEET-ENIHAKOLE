@@ -4180,3 +4180,56 @@ input:-webkit-autofill, textarea:-webkit-autofill, select:-webkit-autofill { -we
 
 /* Reactions start at the bottom and only travel up: the stack never slides into place. */
 .reaction-float-stack { transition: none !important; }
+
+/* ==========================================================================
+   Call bar v3: one swipeable row (sections of 4 round buttons), Leave fixed on the right,
+   little section lines underneath. Native scroll-snap keeps swiping on the compositor.
+   ========================================================================== */
+.rd-pill { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; column-gap: clamp(8px, 3vw, 16px); row-gap: 2px; align-items: center; width: min(100%, 420px); padding: 8px clamp(10px, 3vw, 16px) 6px; border-radius: 34px; }
+.rd-carousel { grid-column: 1; grid-row: 1; min-width: 0; display: flex; overflow-x: auto; overflow-y: hidden; scroll-snap-type: x mandatory; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; touch-action: pan-x; scrollbar-width: none; contain: layout paint; will-change: scroll-position; }
+.rd-carousel::-webkit-scrollbar { display: none; }
+.rd-page { flex: 0 0 100%; min-width: 0; scroll-snap-align: start; scroll-snap-stop: always; view-timeline: --rd-page inline; }
+.rd-page-inner { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); justify-items: center; align-items: center; padding: 6px 0; backface-visibility: hidden; }
+.rd-leave { grid-column: 2; grid-row: 1; display: grid; place-items: center; padding: 6px 0; }
+.rd-dots { grid-column: 1; grid-row: 2; display: flex; align-items: center; justify-content: center; min-height: 18px; }
+.rd-dot { display: grid; place-items: center; min-width: 20px; height: 18px; padding: 0 2px; border: 0; background: transparent; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.rd-dot > span { display: block; width: 12px; height: 4px; border-radius: 999px; background: rgba(255,255,255,.34); transition: width .3s cubic-bezier(.22,1,.36,1), background-color .2s ease; }
+.rd-dot.is-active > span { width: 26px; background: #fff; }
+.rd-dot:focus-visible { outline: 2px solid #e8ca91; outline-offset: -1px; border-radius: 8px; }
+@media (hover: hover) { .rd-dot:not(.is-active):hover > span { background: rgba(255,255,255,.62); } }
+.conference-fullscreen-target[data-theme="light"] .rd-dot > span { background: rgba(76,48,60,.26); }
+.conference-fullscreen-target[data-theme="light"] .rd-dot.is-active > span { background: #8f2141; }
+@supports (animation-timeline: view()) {
+  @keyframes rd-page-fx { 0% { opacity: .2; transform: scale(.78); } 50% { opacity: 1; transform: scale(1); } 100% { opacity: .2; transform: scale(.78); } }
+  .rd-page-inner { animation: rd-page-fx linear both; animation-timeline: --rd-page; }
+}
+@media (min-width: 721px) {
+  .rd-pill { width: auto; grid-template-columns: 296px auto; column-gap: 20px; padding: 8px 22px 6px; border-radius: 40px; }
+}
+@media (max-width: 380px) { .rd-pill { padding: 8px 9px 6px; column-gap: 6px; } }
+@media (prefers-reduced-motion: reduce) { .rd-page-inner { animation: none; } .rd-dot > span { transition: none; } }
+
+/* Participant tap targets: avatar and name open the person's actions. */
+.participant-card .participant-avatar-stack, .participant-card .participant-name-copy { pointer-events: auto; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.participant-card-local .participant-avatar-stack, .participant-local .participant-avatar-stack, .participant-local .participant-name-copy { cursor: default; }
+.person-sheet-hero { display: flex; align-items: center; gap: 12px; padding: 4px 2px 12px; }
+.person-sheet-hero > span { display: flex; flex-direction: column; min-width: 0; }
+.person-sheet-hero b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
+.person-sheet-hero small { color: var(--rs-muted); font-size: 12px; }
+.person-sheet-avatar { flex: 0 0 auto; width: 52px; height: 52px; }
+
+/* Messages: avatar of the sender next to each bubble, grouped like a WhatsApp group chat. */
+.chat-row { display: flex; align-items: flex-end; gap: 8px; align-self: flex-start; max-width: 94%; }
+.chat-row-own { align-self: flex-end; flex-direction: row-reverse; }
+.chat-row > .chat-message { align-self: auto; min-width: 0; max-width: calc(100% - 38px); }
+.chat-avatar, .chat-avatar-spacer { flex: 0 0 auto; width: 30px; height: 30px; }
+.chat-avatar { border: 1.5px solid rgba(255,255,255,.16); }
+
+/* Join / left pop-ups: the person's avatar with a green (joined) or dark red (left) ring and name. */
+.room-presence-avatar { flex: 0 0 auto; width: 30px; height: 30px; box-sizing: border-box; border: 2.5px solid #3ecf7a; box-shadow: 0 0 0 3px rgba(62,207,122,.18); }
+.room-presence-left .room-presence-avatar { border-color: #b3203a; box-shadow: 0 0 0 3px rgba(179,32,58,.22); }
+.room-presence-joined .room-presence-text b { color: #4ade80; }
+.room-presence-left .room-presence-text b { color: #d63a57; }
+.room-presence-toast { border-color: rgba(255,255,255,.14); }
+.conference-fullscreen-target[data-theme="light"] .room-presence-joined .room-presence-text b, :root[data-theme="light"] .room-presence-joined .room-presence-text b { color: #17803f; }
+.conference-fullscreen-target[data-theme="light"] .room-presence-left .room-presence-text b, :root[data-theme="light"] .room-presence-left .room-presence-text b { color: #a3122c; }
