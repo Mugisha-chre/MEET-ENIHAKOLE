@@ -146,6 +146,47 @@ export function GoogleContinueButton({ onCredential, oneTap = false, onError }: 
 const loadedPhotos = new Set<string>();
 const pendingPhotos = new Map<string, Promise<void>>();
 
+// Avatar cache: every profile photo that loaded once is kept as a local blob (memory + Cache Storage), so message avatars,
+// joined/left notices and people lists can reuse it instantly, and a lost connection never blanks a photo.
+const AVATAR_CACHE = "meet-enihakole-avatars-v1";
+const avatarBlobs = new Map<string, string>();
+const avatarSaving = new Map<string, Promise<string>>();
+const avatarMisses = new Set<string>();
+function cachedAvatar(url: string): string { return avatarBlobs.get(url) || ""; }
+async function restoreAvatar(url: string): Promise<string> {
+  if (!url) return "";
+  const hit = avatarBlobs.get(url); if (hit) return hit;
+  try {
+    if (typeof caches === "undefined") return "";
+    const cache = await caches.open(AVATAR_CACHE);
+    const response = await cache.match(url);
+    if (!response) return "";
+    const local = URL.createObjectURL(await response.blob());
+    avatarBlobs.set(url, local); loadedPhotos.add(url);
+    return local;
+  } catch { return ""; }
+}
+function saveAvatar(url: string): Promise<string> {
+  if (!url || avatarBlobs.has(url) || avatarMisses.has(url) || !/^https?:/i.test(url)) return Promise.resolve(avatarBlobs.get(url) || "");
+  let task = avatarSaving.get(url);
+  if (!task) {
+    task = (async () => {
+      try {
+        const stored = await restoreAvatar(url); if (stored) return stored;
+        const response = await fetch(url, { mode: "cors", referrerPolicy: "no-referrer", credentials: "omit" });
+        if (!response.ok) { avatarMisses.add(url); return ""; }
+        try { if (typeof caches !== "undefined") await (await caches.open(AVATAR_CACHE)).put(url, response.clone()); } catch { /* Memory copy still works. */ }
+        const local = URL.createObjectURL(await response.blob());
+        avatarBlobs.set(url, local);
+        return local;
+      } catch { avatarMisses.add(url); return ""; }
+      finally { avatarSaving.delete(url); }
+    })();
+    avatarSaving.set(url, task);
+  }
+  return task;
+}
+
 /** Downloads and decodes a profile photo ahead of time so it appears instantly (and without a spinner) when shown. */
 export function preloadPhoto(src: string | undefined, size = 512): Promise<void> {
   const url = hiResPhoto(src, size);
@@ -156,9 +197,9 @@ export function preloadPhoto(src: string | undefined, size = 512): Promise<void>
       const img = new Image();
       img.referrerPolicy = "no-referrer";
       img.decoding = "async";
-      img.onload = () => { loadedPhotos.add(url); resolve(); };
-      img.onerror = () => resolve();
-      img.src = url;
+      img.onload = () => { loadedPhotos.add(url); void saveAvatar(url); resolve(); };
+      img.onerror = () => { void restoreAvatar(url).then(() => resolve()); };
+      img.src = cachedAvatar(url) || url;
     });
     pendingPhotos.set(url, task);
   }
@@ -182,12 +223,20 @@ export function avatarColor(name: string): string {
 /** Profile photo in a circle. The picture is lazy loaded: a soft placeholder shows while it downloads (no spinner), then the photo fades in.
  *  Without a photo (or if it fails) a Google-style letter avatar is shown, and its letter scales with the avatar's size. */
 export function ProfilePhoto({ src, name, className = "", size = 256 }: { src?: string; name: string; className?: string; size?: number }) {
-  const url = src ? hiResPhoto(src, size) : "";
+  const remote = src ? hiResPhoto(src, size) : "";
+  const [, bumpCache] = useState(0);
+  // The last good photo is kept: an empty source during a reconnect keeps showing what was already shown.
+  const lastUrl = useRef("");
+  if (remote) lastUrl.current = remote;
+  const url = remote || lastUrl.current;
+  const shown = (url && cachedAvatar(url)) || url;
   const [state, setState] = useState<"loading" | "ready" | "error">(() => !url ? "error" : loadedPhotos.has(url) ? "ready" : "loading");
   useEffect(() => { setState(!url ? "error" : loadedPhotos.has(url) ? "ready" : "loading"); }, [url]);
+  useEffect(() => { if (url && !cachedAvatar(url)) void restoreAvatar(url).then((local) => { if (local) bumpCache((n) => n + 1); }); }, [url]);
   const words = name.replace(/[<>]/g, "").trim().split(/\s+/).filter(Boolean);
   const letter = Array.from(words[0] || "")[0]?.toUpperCase() || "";
-  const markReady = () => { loadedPhotos.add(url); setState("ready"); };
+  const markReady = () => { loadedPhotos.add(url); setState("ready"); void saveAvatar(url); };
+  const onPhotoError = () => { void restoreAvatar(url).then((local) => { if (local) { bumpCache((n) => n + 1); setState("loading"); } else setState("error"); }); };
   const letterAvatar = state === "error" && Boolean(letter);
   const holder = useRef<HTMLSpanElement>(null);
   const [letterSize, setLetterSize] = useState(0);
@@ -203,7 +252,7 @@ export function ProfilePhoto({ src, name, className = "", size = 256 }: { src?: 
   }, [letterAvatar]);
   const style: CSSProperties | undefined = letterAvatar ? { background: avatarColor(name), color: "#fff", ...(letterSize > 0 ? { fontSize: letterSize } : {}) } : undefined;
   return <span ref={holder} className={`profile-photo ${state === "loading" ? "profile-photo-loading" : ""} ${letterAvatar ? "profile-photo-letter" : ""} ${className}`} style={style}>
-    {url && state !== "error" && <img ref={(el) => { if (el?.complete && el.naturalWidth > 0 && state === "loading") markReady(); }} src={url} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" draggable={false} onLoad={markReady} onError={() => setState("error")} />}
+    {url && state !== "error" && <img ref={(el) => { if (el?.complete && el.naturalWidth > 0 && state === "loading") markReady(); }} src={shown} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" draggable={false} onLoad={markReady} onError={shown !== url ? () => setState("error") : onPhotoError} />}
     {letterAvatar ? <b>{letter}</b> : null}
   </span>;
 }

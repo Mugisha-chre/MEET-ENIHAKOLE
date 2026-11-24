@@ -1,5 +1,5 @@
 import { createPortal } from "react-dom";
-import { createContext, memo, startTransition, useCallback, useId, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type RefObject, type FormEvent, type ReactNode, type TouchEvent as ReactTouchEvent, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { Fragment, createContext, memo, startTransition, useCallback, useId, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type RefObject, type FormEvent, type ReactNode, type TouchEvent as ReactTouchEvent, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { LiveKitRoom, ParticipantTile, RoomAudioRenderer, isTrackReference, useChat, useIsMuted, useLocalParticipant, useParticipants, useRoomContext, useTracks, VideoTrack, type TrackReference } from "@livekit/components-react";
 import { ConnectionQuality, ConnectionState, DisconnectReason, MediaDeviceFailure, ParticipantEvent, Room, RoomEvent, Track, VideoPresets, VideoQuality, type Participant, type RemoteParticipant, type RoomOptions, type VideoCaptureOptions } from "livekit-client";
@@ -1686,7 +1686,7 @@ function BackgroundMeetingDock({ title, disconnected, onReturn, onLeave }: { tit
   }
   return <aside className={`background-meeting-dock ${aboveNav ? "background-meeting-dock-above-nav" : ""}`} role="region" aria-label="Active meeting controls">
     <span className="background-meeting-indicator" aria-hidden="true"/>
-    <div className="background-meeting-copy"><strong>{disconnected ? "Connection interrupted" : "Meeting continues"}</strong><span>{title} · {participants.length} participants</span></div>
+    <div className="background-meeting-copy"><strong>{disconnected ? "Connection lost" : "Meeting continues"}</strong><span>{title} · {participants.length} participants</span></div>
     <button type="button" className="background-meeting-action" onClick={() => void toggleMicrophone()} disabled={micBusy} aria-label={isMicrophoneEnabled ? "Mute microphone" : "Unmute microphone"} title={isMicrophoneEnabled ? "Mute microphone" : "Unmute microphone"}>{isMicrophoneEnabled ? <Mic size={16}/> : <MicOff size={16}/>}</button>
     <button type="button" className="background-meeting-return" onClick={onReturn}>Return to call</button>
     <button type="button" className="background-meeting-leave" onClick={onLeave}>Leave</button>
@@ -1977,6 +1977,7 @@ type FloatingReaction = { id: string; emoji: string; name: string; x: number; ri
 type DirectContact = { userId: string; identity: string; name: string; picture: string };
 type PrivateDataSignal =
   | { kind: "private-message"; recipientUserId: string; message: PrivateMessage }
+  | { kind: "private-seen"; recipientUserId: string; upTo: number }
   | { kind: "moderator-request"; recipientUserId: string; media: "microphone" | "camera"; hostName: string }
   | { kind: "moderator-media-control"; recipientUserId: string; media: "microphone" | "camera"; action: "disable"; hostName: string };
 const REACTION_LIFETIME = 3400;
@@ -2181,7 +2182,10 @@ function participantName(participant: Participant): string {
 function participantPicture(metadata?: string, identity?: string): string {
   try {
     const picture = JSON.parse(metadata || "{}").picture;
-    if (typeof picture === "string" && picture.startsWith("https://")) return picture;
+    if (typeof picture === "string" && picture.startsWith("https://")) {
+      if (identity) { const known = knownPeople.get(identity); if (!known || known.picture !== picture) knownPeople.set(identity, { name: known?.name || "", picture }); }
+      return picture;
+    }
   } catch { /* Fall back to what we knew before connecting. */ }
   return (identity && knownPeople.get(identity)?.picture) || "";
 }
@@ -2203,75 +2207,201 @@ function RdHangupIcon() { return <svg viewBox="0 0 24 24" width="28" height="28"
 function RdButton({ icon, label, onClick, on = false, danger = false, disabled = false, badge = null, ...aria }: { icon: ReactNode; label: string; onClick?: () => void; on?: boolean; danger?: boolean; disabled?: boolean; badge?: ReactNode; "aria-haspopup"?: "dialog"; "aria-expanded"?: boolean }) {
   return <button type="button" className={`rd-btn ${on ? "is-on" : ""} ${danger ? "is-danger" : ""}`} onClick={onClick} disabled={disabled} title={label} aria-label={label} {...aria}>{icon}{badge}</button>;
 }
-/** Call bar: swipeable horizontal sections of round buttons (native scroll-snap = compositor-driven, no JS in the scroll path) with a Leave button that never moves. */
-function RdCarousel({ pages, leave }: { pages: ReactNode[][]; leave: ReactNode }) {
-  const scrollerRef = useRef<HTMLDivElement>(null);
-  const pageRef = useRef(0);
-  const anchorRef = useRef<number | null>(null);
-  const touchingRef = useRef(false);
-  const programmaticRef = useRef(false);
-  const idleRef = useRef(0);
-  const [page, setPage] = useState(0);
-  const count = pages.length;
+const SEEN_TOPIC = "meet-enihakole-seen";
+type SeenPerson = { key: string; name: string; picture: string };
+type SeenInfo = { upTo: number; name: string; picture: string };
+
+/** Keeps the message panel above the on-screen keyboard: the space the keyboard takes from the visual viewport becomes --kb-inset. */
+function useKeyboardInset(active: boolean) {
   useEffect(() => {
-    const el = scrollerRef.current;
-    if (!el) return;
+    const root = document.documentElement; const viewport = window.visualViewport;
+    if (!active || !viewport) { root.style.removeProperty("--kb-inset"); return; }
     let frame = 0;
-    const settleSoon = () => {
-      window.clearTimeout(idleRef.current);
-      idleRef.current = window.setTimeout(() => { if (touchingRef.current) return; anchorRef.current = null; programmaticRef.current = false; }, 160);
-    };
-    const onTouchStart = () => { touchingRef.current = true; anchorRef.current = Math.max(0, Math.min(count - 1, Math.round(el.scrollLeft / (el.clientWidth || 1)))); };
-    const onTouchEnd = () => { touchingRef.current = false; settleSoon(); };
-    const onScroll = () => {
-      // However hard the swipe, a gesture moves at most one section: the scroll position is held between the neighbours of where it started.
-      if (!programmaticRef.current) {
-        const width = el.clientWidth || 1;
-        if (anchorRef.current === null) anchorRef.current = pageRef.current;
-        const low = Math.max(0, anchorRef.current - 1) * width;
-        const high = Math.min(count - 1, anchorRef.current + 1) * width;
-        if (el.scrollLeft > high) el.scrollLeft = high; else if (el.scrollLeft < low) el.scrollLeft = low;
-      }
-      settleSoon();
-      if (frame) return;
+    const update = () => {
+      window.cancelAnimationFrame(frame);
       frame = window.requestAnimationFrame(() => {
-        frame = 0;
-        const next = Math.max(0, Math.min(count - 1, Math.round(el.scrollLeft / (el.clientWidth || 1))));
-        if (next !== pageRef.current) { pageRef.current = next; setPage(next); }
+        const inset = Math.max(0, Math.round(window.innerHeight - viewport.height - viewport.offsetTop));
+        root.style.setProperty("--kb-inset", inset > 60 ? `${inset}px` : "0px");
       });
     };
-    el.addEventListener("scroll", onScroll, { passive: true });
-    el.addEventListener("touchstart", onTouchStart, { passive: true });
-    el.addEventListener("touchend", onTouchEnd, { passive: true });
-    el.addEventListener("touchcancel", onTouchEnd, { passive: true });
-    return () => {
-      el.removeEventListener("scroll", onScroll); el.removeEventListener("touchstart", onTouchStart); el.removeEventListener("touchend", onTouchEnd); el.removeEventListener("touchcancel", onTouchEnd);
-      window.clearTimeout(idleRef.current); if (frame) window.cancelAnimationFrame(frame);
+    update();
+    viewport.addEventListener("resize", update); viewport.addEventListener("scroll", update);
+    return () => { window.cancelAnimationFrame(frame); viewport.removeEventListener("resize", update); viewport.removeEventListener("scroll", update); root.style.removeProperty("--kb-inset"); };
+  }, [active]);
+}
+
+/** Message box for chats. It is a plain-text editable area rather than an <input>, so phones do not draw their password / card / address
+ *  autofill bar above the keyboard (that bar covered the field). Enter sends; Shift+Enter adds a line on desktop. */
+function ChatField({ value, onChange, placeholder, label, maxLength = 2000 }: { value: string; onChange: (value: string) => void; placeholder: string; label: string; maxLength?: number }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const shiftRef = useRef(false);
+  const onChangeRef = useRef(onChange); onChangeRef.current = onChange;
+  useEffect(() => {
+    const el = ref.current; if (!el) return;
+    if ((el.textContent || "") !== value) { el.textContent = value; if (!value) el.innerHTML = ""; }
+  }, [value]);
+  useEffect(() => {
+    const el = ref.current; if (!el) return;
+    const onBeforeInput = (event: InputEvent) => {
+      if (event.inputType !== "insertParagraph" && event.inputType !== "insertLineBreak") return;
+      if (shiftRef.current && window.matchMedia("(hover: hover)").matches) return;
+      event.preventDefault();
+      el.closest("form")?.requestSubmit();
     };
-  }, [count]);
+    el.addEventListener("beforeinput", onBeforeInput as EventListener);
+    return () => el.removeEventListener("beforeinput", onBeforeInput as EventListener);
+  }, []);
+  const read = () => {
+    const el = ref.current; if (!el) return;
+    let text = el.textContent || "";
+    if (text.length > maxLength) { text = text.slice(0, maxLength); el.textContent = text; const range = document.createRange(); range.selectNodeContents(el); range.collapse(false); const selection = window.getSelection(); selection?.removeAllRanges(); selection?.addRange(range); }
+    if (!text) el.innerHTML = "";
+    onChangeRef.current(text);
+  };
+  return <div ref={ref} className="chat-field" role="textbox" aria-multiline="true" aria-label={label} data-placeholder={placeholder} contentEditable="plaintext-only" suppressContentEditableWarning enterKeyHint="send" inputMode="text" autoCapitalize="sentences" spellCheck
+    onInput={read}
+    onKeyDown={(event) => { shiftRef.current = event.shiftKey; }}
+    onKeyUp={() => { shiftRef.current = false; }}
+    onPaste={(event) => { event.preventDefault(); const text = event.clipboardData.getData("text/plain"); if (text) document.execCommand("insertText", false, text); }}
+    onFocus={() => { window.setTimeout(() => ref.current?.scrollIntoView({ block: "nearest" }), 280); }}/>;
+}
+
+/** "Seen by" row under your message: up to four small avatars, then +N for everyone else. */
+function SeenStrip({ people, single = false }: { people: SeenPerson[]; single?: boolean }) {
+  if (!people.length) return null;
+  const shown = people.slice(0, 4); const extra = people.length - shown.length;
+  const label = single ? "Seen" : `Seen by ${people.length} ${people.length === 1 ? "person" : "people"}`;
+  return <div className="chat-seen" aria-label={label}>
+    <span className="chat-seen-text">{label}</span>
+    <span className="chat-seen-avatars">{shown.map((person) => <ProfilePhoto key={person.key} src={person.picture} name={person.name} size={48} className="chat-seen-avatar"/>)}{extra > 0 && <span className="chat-seen-more">+{extra}</span>}</span>
+  </div>;
+}
+
+/** Call bar: swipeable horizontal sections of round buttons with a Leave button that never moves.
+ *  The swipe is driven by pointer events and transforms: a gesture can only ever move ONE section (no matter how long or fast the swipe),
+ *  and every section's buttons scale/fade in and out with the finger. The little section lines live under the bar, outside its background. */
+function RdCarousel({ pages, leave }: { pages: ReactNode[][]; leave: ReactNode }) {
+  const viewRef = useRef<HTMLDivElement>(null);
+  const trackRef = useRef<HTMLDivElement>(null);
+  const posRef = useRef(0); // current position in sections (can be fractional while dragging / animating)
+  const pageRef = useRef(0);
+  const animRef = useRef(0);
+  const dragRef = useRef<{ id: number; x: number; y: number; start: number; t: number; lastX: number; lastT: number; v: number; active: boolean } | null>(null);
+  const suppressClick = useRef(false);
+  const lockRef = useRef(0);
+  const [page, setPage] = useState(0);
+  const count = pages.length;
+  const countRef = useRef(count); countRef.current = count;
+  const reduced = () => typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const paint = (pos: number) => {
+    posRef.current = pos;
+    const track = trackRef.current; if (!track) return;
+    track.style.transform = `translate3d(${-pos * 100}%,0,0)`;
+    const nodes = track.children;
+    for (let i = 0; i < nodes.length; i += 1) {
+      const e = Math.max(0, 1 - Math.abs(i - pos)); // 1 = fully in view, 0 = fully away
+      (nodes[i] as HTMLElement).style.setProperty("--e", e.toFixed(3));
+    }
+  };
+  const animateTo = (target: number, velocity = 0) => {
+    window.cancelAnimationFrame(animRef.current);
+    const from = posRef.current; const dist = target - from;
+    if (Math.abs(dist) < 0.001 || reduced()) { paint(target); return; }
+    const duration = Math.max(180, Math.min(340, 340 - Math.abs(velocity) * 90));
+    const t0 = performance.now();
+    const step = (now: number) => {
+      const k = Math.min(1, (now - t0) / duration);
+      const eased = 1 - Math.pow(1 - k, 4); // sharp start, soft landing
+      paint(from + dist * eased);
+      if (k < 1) animRef.current = window.requestAnimationFrame(step);
+    };
+    animRef.current = window.requestAnimationFrame(step);
+  };
+  const settle = (index: number, velocity = 0) => {
+    const target = Math.max(0, Math.min(countRef.current - 1, index));
+    if (target !== pageRef.current) { pageRef.current = target; setPage(target); }
+    animateTo(target, velocity);
+  };
+  useEffect(() => { paint(pageRef.current); }, [count]);
   useEffect(() => {
     // The number of sections can shrink (for example the host-only buttons disappear): keep the position valid.
-    if (pageRef.current > count - 1) { pageRef.current = Math.max(0, count - 1); setPage(pageRef.current); scrollerRef.current?.scrollTo({ left: pageRef.current * (scrollerRef.current?.clientWidth || 0) }); }
+    if (pageRef.current > count - 1) settle(count - 1);
   }, [count]);
-  const goTo = (index: number) => {
-    const el = scrollerRef.current;
-    if (!el) return;
-    const target = Math.max(0, Math.min(count - 1, index));
-    programmaticRef.current = true;
-    window.clearTimeout(idleRef.current);
-    idleRef.current = window.setTimeout(() => { programmaticRef.current = false; anchorRef.current = null; }, 900);
-    const reduce = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    el.scrollTo({ left: target * el.clientWidth, behavior: reduce ? "auto" : "smooth" });
+  useEffect(() => {
+    const el = viewRef.current; if (!el) return;
+    // Trackpad / mouse-wheel sideways scroll: one section per gesture.
+    const onWheel = (event: WheelEvent) => {
+      if (Math.abs(event.deltaX) <= Math.abs(event.deltaY) || Math.abs(event.deltaX) < 12) return;
+      event.preventDefault();
+      const now = Date.now(); if (now < lockRef.current) return;
+      lockRef.current = now + 420;
+      settle(pageRef.current + (event.deltaX > 0 ? 1 : -1));
+    };
+    // Keyboard focus on a button in another section brings that section into view without the browser scrolling the clipped area.
+    const onScroll = () => { if (el.scrollLeft !== 0) el.scrollLeft = 0; };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => { el.removeEventListener("wheel", onWheel); el.removeEventListener("scroll", onScroll); window.cancelAnimationFrame(animRef.current); };
+  }, []);
+  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    if (countRef.current < 2) return;
+    window.cancelAnimationFrame(animRef.current);
+    dragRef.current = { id: event.pointerId, x: event.clientX, y: event.clientY, start: posRef.current, t: performance.now(), lastX: event.clientX, lastT: performance.now(), v: 0, active: false };
   };
+  const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current; if (!drag || drag.id !== event.pointerId) return;
+    const dx = event.clientX - drag.x; const dy = event.clientY - drag.y;
+    if (!drag.active) {
+      if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
+      if (Math.abs(dy) > Math.abs(dx)) { dragRef.current = null; return; }
+      drag.active = true; suppressClick.current = true;
+      try { viewRef.current?.setPointerCapture(event.pointerId); } catch { /* Capture is optional. */ }
+    }
+    const now = performance.now();
+    if (now > drag.lastT) drag.v = (event.clientX - drag.lastX) / (now - drag.lastT);
+    drag.lastX = event.clientX; drag.lastT = now;
+    const width = viewRef.current?.clientWidth || 1;
+    // However far the finger travels, the position stays within one section of where the gesture started (soft resistance at the ends).
+    const base = Math.round(drag.start);
+    let pos = drag.start - dx / width;
+    pos = Math.max(base - 1, Math.min(base + 1, pos));
+    const last = countRef.current - 1;
+    if (pos < 0) pos = pos * 0.3; else if (pos > last) pos = last + (pos - last) * 0.3;
+    paint(pos);
+  };
+  const finish = (event: ReactPointerEvent<HTMLDivElement>, cancelled: boolean) => {
+    const drag = dragRef.current; if (!drag || drag.id !== event.pointerId) return;
+    dragRef.current = null;
+    try { viewRef.current?.releasePointerCapture(event.pointerId); } catch { /* Already released. */ }
+    if (!drag.active) return;
+    window.setTimeout(() => { suppressClick.current = false; }, 60);
+    const base = Math.round(drag.start);
+    const moved = posRef.current - base; // negative = towards the previous section
+    const fast = Math.abs(drag.v) > 0.3;
+    let target = base;
+    if (!cancelled) {
+      if (moved > 0.18 || (fast && drag.v < 0 && moved > 0.02)) target = base + 1;
+      else if (moved < -0.18 || (fast && drag.v > 0 && moved < -0.02)) target = base - 1;
+    }
+    settle(target, drag.v);
+  };
+  const goTo = (index: number) => { settle(index); };
   const onDotsKey = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key === "ArrowRight") { event.preventDefault(); goTo(pageRef.current + 1); }
     else if (event.key === "ArrowLeft") { event.preventDefault(); goTo(pageRef.current - 1); }
   };
-  return <div className="rd-pill" role="toolbar" aria-label="Call controls">
-    <div className="rd-carousel" ref={scrollerRef}>
-      {pages.map((items, index) => <div className="rd-page" key={index} role="group" aria-label={`Call controls, section ${index + 1} of ${count}`}><div className="rd-page-inner">{items}</div></div>)}
+  return <div className="rd-bar">
+    <div className="rd-pill" role="toolbar" aria-label="Call controls">
+      <div className="rd-carousel" ref={viewRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={(event) => finish(event, false)} onPointerCancel={(event) => finish(event, true)}
+        onClickCapture={(event) => { if (suppressClick.current) { event.preventDefault(); event.stopPropagation(); } }}
+        onFocusCapture={(event) => { const node = (event.target as HTMLElement).closest(".rd-page"); const index = node ? Array.from(node.parentElement?.children ?? []).indexOf(node) : -1; if (index >= 0 && index !== pageRef.current) settle(index); }}>
+        <div className="rd-track" ref={trackRef}>
+          {pages.map((items, index) => <div className="rd-page" key={index} role="group" aria-label={`Call controls, section ${index + 1} of ${count}`} aria-hidden={index !== page || undefined}><div className="rd-page-inner">{items}</div></div>)}
+        </div>
+      </div>
+      <div className="rd-leave">{leave}</div>
     </div>
-    <div className="rd-leave">{leave}</div>
     {count > 1 && <div className="rd-dots" role="tablist" aria-label={`Call control sections, section ${page + 1} of ${count}`} onKeyDown={onDotsKey}>
       {pages.map((_, index) => <button key={index} type="button" role="tab" aria-selected={index === page} aria-label={`Show control section ${index + 1} of ${count}`} tabIndex={index === page ? 0 : -1} className={`rd-dot ${index === page ? "is-active" : ""}`} onClick={() => goTo(index)}><span/></button>)}
     </div>}
@@ -3623,6 +3753,10 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
   const [mediaModal, setMediaModal] = useState<{ kind: MediaKind; state: MicPromptState } | null>(null);
   const mediaAttemptRef = useRef(0);
   const [messageText, setMessageText] = useState("");
+  const [seenBy, setSeenBy] = useState<Record<string, SeenInfo>>({});
+  const [privateSeen, setPrivateSeen] = useState<Record<string, number>>({});
+  const lastSeenSent = useRef(0);
+  const lastPrivateSeenSent = useRef<Record<string, number>>({});
   const [reactionsOpen, setReactionsOpen] = useState(false);
   const [emojiOrder, setEmojiOrder] = useState<string[]>(() => orderedReactions(readEmojiUsage()));
   const [moreOpen, setMoreOpen] = useState(false);
@@ -3745,6 +3879,12 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
       let data: PrivateDataSignal;
       try { data = JSON.parse(new TextDecoder().decode(payload)) as PrivateDataSignal; } catch { return; }
       if (!data || typeof data !== "object" || data.recipientUserId !== localUserId) return;
+      if (data.kind === "private-seen") {
+        const from = participantUserId(sender);
+        if (!from || typeof data.upTo !== "number" || !Number.isFinite(data.upTo)) return;
+        setPrivateSeen((current) => (current[from] ?? 0) >= data.upTo ? current : { ...current, [from]: data.upTo });
+        return;
+      }
       if (data.kind === "private-message") {
         const message = data.message;
         if (!message || message.recipientUserId !== localUserId || message.senderUserId !== participantUserId(sender) || typeof message.id !== "string" || typeof message.message !== "string" || message.message.length > 2000) return;
@@ -4103,6 +4243,53 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
   }, []);
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [chatMessages.length, messagesOpen]);
+  useKeyboardInset(messagesOpen || Boolean(directContact) || notesOpen);
+
+  // "Seen by": while the room messages are open, tell everyone how far we have read. Others see our avatar under their last message we saw.
+  useEffect(() => {
+    const onSeen = (payload: Uint8Array, sender?: Participant, _kind?: unknown, topic?: string) => {
+      if (topic !== SEEN_TOPIC || !sender || sender.identity === localIdentity) return;
+      try {
+        const data = JSON.parse(new TextDecoder().decode(payload)) as { upTo?: number };
+        if (typeof data.upTo !== "number" || !Number.isFinite(data.upTo)) return;
+        const upTo = data.upTo;
+        setSeenBy((current) => (current[sender.identity]?.upTo ?? 0) >= upTo ? current : { ...current, [sender.identity]: { upTo, name: participantName(sender) || "Participant", picture: participantPicture(sender.metadata, sender.identity) } });
+      } catch { /* Ignore malformed packets. */ }
+    };
+    const sendSeen = (to?: string[]) => {
+      if (!lastSeenSent.current || room.state !== ConnectionState.Connected) return;
+      void room.localParticipant.publishData(new TextEncoder().encode(JSON.stringify({ upTo: lastSeenSent.current })), { reliable: true, topic: SEEN_TOPIC, ...(to ? { destinationIdentities: to } : {}) }).catch(() => undefined);
+    };
+    const onJoin = (participant: RemoteParticipant) => sendSeen([participant.identity]);
+    room.on(RoomEvent.DataReceived, onSeen); room.on(RoomEvent.ParticipantConnected, onJoin);
+    return () => { room.off(RoomEvent.DataReceived, onSeen); room.off(RoomEvent.ParticipantConnected, onJoin); };
+  }, [room, localIdentity]);
+  useEffect(() => {
+    if (!messagesOpen || chatMessages.length === 0 || room.state !== ConnectionState.Connected) return;
+    const latest = chatMessages[chatMessages.length - 1].timestamp;
+    if (!latest || latest <= lastSeenSent.current) return;
+    lastSeenSent.current = latest;
+    void room.localParticipant.publishData(new TextEncoder().encode(JSON.stringify({ upTo: latest })), { reliable: true, topic: SEEN_TOPIC }).catch(() => { lastSeenSent.current = 0; });
+  }, [messagesOpen, chatMessages, room]);
+
+  // Private chats: remember how far the other person has read (kept on this device) and tell them how far we have read.
+  useEffect(() => {
+    if (!localUserId) return;
+    const hit = readCache<Record<string, number>>(`private-seen:${meeting.slug}:${localUserId}`);
+    if (hit) setPrivateSeen((current) => ({ ...hit.value, ...current }));
+  }, [localUserId, meeting.slug]);
+  useEffect(() => { if (localUserId && Object.keys(privateSeen).length) writeCache(`private-seen:${meeting.slug}:${localUserId}`, privateSeen); }, [privateSeen, localUserId, meeting.slug]);
+  useEffect(() => {
+    if (!directContact || !localUserId || room.state !== ConnectionState.Connected) return;
+    const incoming = privateMessages.filter((item) => item.senderUserId === directContact.userId);
+    const last = incoming[incoming.length - 1]; if (!last) return;
+    const upTo = Date.parse(last.createdAt); if (!Number.isFinite(upTo) || upTo <= (lastPrivateSeenSent.current[directContact.userId] ?? 0)) return;
+    const targets = participants.filter((person) => !person.isLocal && participantUserId(person) === directContact.userId).map((person) => person.identity);
+    if (!targets.length) return;
+    lastPrivateSeenSent.current[directContact.userId] = upTo;
+    const signal: PrivateDataSignal = { kind: "private-seen", recipientUserId: directContact.userId, upTo };
+    void room.localParticipant.publishData(new TextEncoder().encode(JSON.stringify(signal)), { reliable: true, topic: PRIVATE_MESSAGE_TOPIC, destinationIdentities: targets }).catch(() => { lastPrivateSeenSent.current[directContact.userId] = 0; });
+  }, [directContact, privateMessages, participants, localUserId, room]);
 
   // The latest person to speak moves to the top and stays there (even after they stop) until someone else starts speaking.
   useEffect(() => {
@@ -4948,6 +5135,27 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
     return list.filter((item): item is RoomTip => Boolean(item));
   }, tipsBusy || weakNet.visible);
 
+  // Which of my messages each person has read up to (their avatar sits under the last of my messages they have seen).
+  const groupSeenByIndex = new Map<number, SeenPerson[]>();
+  {
+    const mine: number[] = [];
+    chatMessages.forEach((item, index) => { if (item.from?.identity === localIdentity) mine.push(index); });
+    Object.entries(seenBy).forEach(([identity, info]) => {
+      if (identity === localIdentity) return;
+      let target = -1;
+      for (const index of mine) if (chatMessages[index].timestamp <= info.upTo) target = index;
+      if (target < 0) return;
+      const live = participants.find((person) => person.identity === identity);
+      const list = groupSeenByIndex.get(target) ?? [];
+      list.push({ key: identity, name: info.name, picture: (live && participantPicture(live.metadata, identity)) || info.picture });
+      groupSeenByIndex.set(target, list);
+    });
+  }
+  let privateSeenIndex = -1;
+  if (directContact) {
+    const upTo = privateSeen[directContact.userId] ?? 0;
+    privateMessages.forEach((item, index) => { if (item.senderUserId === localUserId && Date.parse(item.createdAt) <= upTo) privateSeenIndex = index; });
+  }
   return <div className={`conference-fullscreen-target ${fullScreen ? "is-fullscreen" : ""} ${pseudoFull ? "is-pseudo-fullscreen" : ""} ${fullScreen && controlsVisible ? "controls-shown" : ""}`} data-theme={theme} ref={fullScreenRef} style={{ "--dock-space": controlsVisible ? (fullScreen ? `${dockHeight}px` : `${dockHeight || 110}px`) : "0px", "--dock-h": `${dockHeight || 110}px` } as CSSProperties}>
     <div className="conference-media-area">
       <RoomAudioRenderer muted={speakerOff} />
@@ -4957,7 +5165,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
           <button type="button" className="room-top-people" onClick={openPeopleTab} aria-label={`${peopleCount} ${peopleCount === 1 ? "person" : "people"} in the meeting. Open the people list`} title="See who is in the meeting"><Users size={14}/><b>{peopleCount}</b><span>{peopleCount === 1 ? "person" : "people"}</span></button>
           <button type="button" className={`room-top-pip ${pip.active ? "is-active" : ""}`} onClick={() => { if (!pip.supported) { window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Picture-in-picture isn't available in this browser." } })); return; } void pip.toggle(); }} aria-pressed={pip.active} title={pip.active ? "Close the floating window" : "Keep the call floating while you use other apps"}><PictureInPicture2 size={14}/><span>{pip.active ? "Close" : "PiP"}</span></button>
         </div>
-        {(linkStale || link.weak) && <div className={`room-connection-banner ${linkStale ? "is-severe" : ""}`} role="status" aria-live="polite"><span className="room-connection-icon"><WifiOff size={16}/></span><span className="room-connection-copy"><b>{link.offline ? "You're offline" : link.state === ConnectionState.Disconnected ? "Connection lost" : linkStale ? "Reconnecting…" : "Slow connection"}</b><small>{link.offline ? "Check your internet. You're still in the room and will reconnect automatically." : link.state === ConnectionState.Disconnected ? "You are no longer connected to the call." : linkStale ? "Your connection dropped. Everyone is still here; we are bringing you back." : "Audio and video may be delayed or blurry. Try a place with a stronger signal."}</small></span></div>}
+        {(linkStale || link.weak) && <div className={`room-connection-banner ${linkStale ? "is-severe" : ""}`} role="status" aria-live="polite"><span className="room-connection-icon"><WifiOff size={16}/></span><span className="room-connection-copy"><b>{link.offline ? "You're offline" : link.state === ConnectionState.Disconnected ? "Connection lost" : linkStale ? "Reconnecting…" : "Slow connection"}</b><small>{link.offline ? "Reconnecting when you're back online." : link.state === ConnectionState.Disconnected ? "You're no longer in the call." : linkStale ? "Your connection was lost." : "Audio and video may lag."}</small></span></div>}
         {RECORDING_UI_ENABLED && recordingState && <div className={`meeting-recording-banner meeting-recording-${recordingState.status}`} role="status" aria-live="polite"><span className="meeting-recording-dot"/><b>{recordingState.status === "recording" ? "Recording" : recordingState.status === "consent_pending" ? "Waiting for recording consent" : recordingState.status === "uploading" ? "Saving recording" : recordingState.status === "ready" ? "Recording saved" : recordingState.status === "failed" ? "Recording upload failed" : recordingState.status === "declined" ? "Recording declined" : "Recording"}</b>{recordingState.status === "consent_pending" && <small>{recordingState.consents.filter((item) => item.decision === "accepted").length}/{recordingState.consents.length} approved</small>}{recordingState.status === "uploading" && <><small>{recordingState.uploadProgressPercent || 0}% uploaded</small><span className="meeting-recording-progress"><i style={{ width: `${Math.max(0, Math.min(100, recordingState.uploadProgressPercent || 0))}%` }}/></span></>}</div>}
         {participants.filter((participant) => raisedHands[participant.identity]).map((participant) => <div className="raised-hand-chip" key={participant.identity} title={`${participantName(participant) || "Participant"} raised a hand`}><Hand size={13}/><span>{participantName(participant) || "Participant"}{participant.identity === localIdentity ? " (You)" : ""}</span></div>)}
       </div>
@@ -5090,10 +5298,11 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
     {messagesOpen && <div className="messages-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setMessagesOpen(false); }}><section className="messages-modal" role="dialog" aria-modal="true" aria-label="Meeting messages"><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setMessagesOpen(false)} aria-label="Back to call"><ArrowLeft size={18}/></button><div className="meeting-panel-heading"><b>Meeting messages</b><small>Chat with everyone in this room</small></div><button className="room-icon-button" onClick={() => setMessagesOpen(false)} aria-label="Close messages"><X size={18}/></button></header><nav className="meeting-panel-tabs" aria-label="Meeting tools"><button type="button" className="meeting-panel-tab meeting-panel-tab-active" aria-current="page">Messages</button><button type="button" className="meeting-panel-tab" onClick={() => { setMessagesOpen(false); setPeopleViewTab("people"); setPeopleOpen(true); }}>People</button><button type="button" className="meeting-panel-tab" onClick={() => { setMessagesOpen(false); setPeopleViewTab("private"); setPeopleOpen(true); }}>Private chats</button><button type="button" className="meeting-panel-tab" onClick={() => { setMessagesOpen(false); setNotesOpen(true); }}>Notes</button></nav><div className="messages-modal-body">{chatMessages.length === 0 ? <div className="messages-empty"><MessageCircle size={25}/><b>No messages yet</b><span>Send a note to everyone in this {kindOf(meeting)}.</span></div> : chatMessages.map((message, index) => {
           const own = message.from?.identity === localIdentity;
           const senderName = message.from?.name || (own ? "You" : "Choir guest");
-          const nextSender = chatMessages[index + 1]?.from?.identity;
-          const showAvatar = nextSender === undefined || nextSender !== message.from?.identity;
-          return <div className={`chat-row ${own ? "chat-row-own" : ""}`} key={`${message.timestamp}-${index}`}>{showAvatar ? <ProfilePhoto src={message.from ? participantPicture(message.from.metadata, message.from.identity) : ""} name={message.from ? participantName(message.from) || senderName : senderName} size={96} className="chat-avatar"/> : <span className="chat-avatar-spacer" aria-hidden="true"/>}<article className={`chat-message ${own ? "chat-message-own" : ""}`}><span className="chat-message-author">{senderName}</span><p>{message.message}</p><time>{new Date(message.timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></article></div>;
-        })}<div ref={chatEndRef}/></div><form className="messages-composer" onSubmit={sendMessage}><input value={messageText} onChange={(event) => setMessageText(event.target.value)} placeholder="Write a message…" maxLength={2000} aria-label="Message"/><button className="button button-primary" type="submit" disabled={!messageText.trim() || isSending} aria-label="Send message"><Send size={17}/></button></form></section></div>}
+          const prevSender = chatMessages[index - 1]?.from?.identity;
+          const showAvatar = index === 0 || prevSender !== message.from?.identity;
+          const seenPeople = own ? groupSeenByIndex.get(index) : undefined;
+          return <Fragment key={`${message.timestamp}-${index}`}><div className={`chat-row ${own ? "chat-row-own" : ""} ${showAvatar ? "chat-row-first" : ""}`}>{showAvatar ? <ProfilePhoto src={message.from ? participantPicture(message.from.metadata, message.from.identity) : ""} name={message.from ? participantName(message.from) || senderName : senderName} size={96} className="chat-avatar"/> : <span className="chat-avatar-spacer" aria-hidden="true"/>}<article className={`chat-message ${own ? "chat-message-own" : ""}`}><span className="chat-message-author">{senderName}</span><p>{message.message}</p><time>{new Date(message.timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></article></div>{seenPeople && <SeenStrip people={seenPeople}/>}</Fragment>;
+        })}<div ref={chatEndRef}/></div><form className="messages-composer" onSubmit={sendMessage}><ChatField value={messageText} onChange={setMessageText} placeholder="Write a message…" label="Message"/><button className="button button-primary" type="submit" disabled={!messageText.trim() || isSending} aria-label="Send message"><Send size={17}/></button></form></section></div>}
     {peopleOpen && <div className="messages-modal-backdrop people-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setPeopleOpen(false); }}><section className="messages-modal people-modal" role="dialog" aria-modal="true" aria-label="People and private chats"><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setPeopleOpen(false)} aria-label="Back to call"><ArrowLeft size={18}/></button><div className="meeting-panel-heading"><b>{peopleViewTab === "people" ? "People" : "Private chats"}</b><small>{peopleViewTab === "people" ? `${participants.length} currently online · presence updates live` : `${recentConversations.length} saved conversations`}</small></div><button className="room-icon-button" onClick={() => setPeopleOpen(false)} aria-label="Close people"><X size={18}/></button></header><nav className="meeting-panel-tabs" aria-label="Meeting tools"><button type="button" className={`meeting-panel-tab ${peopleViewTab === "people" ? "meeting-panel-tab-active" : ""}`} aria-current={peopleViewTab === "people" ? "page" : undefined} onClick={() => setPeopleViewTab("people")}>People</button><button type="button" className={`meeting-panel-tab ${peopleViewTab === "private" ? "meeting-panel-tab-active" : ""}`} aria-current={peopleViewTab === "private" ? "page" : undefined} onClick={() => setPeopleViewTab("private")}>Private chats</button><button type="button" className="meeting-panel-tab" onClick={() => { setPeopleOpen(false); setMessagesOpen(true); }}>Messages</button><button type="button" className="meeting-panel-tab" onClick={() => { setPeopleOpen(false); setNotesOpen(true); }}>Notes</button></nav><div className="people-directory-body">{peopleViewTab === "people" ? <><div className="people-online-heading"><span><span className="people-online-dot"/> Online now</span><b>{participants.length}</b></div>{[...participants].sort((a, b) => getParticipantRole(a) === getParticipantRole(b) ? participantName(a).localeCompare(participantName(b)) : getParticipantRole(a) === "host" ? -1 : 1).map((person) => {
       const isSelf = person.identity === localIdentity;
       const micMuted = person.getTrackPublication(Track.Source.Microphone)?.isMuted ?? true;
@@ -5154,9 +5363,9 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
     })()}
     {directContact && <div className="messages-modal-backdrop private-chat-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setDirectContact(null); }}><section className="messages-modal private-chat-modal" role="dialog" aria-modal="true" aria-label={`Private conversation with ${directContact.name}`}><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setDirectContact(null)} aria-label="Back to call"><ArrowLeft size={18}/></button><ProfilePhoto src={directContact.picture} name={directContact.name} size={64} className="private-chat-avatar"/><div className="meeting-panel-heading"><b>{directContact.name}</b><small>Private one-to-one conversation</small></div><button className="room-icon-button" onClick={() => setDirectContact(null)} aria-label="Close private messages"><X size={18}/></button></header><nav className="meeting-panel-tabs" aria-label="Meeting tools"><button type="button" className="meeting-panel-tab" onClick={() => { setDirectContact(null); setPeopleViewTab("people"); setPeopleOpen(true); }}>People</button><button type="button" className="meeting-panel-tab meeting-panel-tab-active" aria-current="page" onClick={() => { setDirectContact(null); setPeopleViewTab("private"); setPeopleOpen(true); }}>Private chats</button><button type="button" className="meeting-panel-tab" onClick={() => { setDirectContact(null); setMessagesOpen(true); }}>Messages</button><button type="button" className="meeting-panel-tab" onClick={() => { setDirectContact(null); setNotesOpen(true); }}>Notes</button></nav><div className="messages-modal-body private-chat-body">{privateLoading ? <div className="messages-empty"><LoaderCircle size={23} className="spin"/><span>Loading private conversation…</span></div> : privateMessages.length === 0 ? <div className="messages-empty"><MessageCircle size={25}/><b>No private messages yet</b><span>Only you and {directContact.name} can see this conversation.</span></div> : privateMessages.map((message, index) => {
           const own = message.senderUserId === localUserId;
-          const showAvatar = privateMessages[index + 1]?.senderUserId !== message.senderUserId;
-          return <div className={`chat-row ${own ? "chat-row-own" : ""}`} key={message.id}>{showAvatar ? <ProfilePhoto src={own ? participantPicture(room.localParticipant.metadata, localIdentity) : directContact.picture} name={own ? participantName(room.localParticipant) || "You" : message.senderName || directContact.name} size={96} className="chat-avatar"/> : <span className="chat-avatar-spacer" aria-hidden="true"/>}<article className={`chat-message ${own ? "chat-message-own" : ""}`}><span className="chat-message-author">{own ? "You" : message.senderName}</span><p>{message.message}</p><time>{new Date(message.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></article></div>;
-        })}<div ref={privateChatEndRef}/></div><form className="messages-composer" onSubmit={sendPrivateMessage}><input value={privateDraft} onChange={(event) => setPrivateDraft(event.target.value)} placeholder={`Message ${directContact.name} privately…`} maxLength={2000} aria-label="Private message"/><button className="button button-primary" type="submit" disabled={!privateDraft.trim() || privateSending || privateLoading} aria-label="Send private message">{privateSending ? <LoaderCircle size={17} className="spin"/> : <Send size={17}/>}</button></form></section></div>}
+          const showAvatar = index === 0 || privateMessages[index - 1]?.senderUserId !== message.senderUserId;
+          return <Fragment key={message.id}><div className={`chat-row ${own ? "chat-row-own" : ""} ${showAvatar ? "chat-row-first" : ""}`}>{showAvatar ? <ProfilePhoto src={own ? participantPicture(room.localParticipant.metadata, localIdentity) : directContact.picture} name={own ? participantName(room.localParticipant) || "You" : message.senderName || directContact.name} size={96} className="chat-avatar"/> : <span className="chat-avatar-spacer" aria-hidden="true"/>}<article className={`chat-message ${own ? "chat-message-own" : ""}`}><span className="chat-message-author">{own ? "You" : message.senderName}</span><p>{message.message}</p><time>{new Date(message.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></article></div>{index === privateSeenIndex && <SeenStrip single people={[{ key: directContact.userId, name: directContact.name, picture: directContact.picture }]}/>}</Fragment>;
+        })}<div ref={privateChatEndRef}/></div><form className="messages-composer" onSubmit={sendPrivateMessage}><ChatField value={privateDraft} onChange={setPrivateDraft} placeholder={`Message ${directContact.name} privately…`} label="Private message"/><button className="button button-primary" type="submit" disabled={!privateDraft.trim() || privateSending || privateLoading} aria-label="Send private message">{privateSending ? <LoaderCircle size={17} className="spin"/> : <Send size={17}/>}</button></form></section></div>}
     {role === "host" && <span className="room-host-sr" aria-hidden="true">{meeting.ownerName} is hosting</span>}
   </div>;
 }
