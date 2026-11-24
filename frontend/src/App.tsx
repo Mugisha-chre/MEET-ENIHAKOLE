@@ -2,14 +2,14 @@ import { createPortal } from "react-dom";
 import { createContext, memo, startTransition, useCallback, useId, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type RefObject, type FormEvent, type ReactNode, type TouchEvent as ReactTouchEvent, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { LiveKitRoom, ParticipantTile, RoomAudioRenderer, isTrackReference, useChat, useIsMuted, useLocalParticipant, useParticipants, useRoomContext, useTracks, VideoTrack, type TrackReference } from "@livekit/components-react";
-import { ConnectionState, DisconnectReason, MediaDeviceFailure, ParticipantEvent, Room, RoomEvent, Track, VideoPresets, VideoQuality, type Participant, type RemoteParticipant, type RoomOptions, type VideoCaptureOptions } from "livekit-client";
+import { ConnectionQuality, ConnectionState, DisconnectReason, MediaDeviceFailure, ParticipantEvent, Room, RoomEvent, Track, VideoPresets, VideoQuality, type Participant, type RemoteParticipant, type RoomOptions, type VideoCaptureOptions } from "livekit-client";
 import {
   ArrowLeft, ArrowRight, AudioLines, CalendarClock, CalendarDays, Check,
   CheckCircle2, CircleHelp, Clock3, Copy, DoorOpen, HeartHandshake, Home,
   Link2, LoaderCircle, LogIn, LogOut, Menu, Mic, Plus, Share2, ShieldCheck,
   SlidersHorizontal, ArrowUp, ArrowDown, UserRound, Users, Video, VideoOff, X, Sun, Moon, MessageCircle,
   PictureInPicture2, Hand, Send, MonitorUp, MicOff, Maximize2, Minimize2, ChevronLeft, ChevronRight, Smile, ChevronDown, Download,
-  MousePointer2, MoveUpRight, Eraser, Eye, EyeOff, PenLine, Undo2, Settings2,
+  MousePointer2, MoveUpRight, Eraser, WifiOff, Eye, EyeOff, PenLine, Undo2, Settings2,
   BookOpen, Smartphone, Headphones, LifeBuoy, Mail,
   Repeat, FileText, Bold, Italic, Underline, List, ListOrdered, Heading1, Heading2, IndentIncrease, IndentDecrease, Lightbulb,
 } from "lucide-react";
@@ -2207,13 +2207,32 @@ function RdButton({ icon, label, onClick, on = false, danger = false, disabled =
 function RdCarousel({ pages, leave }: { pages: ReactNode[][]; leave: ReactNode }) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const pageRef = useRef(0);
+  const anchorRef = useRef<number | null>(null);
+  const touchingRef = useRef(false);
+  const programmaticRef = useRef(false);
+  const idleRef = useRef(0);
   const [page, setPage] = useState(0);
   const count = pages.length;
   useEffect(() => {
     const el = scrollerRef.current;
     if (!el) return;
     let frame = 0;
+    const settleSoon = () => {
+      window.clearTimeout(idleRef.current);
+      idleRef.current = window.setTimeout(() => { if (touchingRef.current) return; anchorRef.current = null; programmaticRef.current = false; }, 160);
+    };
+    const onTouchStart = () => { touchingRef.current = true; anchorRef.current = Math.max(0, Math.min(count - 1, Math.round(el.scrollLeft / (el.clientWidth || 1)))); };
+    const onTouchEnd = () => { touchingRef.current = false; settleSoon(); };
     const onScroll = () => {
+      // However hard the swipe, a gesture moves at most one section: the scroll position is held between the neighbours of where it started.
+      if (!programmaticRef.current) {
+        const width = el.clientWidth || 1;
+        if (anchorRef.current === null) anchorRef.current = pageRef.current;
+        const low = Math.max(0, anchorRef.current - 1) * width;
+        const high = Math.min(count - 1, anchorRef.current + 1) * width;
+        if (el.scrollLeft > high) el.scrollLeft = high; else if (el.scrollLeft < low) el.scrollLeft = low;
+      }
+      settleSoon();
       if (frame) return;
       frame = window.requestAnimationFrame(() => {
         frame = 0;
@@ -2222,7 +2241,13 @@ function RdCarousel({ pages, leave }: { pages: ReactNode[][]; leave: ReactNode }
       });
     };
     el.addEventListener("scroll", onScroll, { passive: true });
-    return () => { el.removeEventListener("scroll", onScroll); if (frame) window.cancelAnimationFrame(frame); };
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchend", onTouchEnd, { passive: true });
+    el.addEventListener("touchcancel", onTouchEnd, { passive: true });
+    return () => {
+      el.removeEventListener("scroll", onScroll); el.removeEventListener("touchstart", onTouchStart); el.removeEventListener("touchend", onTouchEnd); el.removeEventListener("touchcancel", onTouchEnd);
+      window.clearTimeout(idleRef.current); if (frame) window.cancelAnimationFrame(frame);
+    };
   }, [count]);
   useEffect(() => {
     // The number of sections can shrink (for example the host-only buttons disappear): keep the position valid.
@@ -2232,6 +2257,9 @@ function RdCarousel({ pages, leave }: { pages: ReactNode[][]; leave: ReactNode }
     const el = scrollerRef.current;
     if (!el) return;
     const target = Math.max(0, Math.min(count - 1, index));
+    programmaticRef.current = true;
+    window.clearTimeout(idleRef.current);
+    idleRef.current = window.setTimeout(() => { programmaticRef.current = false; anchorRef.current = null; }, 900);
     const reduce = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     el.scrollTo({ left: target * el.clientWidth, behavior: reduce ? "auto" : "smooth" });
   };
@@ -2533,7 +2561,7 @@ function VoiceRing({ participant, speaking }: { participant: Participant; speaki
 }
 
 /** Shown only while a participant's microphone is off; nothing at all is shown while it is on. */
-function MicOffBadge({ participant }: { participant: Participant }) {
+function MicOffBadge({ participant, onToggle, speaking = false }: { participant: Participant; onToggle?: (micOn: boolean) => void; speaking?: boolean }) {
   const [micOn, setMicOn] = useState(participant.isMicrophoneEnabled);
   useEffect(() => {
     const update = () => setMicOn(participant.isMicrophoneEnabled);
@@ -2542,6 +2570,11 @@ function MicOffBadge({ participant }: { participant: Participant }) {
     events.forEach((name) => participant.on(name, update));
     return () => { events.forEach((name) => participant.off(name, update)); };
   }, [participant]);
+  // The host can tap another person's microphone icon: ask them to turn it on, or (after a confirmation) turn it off.
+  if (onToggle) {
+    const label = micOn ? "Mute microphone" : "Request microphone";
+    return <button type="button" className={`mic-control-badge ${micOn ? (speaking ? "is-speaking" : "is-on") : "is-off"}`} title={label} aria-label={label} onClick={(event) => { event.stopPropagation(); onToggle(micOn); }}>{micOn ? <Mic size={13}/> : <MicOff size={13}/>}</button>;
+  }
   if (micOn) return null;
   return <span className="mic-off-badge" title="Microphone is off" aria-label="Microphone is off"><MicOff size={13}/></span>;
 }
@@ -3475,8 +3508,67 @@ function ScreenShareStage({ screenShare, onStop, onSwitch }: { screenShare: Trac
   </div>;
 }
 
+/** Desktop-width call bar: two big sections instead of many small ones. */
+function useWideDock(): boolean {
+  const query = "(min-width: 900px)";
+  const [wide, setWide] = useState(() => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia(query).matches);
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia(query);
+    const update = () => setWide(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+  return wide;
+}
+/**
+ * Link health for the person using the app. LiveKit removes every remote participant while it restarts a dropped connection, so the room
+ * UI cannot trust the participant list during that time: `stale` says "your link is the problem", `hold` keeps the last known people
+ * on screen until the room has been connected again for a few seconds, and `weak` flags a poor (but alive) connection.
+ */
+type LinkHealth = { stale: boolean; hold: boolean; weak: boolean; offline: boolean; state: ConnectionState };
+function useLinkHealth(room: Room): LinkHealth {
+  const [state, setState] = useState<ConnectionState>(room.state);
+  const [offline, setOffline] = useState(() => typeof navigator !== "undefined" && navigator.onLine === false);
+  const [weak, setWeak] = useState(false);
+  const [hold, setHold] = useState(room.state !== ConnectionState.Connected);
+  useEffect(() => {
+    const onState = (next: ConnectionState) => setState(next);
+    const goOnline = () => setOffline(false);
+    const goOffline = () => setOffline(true);
+    setState(room.state);
+    room.on(RoomEvent.ConnectionStateChanged, onState);
+    window.addEventListener("online", goOnline);
+    window.addEventListener("offline", goOffline);
+    let poor = 0; let good = 0; let isWeak = false;
+    const timer = window.setInterval(() => {
+      if (room.state !== ConnectionState.Connected) { poor = 0; good = 0; if (isWeak) { isWeak = false; setWeak(false); } return; }
+      const quality = room.localParticipant?.connectionQuality;
+      const link = (navigator as Navigator & { connection?: { effectiveType?: string } }).connection?.effectiveType || "";
+      const bad = quality === ConnectionQuality.Poor || quality === ConnectionQuality.Lost || link === "slow-2g" || link === "2g";
+      const fine = quality === ConnectionQuality.Excellent || quality === ConnectionQuality.Good;
+      if (bad) { poor += 1; good = 0; } else if (fine) { good += 1; poor = 0; } else { poor = 0; }
+      if (!isWeak && poor >= 2) { isWeak = true; setWeak(true); }
+      else if (isWeak && good >= 3) { isWeak = false; setWeak(false); }
+    }, 1500);
+    return () => { room.off(RoomEvent.ConnectionStateChanged, onState); window.removeEventListener("online", goOnline); window.removeEventListener("offline", goOffline); window.clearInterval(timer); };
+  }, [room]);
+  useEffect(() => {
+    if (state !== ConnectionState.Connected) { setHold(true); return; }
+    const timer = window.setTimeout(() => setHold(false), 8000);
+    return () => window.clearTimeout(timer);
+  }, [state]);
+  return { stale: state !== ConnectionState.Connected || offline, hold, weak, offline, state };
+}
+type RosterEntry = { identity: string; name: string; picture: string; isHost: boolean };
+
 function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEveryone, ending, isActive }: { meeting: Meeting; role: "host" | "participant"; onLeave: () => void; onLeaveClick?: () => void; onEndForEveryone: () => void; ending: boolean; isActive: boolean }) {
   const room = useRoomContext();
+  const link = useLinkHealth(room);
+  const wideDock = useWideDock();
+  const [micConfirmId, setMicConfirmId] = useState<string | null>(null);
+  const rosterRef = useRef<RosterEntry[]>([]);
   const { theme, toggleTheme } = useAppContext();
   const { localParticipant, isMicrophoneEnabled, isCameraEnabled, isScreenShareEnabled } = useLocalParticipant();
   const participants = useParticipants();
@@ -4065,7 +4157,8 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
     const arm = () => { window.clearTimeout(armTimer); armTimer = window.setTimeout(() => { armed = true; }, 1500); };
     if (room.state === ConnectionState.Connected) arm();
     const onConnected = () => arm();
-    const onReconnecting = () => { armed = false; };
+    let disruptedAt = 0;
+    const onReconnecting = () => { armed = false; disruptedAt = Date.now(); };
     const announce = (kind: "joined" | "left", participant: RemoteParticipant) => {
       const id = Date.now() + Math.random();
       const name = participantName(participant) || "A participant";
@@ -4080,8 +4173,13 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
       if (armed && isNew) announce("joined", participant);
     };
     const onLeft = (participant: RemoteParticipant) => {
-      const wasKnown = known.delete(participant.identity);
-      if (armed && wasKnown) announce("left", participant);
+      // When our own link restarts LiveKit reports everyone as gone just before it reports the reconnect, so wait a moment and only
+      // announce people who really left while we were healthy. People who vanished because of our connection stay "known".
+      window.setTimeout(() => {
+        if (room.state !== ConnectionState.Connected || Date.now() - disruptedAt < 10000) return;
+        const wasKnown = known.delete(participant.identity);
+        if (armed && wasKnown) announce("left", participant);
+      }, 800);
     };
     room.on(RoomEvent.Connected, onConnected);
     room.on(RoomEvent.Reconnecting, onReconnecting);
@@ -4766,8 +4864,9 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
   });
   // Your own card always lives on the first screen (right after the current speaker and the host), so you never have to page to find yourself.
   useEffect(() => {
+    if (room.state !== ConnectionState.Connected || link.hold) return; // people vanish while our own link is down; keep the focus
     if (spotlightIdentity && !participants.some((participant) => participant.identity === spotlightIdentity)) setSpotlightIdentity(null);
-  }, [participants, spotlightIdentity]);
+  }, [participants, spotlightIdentity, link.hold, link.stale, room]);
   const localSlot = orderedParticipants.findIndex((participant) => participant.isLocal);
   if (localSlot >= PARTICIPANTS_PER_SCREEN && orderedParticipants[0]?.identity !== spotlightIdentity) {
     const [self] = orderedParticipants.splice(localSlot, 1);
@@ -4775,9 +4874,29 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
   }
   const tracksByIdentity = new Map(trackRefs.map((trackRef) => [trackRef.participant.identity, trackRef]));
   const visualParticipants = orderedParticipants.map((participant) => ({ participant, trackRef: tracksByIdentity.get(participant.identity) })).filter((item) => item.trackRef);
-  const pages = Math.max(1, Math.ceil(visualParticipants.length / PARTICIPANTS_PER_SCREEN));
+  // Keep a snapshot of who is in the room while the link is healthy. When our own connection drops, LiveKit empties the participant list;
+  // we keep showing those people (blurred) in their same places until the room is back and has re-filled.
+  const linkStale = link.stale || room.state !== ConnectionState.Connected;
+  const holdRoster = linkStale || link.hold;
+  useEffect(() => {
+    if (holdRoster) return;
+    const timer = window.setTimeout(() => {
+      if (room.state !== ConnectionState.Connected) return;
+      rosterRef.current = visualParticipants.map(({ participant }) => ({ identity: participant.identity, name: participantName(participant) || "Participant", picture: participantPicture(participant.metadata, participant.identity), isHost: getParticipantRole(participant) === "host" }));
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  });
+  type StageEntry = (typeof visualParticipants)[number] | { ghost: RosterEntry; participant?: undefined; trackRef?: undefined };
+  let stageItems: StageEntry[] = visualParticipants;
+  if (holdRoster && rosterRef.current.length > 0) {
+    const live = new Map(visualParticipants.map((item) => [item.participant.identity, item] as const));
+    const known = new Set(rosterRef.current.map((entry) => entry.identity));
+    stageItems = [...rosterRef.current.map((entry): StageEntry => live.get(entry.identity) ?? { ghost: entry }), ...visualParticipants.filter((item) => !known.has(item.participant.identity))];
+  }
+  const peopleCount = holdRoster ? Math.max(participants.length, stageItems.length) : participants.length;
+  const pages = Math.max(1, Math.ceil(stageItems.length / PARTICIPANTS_PER_SCREEN));
   const currentPage = Math.min(page, pages - 1);
-  const visibleParticipants = visualParticipants.slice(currentPage * PARTICIPANTS_PER_SCREEN, currentPage * PARTICIPANTS_PER_SCREEN + PARTICIPANTS_PER_SCREEN);
+  const visibleParticipants = stageItems.slice(currentPage * PARTICIPANTS_PER_SCREEN, currentPage * PARTICIPANTS_PER_SCREEN + PARTICIPANTS_PER_SCREEN);
 
   const goToPage = (target: number) => {
     const next = Math.max(0, Math.min(pages - 1, target));
@@ -4835,25 +4954,37 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
       <div className="room-top-stack">
         <div className="room-top-bar">
           <div className="room-top-title" title={meeting.title}><span>{meeting.title}</span></div>
-          <button type="button" className="room-top-people" onClick={openPeopleTab} aria-label={`${participants.length} ${participants.length === 1 ? "person" : "people"} in the meeting. Open the people list`} title="See who is in the meeting"><Users size={14}/><b>{participants.length}</b><span>{participants.length === 1 ? "person" : "people"}</span></button>
+          <button type="button" className="room-top-people" onClick={openPeopleTab} aria-label={`${peopleCount} ${peopleCount === 1 ? "person" : "people"} in the meeting. Open the people list`} title="See who is in the meeting"><Users size={14}/><b>{peopleCount}</b><span>{peopleCount === 1 ? "person" : "people"}</span></button>
           <button type="button" className={`room-top-pip ${pip.active ? "is-active" : ""}`} onClick={() => { if (!pip.supported) { window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Picture-in-picture isn't available in this browser." } })); return; } void pip.toggle(); }} aria-pressed={pip.active} title={pip.active ? "Close the floating window" : "Keep the call floating while you use other apps"}><PictureInPicture2 size={14}/><span>{pip.active ? "Close" : "PiP"}</span></button>
         </div>
+        {(linkStale || link.weak) && <div className={`room-connection-banner ${linkStale ? "is-severe" : ""}`} role="status" aria-live="polite"><span className="room-connection-icon"><WifiOff size={16}/></span><span className="room-connection-copy"><b>{link.offline ? "You're offline" : link.state === ConnectionState.Disconnected ? "Connection lost" : linkStale ? "Reconnecting…" : "Slow connection"}</b><small>{link.offline ? "Check your internet. You're still in the room and will reconnect automatically." : link.state === ConnectionState.Disconnected ? "You are no longer connected to the call." : linkStale ? "Your connection dropped. Everyone is still here; we are bringing you back." : "Audio and video may be delayed or blurry. Try a place with a stronger signal."}</small></span></div>}
         {RECORDING_UI_ENABLED && recordingState && <div className={`meeting-recording-banner meeting-recording-${recordingState.status}`} role="status" aria-live="polite"><span className="meeting-recording-dot"/><b>{recordingState.status === "recording" ? "Recording" : recordingState.status === "consent_pending" ? "Waiting for recording consent" : recordingState.status === "uploading" ? "Saving recording" : recordingState.status === "ready" ? "Recording saved" : recordingState.status === "failed" ? "Recording upload failed" : recordingState.status === "declined" ? "Recording declined" : "Recording"}</b>{recordingState.status === "consent_pending" && <small>{recordingState.consents.filter((item) => item.decision === "accepted").length}/{recordingState.consents.length} approved</small>}{recordingState.status === "uploading" && <><small>{recordingState.uploadProgressPercent || 0}% uploaded</small><span className="meeting-recording-progress"><i style={{ width: `${Math.max(0, Math.min(100, recordingState.uploadProgressPercent || 0))}%` }}/></span></>}</div>}
         {participants.filter((participant) => raisedHands[participant.identity]).map((participant) => <div className="raised-hand-chip" key={participant.identity} title={`${participantName(participant) || "Participant"} raised a hand`}><Hand size={13}/><span>{participantName(participant) || "Participant"}{participant.identity === localIdentity ? " (You)" : ""}</span></div>)}
       </div>
       <div className={`participant-grid-wrap no-swipe ${screenShare ? "has-screen-share" : ""}`} onTouchStart={onPageTouchStart} onTouchEnd={onPageTouchEnd} onTouchCancel={() => { swipeStart.current = null; }}>
         {screenShare && <ScreenShareStage key={screenShare.participant.identity} screenShare={screenShare} onStop={() => void toggleScreenShare()} onSwitch={() => void toggleScreenShare(true)}/>}
-        <div className={`participant-grid participant-grid-count-${visibleParticipants.length || 1} ${pageAnim.n > 0 ? `page-in-${pageAnim.dir}-${pageAnim.n % 2}` : ""} ${spotlightIdentity && visibleParticipants.some((item) => item.participant.identity === spotlightIdentity) ? "has-spotlight" : ""}`}>
-          {visibleParticipants.map(({ participant, trackRef }) => {
+        <div className={`participant-grid participant-grid-count-${visibleParticipants.length || 1} ${pageAnim.n > 0 ? `page-in-${pageAnim.dir}-${pageAnim.n % 2}` : ""} ${spotlightIdentity && visibleParticipants.some((item) => item.participant?.identity === spotlightIdentity) ? "has-spotlight" : ""}`}>
+          {visibleParticipants.map((item) => {
+            if (!item.participant) {
+              const ghost = item.ghost;
+              return <div className={`participant-card participant-ghost participant-cam-off ${ghost.isHost ? "participant-host" : ""}`} key={`ghost-${ghost.identity}`} aria-label={`${ghost.name}, waiting for your connection`}>
+                <div className="participant-avatar" aria-hidden="true"><div className="participant-avatar-stack"><ProfilePhoto src={ghost.picture} name={ghost.name} className="participant-avatar-photo" size={512}/></div></div>
+                {ghost.isHost && <span className="participant-role-label">HOST</span>}
+                <div className="participant-stale-veil" aria-hidden="true"><span><WifiOff size={17}/></span></div>
+                <div className="participant-name-overlay"><span className="participant-name-copy" title={ghost.name}><b>{ghost.name}</b></span></div>
+              </div>;
+            }
+            const { participant, trackRef } = item;
             const isHost = getParticipantRole(participant) === "host";
             const hand = Boolean(raisedHands[participant.identity]);
             const speaking = participant.identity === localIdentity ? localVoiceActivity.speaking : participant.isSpeaking;
             const cameraVideoOn = isTrackReference(trackRef!) && Boolean(trackRef!.publication?.track) && !trackRef!.publication?.isMuted;
-            return <div className={`participant-card ${speaking && cameraVideoOn ? "participant-speaking" : ""} ${cameraVideoOn ? "participant-cam-on" : "participant-cam-off"} ${isHost ? "participant-host" : ""} ${participant.identity === localIdentity ? "participant-local" : ""} ${participant.identity === spotlightIdentity ? "participant-spotlight" : ""}`} key={participant.identity} onClick={(event) => { if (participant.isLocal) return; if (!(event.target as HTMLElement).closest(".participant-avatar-stack, .participant-name-copy")) return; setPersonSheetId(participant.identity); }}>
+            return <div className={`participant-card ${speaking && cameraVideoOn ? "participant-speaking" : ""} ${cameraVideoOn ? "participant-cam-on" : "participant-cam-off"} ${isHost ? "participant-host" : ""} ${participant.identity === localIdentity ? "participant-local" : ""} ${linkStale && !participant.isLocal ? "participant-stale" : ""} ${participant.identity === spotlightIdentity ? "participant-spotlight" : ""}`} key={participant.identity} onClick={(event) => { if (participant.isLocal) return; if (!(event.target as HTMLElement).closest(".participant-avatar-stack, .participant-name-copy")) return; setPersonSheetId(participant.identity); }}>
               <ParticipantTile trackRef={trackRef!} />
               <ParticipantAvatar trackRef={trackRef!} participant={participant} />
               {isHost && <span className="participant-role-label">HOST</span>}
-              <div className="participant-name-overlay"><span className="participant-name-copy" title={participantName(participant) || "Participant"}><b>{participantName(participant) || "Participant"}{participant.identity === localIdentity ? " · You" : ""}</b></span><span className="participant-badges"><MicOffBadge participant={participant}/>{hand && <span className="raised-hand-badge" title="Raised hand"><Hand size={15}/></span>}{speaking && <span className="speaker-mic" title="Speaking" aria-label="Speaking"><Mic size={14}/></span>}</span></div>
+              {linkStale && !participant.isLocal && <div className="participant-stale-veil" aria-hidden="true"><span><WifiOff size={17}/></span></div>}
+              <div className="participant-name-overlay"><span className="participant-name-copy" title={participantName(participant) || "Participant"}><b>{participantName(participant) || "Participant"}{participant.identity === localIdentity ? " · You" : ""}</b></span><span className="participant-badges"><MicOffBadge participant={participant} speaking={speaking} onToggle={role === "host" && !participant.isLocal ? (micOn) => { if (micOn) setMicConfirmId(participant.identity); else void moderateParticipant(participant, "request-unmute"); } : undefined}/>{hand && <span className="raised-hand-badge" title="Raised hand"><Hand size={15}/></span>}{speaking && !(role === "host" && !participant.isLocal) && <span className="speaker-mic" title="Speaking" aria-label="Speaking"><Mic size={14}/></span>}</span></div>
             </div>;
           })}
         </div>
@@ -4878,7 +5009,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
                 <RdButton label={isCameraEnabled ? "Turn camera off" : "Turn camera on"} on={isCameraEnabled} onClick={() => void toggleMedia("camera")} icon={<RdCameraIcon off={!isCameraEnabled}/>}/>
                 <button type="button" data-popover="videoinput" className="rd-chevron" onClick={() => setDeviceMenu(deviceMenu === "videoinput" ? null : "videoinput")} aria-label="Choose camera" title="Choose camera"><ChevronDown size={11} strokeWidth={3}/></button>
               </div>,
-              <div className="rd-slot" key="people"><RdButton label="See who is in the meeting" on={peopleOpen} onClick={() => { setPeopleViewTab("people"); setPeopleOpen(true); setMessagesOpen(false); setDirectContact(null); setNotesOpen(false); }} icon={<Users size={24} strokeWidth={2.2}/>} badge={<i className="rd-badge rd-badge-count">{participants.length}</i>}/></div>,
+              <div className="rd-slot" key="people"><RdButton label="See who is in the meeting" on={peopleOpen} onClick={() => { setPeopleViewTab("people"); setPeopleOpen(true); setMessagesOpen(false); setDirectContact(null); setNotesOpen(false); }} icon={<Users size={24} strokeWidth={2.2}/>} badge={<i className="rd-badge rd-badge-count">{peopleCount}</i>}/></div>,
               <div className="rd-slot" key="hand"><RdButton label={handRaised ? "Lower your hand" : "Raise your hand"} on={handRaised} onClick={() => { void toggleHand(); }} icon={<Hand size={24} strokeWidth={2.2}/>}/></div>,
               <div className="rd-slot" key="share"><RdButton label={isScreenShareEnabled ? "Stop sharing screen" : "Share screen"} on={isScreenShareEnabled} onClick={() => { void toggleScreenShare(); }} icon={<RdShareIcon/>}/></div>,
               <div className="rd-slot" key="notes"><RdButton label="Open collaborative meeting notes" onClick={() => { setNotesOpen(true); setMessagesOpen(false); setPeopleOpen(false); setDirectContact(null); }} icon={<FileText size={24} strokeWidth={2.2}/>}/></div>,
@@ -4890,6 +5021,8 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
               role === "host" && <div className="rd-slot" key="end"><RdButton label="End for everyone" danger disabled={ending} onClick={() => { onEndForEveryone(); }} icon={<X size={24} strokeWidth={2.4}/>}/></div>,
             ];
             const extras = rest.filter((item): item is ReactNode => Boolean(item));
+            // Phones: sections of four. Desktop: exactly two sections (the main controls, then the rest).
+            if (wideDock) return [[...first, ...extras.slice(0, 4)], extras.slice(4)].filter((section) => section.length > 0);
             const sections: ReactNode[][] = [first];
             for (let i = 0; i < extras.length; i += 4) sections.push(extras.slice(i, i + 4));
             return sections;
@@ -5012,6 +5145,12 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
           </>}
         </div>
       </RoomSheet>;
+    })()}
+    {micConfirmId && (() => {
+      const target = participants.find((item) => item.identity === micConfirmId);
+      if (!target || target.isLocal) return null;
+      const targetName = participantName(target) || "this participant";
+      return <ConfirmPrompt icon={<MicOff size={26}/>} title="Mute microphone?" message={`${targetName}'s microphone will be turned off. They can turn it back on, or you can send a request.`} confirmLabel="Yes, mute" cancelLabel="Cancel" onCancel={() => setMicConfirmId(null)} onConfirm={() => { setMicConfirmId(null); void moderateParticipant(target, "mute-mic"); }}/>;
     })()}
     {directContact && <div className="messages-modal-backdrop private-chat-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setDirectContact(null); }}><section className="messages-modal private-chat-modal" role="dialog" aria-modal="true" aria-label={`Private conversation with ${directContact.name}`}><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setDirectContact(null)} aria-label="Back to call"><ArrowLeft size={18}/></button><ProfilePhoto src={directContact.picture} name={directContact.name} size={64} className="private-chat-avatar"/><div className="meeting-panel-heading"><b>{directContact.name}</b><small>Private one-to-one conversation</small></div><button className="room-icon-button" onClick={() => setDirectContact(null)} aria-label="Close private messages"><X size={18}/></button></header><nav className="meeting-panel-tabs" aria-label="Meeting tools"><button type="button" className="meeting-panel-tab" onClick={() => { setDirectContact(null); setPeopleViewTab("people"); setPeopleOpen(true); }}>People</button><button type="button" className="meeting-panel-tab meeting-panel-tab-active" aria-current="page" onClick={() => { setDirectContact(null); setPeopleViewTab("private"); setPeopleOpen(true); }}>Private chats</button><button type="button" className="meeting-panel-tab" onClick={() => { setDirectContact(null); setMessagesOpen(true); }}>Messages</button><button type="button" className="meeting-panel-tab" onClick={() => { setDirectContact(null); setNotesOpen(true); }}>Notes</button></nav><div className="messages-modal-body private-chat-body">{privateLoading ? <div className="messages-empty"><LoaderCircle size={23} className="spin"/><span>Loading private conversation…</span></div> : privateMessages.length === 0 ? <div className="messages-empty"><MessageCircle size={25}/><b>No private messages yet</b><span>Only you and {directContact.name} can see this conversation.</span></div> : privateMessages.map((message, index) => {
           const own = message.senderUserId === localUserId;

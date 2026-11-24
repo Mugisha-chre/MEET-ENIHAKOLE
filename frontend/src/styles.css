@@ -4233,3 +4233,45 @@ input:-webkit-autofill, textarea:-webkit-autofill, select:-webkit-autofill { -we
 .room-presence-toast { border-color: rgba(255,255,255,.14); }
 .conference-fullscreen-target[data-theme="light"] .room-presence-joined .room-presence-text b, :root[data-theme="light"] .room-presence-joined .room-presence-text b { color: #17803f; }
 .conference-fullscreen-target[data-theme="light"] .room-presence-left .room-presence-text b, :root[data-theme="light"] .room-presence-left .room-presence-text b { color: #a3122c; }
+
+/* ==========================================================================
+   Weak / dropped connection: banner, and everyone stays on screen (blurred) instead of vanishing.
+   ========================================================================== */
+.room-connection-banner { flex: 1 1 100%; display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 12px; color: #2b1a00; background: #f2c14e; border: 1px solid rgba(255,255,255,.35); box-shadow: 0 8px 22px rgba(0,0,0,.35); animation: presence-in .26s cubic-bezier(.22,1,.36,1) both; pointer-events: none; }
+.room-connection-banner.is-severe { color: #fff; background: #b3203a; }
+.room-connection-icon { flex: 0 0 auto; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: rgba(0,0,0,.14); }
+.room-connection-banner.is-severe .room-connection-icon { animation: stale-pulse 1.6s ease-in-out infinite; }
+.room-connection-copy { display: flex; flex-direction: column; min-width: 0; line-height: 1.3; }
+.room-connection-copy b { font-size: 13px; }
+.room-connection-copy small { font-size: 11px; opacity: .9; }
+.participant-card.participant-stale > .lk-participant-tile, .participant-card.participant-stale > .participant-avatar,
+.participant-card.participant-ghost > .participant-avatar { filter: blur(7px) saturate(.75); transform: scale(1.05); transition: filter .35s ease; }
+.participant-stale-veil { position: absolute; inset: 0; z-index: 3; display: grid; place-items: center; background: rgba(14,8,11,.3); pointer-events: none; }
+.participant-stale-veil > span { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; color: #fff; background: rgba(20,10,14,.72); animation: stale-pulse 1.6s ease-in-out infinite; }
+.participant-ghost .participant-avatar-stack, .participant-ghost .participant-name-copy { pointer-events: none; cursor: default; }
+@keyframes stale-pulse { 0%, 100% { opacity: .65; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .room-connection-banner.is-severe .room-connection-icon, .participant-stale-veil > span { animation: none; } }
+
+/* ==========================================================================
+   Call bar: dots centred under the whole bar; desktop shows two big sections. Confirm sheets keep a bottom margin.
+   ========================================================================== */
+.rd-dots { grid-column: 1 / -1; }
+@media (min-width: 900px) {
+  .rd-pill { grid-template-columns: 568px auto; }
+  .rd-page-inner { display: flex; justify-content: center; gap: 14px; }
+}
+
+/* Host tap target on a participant's microphone icon. */
+.mic-control-badge { position: relative; width: 26px; height: 26px; padding: 0; display: grid; place-items: center; color: #fff; border: 1px solid rgba(255,255,255,.22); border-radius: 8px; cursor: pointer; pointer-events: auto; -webkit-tap-highlight-color: transparent; transition: transform .15s ease, background-color .2s ease; }
+.mic-control-badge::before { content: ""; position: absolute; inset: -8px; }
+.mic-control-badge:active { transform: scale(.9); }
+.mic-control-badge.is-off { background: rgba(176,38,62,.92); }
+.mic-control-badge.is-on { background: rgba(32,20,27,.82); }
+.mic-control-badge.is-speaking { color: #3a1e2b; border-color: rgba(255,255,255,.5); background: linear-gradient(135deg, #f3dba9, #e8ca91); }
+@media (max-width: 720px) { .mic-control-badge { width: 22px; height: 22px; } .mic-control-badge svg { width: 12px; height: 12px; } }
+
+/* Leave / end sheets on phones: floating sheet with room underneath instead of touching the screen edge. */
+@media (max-width: 720px) {
+  .modal-backdrop.confirm-end-backdrop, .modal-backdrop.confirm-prompt-backdrop { padding: 0 12px calc(16px + env(safe-area-inset-bottom, 0px)); }
+  .confirm-end-backdrop .modal-panel.confirm-end-panel, .confirm-prompt-backdrop .modal-panel.confirm-end-panel { width: 100%; border-radius: 22px; border-bottom: 1px solid rgba(225,162,180,.18); padding: 24px 20px 20px; }
+}
