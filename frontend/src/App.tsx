@@ -2300,14 +2300,16 @@ function RdCarousel({ pages, leave }: { pages: ReactNode[][]; leave: ReactNode }
     const nodes = track.children;
     for (let i = 0; i < nodes.length; i += 1) {
       const e = Math.max(0, 1 - Math.abs(i - pos)); // 1 = fully in view, 0 = fully away
-      (nodes[i] as HTMLElement).style.setProperty("--e", e.toFixed(3));
+      const text = e.toFixed(3);
+      const node = nodes[i] as HTMLElement;
+      if (node.dataset.e !== text) { node.dataset.e = text; node.style.setProperty("--e", text); } // sections far away stay untouched
     }
   };
   const animateTo = (target: number, velocity = 0) => {
     window.cancelAnimationFrame(animRef.current);
     const from = posRef.current; const dist = target - from;
     if (Math.abs(dist) < 0.001 || reduced()) { paint(target); return; }
-    const duration = Math.max(180, Math.min(340, 340 - Math.abs(velocity) * 90));
+    const duration = Math.max(170, Math.min(340, 340 - Math.abs(velocity) * 90)) * (0.6 + 0.4 * Math.min(1, Math.abs(dist)));
     const t0 = performance.now();
     const step = (now: number) => {
       const k = Math.min(1, (now - t0) / duration);
@@ -2346,24 +2348,29 @@ function RdCarousel({ pages, leave }: { pages: ReactNode[][]; leave: ReactNode }
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.pointerType === "mouse" && event.button !== 0) return;
     if (countRef.current < 2) return;
-    window.cancelAnimationFrame(animRef.current);
     dragRef.current = { id: event.pointerId, x: event.clientX, y: event.clientY, start: posRef.current, t: performance.now(), lastX: event.clientX, lastT: performance.now(), v: 0, active: false };
   };
   const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current; if (!drag || drag.id !== event.pointerId) return;
-    const dx = event.clientX - drag.x; const dy = event.clientY - drag.y;
+    let dx = event.clientX - drag.x; const dy = event.clientY - drag.y;
     if (!drag.active) {
       if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
       if (Math.abs(dy) > Math.abs(dx)) { dragRef.current = null; return; }
+      // The drag takes over from wherever the bar is right now (also in the middle of an animation) and starts from this very
+      // finger position, so nothing jumps when the gesture is recognised.
+      window.cancelAnimationFrame(animRef.current);
       drag.active = true; suppressClick.current = true;
+      drag.start = posRef.current; drag.x = event.clientX; drag.lastX = event.clientX; drag.lastT = performance.now(); drag.v = 0;
       try { viewRef.current?.setPointerCapture(event.pointerId); } catch { /* Capture is optional. */ }
+      return;
     }
     const now = performance.now();
-    if (now > drag.lastT) drag.v = (event.clientX - drag.lastX) / (now - drag.lastT);
+    if (now > drag.lastT) drag.v = drag.v * 0.55 + ((event.clientX - drag.lastX) / (now - drag.lastT)) * 0.45; // smoothed finger speed
     drag.lastX = event.clientX; drag.lastT = now;
     const width = viewRef.current?.clientWidth || 1;
     // However far the finger travels, the position stays within one section of where the gesture started (soft resistance at the ends).
     const base = Math.round(drag.start);
+    dx = event.clientX - drag.x;
     let pos = drag.start - dx / width;
     pos = Math.max(base - 1, Math.min(base + 1, pos));
     const last = countRef.current - 1;
@@ -2378,13 +2385,13 @@ function RdCarousel({ pages, leave }: { pages: ReactNode[][]; leave: ReactNode }
     window.setTimeout(() => { suppressClick.current = false; }, 60);
     const base = Math.round(drag.start);
     const moved = posRef.current - base; // negative = towards the previous section
-    const fast = Math.abs(drag.v) > 0.3;
+    const velocity = performance.now() - drag.lastT > 90 ? 0 : drag.v; // a finger that rested before lifting is not a flick
+    const fast = Math.abs(velocity) > 0.3;
     let target = base;
-    if (!cancelled) {
-      if (moved > 0.18 || (fast && drag.v < 0 && moved > 0.02)) target = base + 1;
-      else if (moved < -0.18 || (fast && drag.v > 0 && moved < -0.02)) target = base - 1;
-    }
-    settle(target, drag.v);
+    if (moved > 0.18 || (fast && velocity < 0 && moved > 0.02)) target = base + 1;
+    else if (moved < -0.18 || (fast && velocity > 0 && moved < -0.02)) target = base - 1;
+    void cancelled;
+    settle(target, velocity);
   };
   const goTo = (index: number) => { settle(index); };
   const onDotsKey = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -2393,7 +2400,7 @@ function RdCarousel({ pages, leave }: { pages: ReactNode[][]; leave: ReactNode }
   };
   return <div className="rd-bar">
     <div className="rd-pill" role="toolbar" aria-label="Call controls">
-      <div className="rd-carousel" ref={viewRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={(event) => finish(event, false)} onPointerCancel={(event) => finish(event, true)}
+      <div className="rd-carousel" ref={viewRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={(event) => finish(event, false)} onPointerCancel={(event) => finish(event, true)} onLostPointerCapture={(event) => { if (event.target === event.currentTarget) finish(event, true); }}
         onClickCapture={(event) => { if (suppressClick.current) { event.preventDefault(); event.stopPropagation(); } }}
         onFocusCapture={(event) => { const node = (event.target as HTMLElement).closest(".rd-page"); const index = node ? Array.from(node.parentElement?.children ?? []).indexOf(node) : -1; if (index >= 0 && index !== pageRef.current) settle(index); }}>
         <div className="rd-track" ref={trackRef}>
@@ -3731,7 +3738,8 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
   const [privateDraft, setPrivateDraft] = useState("");
   const [privateLoading, setPrivateLoading] = useState(false);
   const [privateSending, setPrivateSending] = useState(false);
-  const [privateNotice, setPrivateNotice] = useState<DirectContact | null>(null);
+  // Private-message notices stay on screen (one per sender) until the receiver opens the chat or closes the notice.
+  const [privateNotices, setPrivateNotices] = useState<Array<DirectContact & { count: number }>>([]);
   const [moderatorRequest, setModeratorRequest] = useState<{ media: "microphone" | "camera"; hostName: string } | null>(null);
   const [moderationBusy, setModerationBusy] = useState<string | null>(null);
   const [hostMenuIdentity, setHostMenuIdentity] = useState<string | null>(null);
@@ -3807,7 +3815,6 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
   const notesLoadedRef = useRef(Boolean(readCache<NotesCache>(notesCacheKey)));
   const notesBaseRef = useRef(readCache<NotesCache>(notesCacheKey)?.value.html || "");
   const directContactRef = useRef<DirectContact | null>(null);
-  const privateNoticeTimer = useRef(0);
   const localIdentity = localParticipant.identity;
   const localUserId = participantUserId(localParticipant);
   const onLeaveRef = useRef(onLeave);
@@ -3901,9 +3908,10 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
         if (directContactRef.current?.userId === contact.userId) {
           setPrivateMessages((current) => current.some((item) => item.id === message.id) ? current : [...current, message].slice(-200));
         } else {
-          setPrivateNotice(contact);
-          window.clearTimeout(privateNoticeTimer.current);
-          privateNoticeTimer.current = window.setTimeout(() => setPrivateNotice(null), 7000);
+          setPrivateNotices((current) => {
+            const previous = current.find((item) => item.userId === contact.userId);
+            return [...current.filter((item) => item.userId !== contact.userId), { ...contact, count: (previous?.count ?? 0) + 1 }];
+          });
         }
       } else if (data.kind === "moderator-request") {
         let senderRole = "";
@@ -3925,7 +3933,8 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
     return () => { room.off(RoomEvent.DataReceived, onPrivateData); };
   }, [room, localUserId, localParticipant, meeting.ownerId]);
 
-  useEffect(() => () => window.clearTimeout(privateNoticeTimer.current), []);
+  // Opening a private chat (from the notice, the people list or recent chats) clears that person's notice.
+  useEffect(() => { if (directContact) setPrivateNotices((current) => current.some((item) => item.userId === directContact.userId) ? current.filter((item) => item.userId !== directContact.userId) : current); }, [directContact]);
   useEffect(() => { privateChatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [privateMessages.length, directContact]);
 
   // Register the logged-in account even when an existing stored LiveKit token is reused after a refresh.
@@ -4522,7 +4531,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
     setPrivateLoading(true);
     setDirectContact(contact);
     setPrivateDraft("");
-    setPrivateNotice(null);
+    setPrivateNotices((current) => current.filter((item) => item.userId !== contact.userId));
     setPeopleOpen(false);
     setMessagesOpen(false);
     setNotesOpen(false);
@@ -5115,7 +5124,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
   };
 
   // Rotating tips: one at a time, spaced out, and only when nothing else needs the person's attention.
-  const tipsBusy = messagesOpen || peopleOpen || notesOpen || moreOpen || reactionsOpen || Boolean(deviceMenu) || videoQualityMenuOpen || Boolean(directContact) || Boolean(messageToast) || Boolean(moderatorRequest) || Boolean(privateNotice) || fullscreenPrompt || presenceToasts.length > 0 || Boolean(mediaModal) || Boolean(screenShare);
+  const tipsBusy = messagesOpen || peopleOpen || notesOpen || moreOpen || reactionsOpen || Boolean(deviceMenu) || videoQualityMenuOpen || Boolean(directContact) || Boolean(messageToast) || Boolean(moderatorRequest) || fullscreenPrompt || presenceToasts.length > 0 || Boolean(mediaModal) || Boolean(screenShare);
   const weakNet = useWeakNetworkTip(room);
   const { tip: activeTip, hide: hideTip, dismissForever: dismissTip } = useRoomTips((): RoomTip[] => {
     const standalone = window.matchMedia("(display-mode: standalone)").matches || (navigator as unknown as { standalone?: boolean }).standalone === true;
@@ -5274,14 +5283,14 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
               </div>}
             </RoomSheet>}
     </div>
-    {(fullscreenPrompt || moderatorRequest || privateNotice || presenceToasts.length > 0 || messageToast || activeTip || weakNet.visible) && <div className="room-bottom-notifications" aria-live="polite">
+    {(fullscreenPrompt || moderatorRequest || privateNotices.length > 0 || presenceToasts.length > 0 || messageToast || activeTip || weakNet.visible) && <div className="room-bottom-notifications" aria-live="polite">
       {fullscreenPrompt && !fullScreen && <div className="fullscreen-fallback-prompt" role="status"><span>Fullscreen needs your permission. Tap once to enter.</span><button type="button" onClick={() => void toggleFullscreen()}>Enter fullscreen <Maximize2 size={15}/></button></div>}
       {moderatorRequest && <div className="moderator-request-banner" role="status"><span>{moderatorRequest.hostName}: turn on your {moderatorRequest.media === "microphone" ? "mic" : "camera"}?</span><button type="button" onClick={() => void acceptModeratorRequest()}>Allow</button><button type="button" className="request-dismiss" onClick={() => setModeratorRequest(null)} aria-label="Dismiss request"><X size={15}/></button></div>}
-      {privateNotice && <div className="room-private-notice" role="status"><span className="room-message-toast-icon"><MessageCircle size={16}/></span><span className="room-private-body"><b>{privateNotice.name}</b><span>Sent you a private message</span></span><button type="button" onClick={() => openPrivateContact(privateNotice)}>Open chat</button><button type="button" className="notice-dismiss" onClick={() => setPrivateNotice(null)} aria-label="Dismiss notification"><X size={14}/></button></div>}
       {presenceToasts.length > 0 && <div className="room-presence-stack" aria-live="polite">{presenceToasts.map((toast) => <div className={`room-presence-toast room-presence-${toast.kind}`} key={toast.id} role="status"><ProfilePhoto src={toast.picture} name={toast.name} size={96} className="room-presence-avatar"/><span className="room-presence-text"><b>{toast.name}</b> {toast.kind === "joined" ? "joined the meeting" : "left the meeting"}</span></div>)}</div>}
       {messageToast && <button type="button" className="room-message-toast" key={messageToast.id} onClick={() => { setMessagesOpen(true); setPeopleOpen(false); }} aria-label={`Open message from ${messageToast.name}`}><span className="room-message-toast-icon"><MessageCircle size={16}/></span><span className="room-message-toast-body"><b>{messageToast.name}</b><span>{messageToast.text}</span></span></button>}
       {weakNet.visible && <RoomTipCard tip={weakNet.tip} onHide={weakNet.hide} onDismissForever={weakNet.dismissForever}/>}
       {activeTip && !messageToast && <RoomTipCard tip={activeTip} onHide={hideTip} onDismissForever={dismissTip}/>}
+      {privateNotices.slice(-3).map((notice) => <div className="room-private-notice" key={`private-${notice.userId}`} role="status"><span className="room-message-toast-icon"><MessageCircle size={16}/></span><span className="room-private-body"><b>{notice.name}</b><span>{notice.count > 1 ? `Sent you ${notice.count} private messages` : "Sent you a private message"}</span></span><button type="button" onClick={() => openPrivateContact(notice)}>Open chat</button><button type="button" className="notice-dismiss" onClick={() => setPrivateNotices((current) => current.filter((item) => item.userId !== notice.userId))} aria-label={`Dismiss private message notice from ${notice.name}`}><X size={14}/></button></div>)}
     </div>}
     {mediaModal && <MediaPermissionModal
       kind={mediaModal.kind}

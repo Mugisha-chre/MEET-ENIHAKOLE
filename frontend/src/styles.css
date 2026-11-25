@@ -4200,7 +4200,7 @@ input:-webkit-autofill, textarea:-webkit-autofill, select:-webkit-autofill { -we
    ========================================================================== */
 .rd-bar { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 100%; min-width: 0; }
 .rd-pill { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto; column-gap: clamp(8px, 3vw, 16px); align-items: center; width: min(100%, 420px); padding: 8px clamp(10px, 3vw, 16px); border-radius: 34px; }
-.rd-carousel { grid-column: 1; grid-row: 1; min-width: 0; overflow: hidden; touch-action: pan-y; overscroll-behavior-x: contain; user-select: none; -webkit-user-select: none; contain: layout paint; cursor: grab; }
+.rd-carousel { grid-column: 1; grid-row: 1; min-width: 0; overflow: hidden; touch-action: none; overscroll-behavior-x: contain; user-select: none; -webkit-user-select: none; contain: layout paint; cursor: grab; }
 .rd-track { display: flex; width: 100%; will-change: transform; transform: translate3d(0,0,0); }
 .rd-page { --e: 1; flex: 0 0 100%; min-width: 0; }
 .rd-page:not(:first-child) { --e: 0; }
@@ -4304,3 +4304,18 @@ input:-webkit-autofill, textarea:-webkit-autofill, select:-webkit-autofill { -we
 /* The message panels end above the on-screen keyboard, so the message box is never hidden. */
 .messages-modal-backdrop { box-sizing: border-box; padding-bottom: var(--kb-inset, 0px); transition: padding-bottom .12s ease-out; }
 .is-fullscreen .messages-modal-backdrop, .is-pseudo-fullscreen .messages-modal-backdrop { padding-bottom: calc(var(--fs-gap) + var(--kb-inset, 0px)) !important; }
+
+/* ==========================================================================
+   Room connection banners (offline / reconnecting / connection lost / slow, and "You have disconnected") span the full screen width.
+   ========================================================================== */
+.room-top-stack > .room-connection-banner { flex: 0 0 auto; width: calc(100% + 24px); max-width: none; margin: 6px -12px; box-shadow: none !important; padding: 8px 14px; border-radius: 0; border-left: 0; border-right: 0; justify-content: center; text-align: left; }
+.room-top-stack > .room-connection-banner .room-connection-copy small { white-space: normal; overflow: visible; text-overflow: clip; }
+@media (max-width: 720px) { .room-top-stack > .room-connection-banner { width: calc(100% + 16px); margin: 5px -8px; padding: 7px 12px; } }
+.conference-page .room-alert { align-self: stretch; width: 100%; margin: 0; box-sizing: border-box; border-radius: 0; flex-wrap: wrap; text-align: center; }
+
+/* Private-message notices stay until the person opens the chat or closes the notice; they never shrink or scroll away under other toasts. */
+.room-bottom-notifications > .room-private-notice { flex: 0 0 auto; animation: room-alert-in .22s ease both; }
+@media (prefers-reduced-motion: reduce) { .room-bottom-notifications > .room-private-notice { animation: none; } }
+
+/* Connection banners carry no shadow in light or dark mode. */
+.room-connection-banner, .room-connection-banner.is-severe, .conference-fullscreen-target[data-theme] .room-connection-banner, :root[data-theme] .room-connection-banner { box-shadow: none !important; }
