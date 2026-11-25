@@ -4201,15 +4201,10 @@ input:-webkit-autofill, textarea:-webkit-autofill, select:-webkit-autofill { -we
 .rd-bar { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 100%; min-width: 0; }
 .rd-pill { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto; column-gap: clamp(8px, 3vw, 16px); align-items: center; width: min(100%, 420px); padding: 8px clamp(10px, 3vw, 16px); border-radius: 34px; }
 .rd-carousel { grid-column: 1; grid-row: 1; min-width: 0; overflow: hidden; touch-action: none; overscroll-behavior-x: contain; user-select: none; -webkit-user-select: none; contain: layout paint; cursor: grab; }
-.rd-track { display: flex; width: 100%; will-change: transform; transform: translate3d(0,0,0); }
-.rd-page { --e: 1; flex: 0 0 100%; min-width: 0; }
-.rd-page:not(:first-child) { --e: 0; }
-.rd-page-inner { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); justify-items: center; align-items: center; padding: 6px 0; backface-visibility: hidden; opacity: clamp(0, calc((var(--e) - .1) * 1.6), 1); }
-/* Sharp fade + scale of each button as its section moves in or out (--e: 1 in view, 0 away). Buttons are slightly staggered. */
-.rd-page-inner > * { scale: calc(.4 + .6 * clamp(0, calc(var(--e) * 1.3 - .02), 1)); }
-.rd-page-inner > :nth-child(2) { scale: calc(.4 + .6 * clamp(0, calc(var(--e) * 1.22 - .0), 1)); }
-.rd-page-inner > :nth-child(3) { scale: calc(.4 + .6 * clamp(0, calc(var(--e) * 1.14 + .0), 1)); }
-.rd-page-inner > :nth-child(4) { scale: calc(.4 + .6 * clamp(0, calc(var(--e) * 1.06 + .02), 1)); }
+.rd-track { display: flex; width: 100%; will-change: transform; transform: translate3d(0,0,0); backface-visibility: hidden; }
+.rd-page { flex: 0 0 100%; min-width: 0; }
+/* Pure slide: sections are only translated with the track (never faded or scaled mid-swipe), so no old buttons can ghost or flash back in. */
+.rd-page-inner { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); justify-items: center; align-items: center; padding: 6px 0; backface-visibility: hidden; }
 .rd-leave { grid-column: 2; grid-row: 1; display: grid; place-items: center; padding: 6px 0; }
 .rd-dots { display: flex; align-items: center; justify-content: center; min-height: 16px; }
 .rd-dot { display: grid; place-items: center; min-width: 20px; height: 18px; padding: 0 2px; border: 0; background: transparent; cursor: pointer; -webkit-tap-highlight-color: transparent; }
@@ -4223,16 +4218,17 @@ input:-webkit-autofill, textarea:-webkit-autofill, select:-webkit-autofill { -we
   .rd-pill { width: auto; grid-template-columns: 296px auto; column-gap: 20px; padding: 8px 22px; border-radius: 40px; }
 }
 @media (max-width: 380px) { .rd-pill { padding: 8px 9px; column-gap: 6px; } }
-@media (prefers-reduced-motion: reduce) { .rd-page-inner, .rd-page-inner > * { scale: none; } .rd-dot > span { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .rd-dot > span { transition: none; } }
 
 /* Participant tap targets: avatar and name open the person's actions. */
 .participant-card .participant-avatar-stack, .participant-card .participant-name-copy { pointer-events: auto; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .participant-card-local .participant-avatar-stack, .participant-local .participant-avatar-stack, .participant-local .participant-name-copy { cursor: default; }
 .person-sheet-hero { display: flex; align-items: center; gap: 12px; padding: 4px 2px 12px; }
-.person-sheet-hero > span { display: flex; flex-direction: column; min-width: 0; }
+.person-sheet-hero > span:not(.profile-photo) { display: flex; flex-direction: column; min-width: 0; }
 .person-sheet-hero b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
 .person-sheet-hero small { color: var(--rs-muted); font-size: 12px; }
-.person-sheet-avatar { flex: 0 0 auto; width: 52px; height: 52px; }
+.person-sheet-avatar, .person-sheet-hero > .profile-photo { flex: 0 0 auto; width: 52px; height: 52px; display: inline-grid; place-items: center; align-content: center; justify-content: center; box-sizing: border-box; }
+.person-sheet-hero > .profile-photo.profile-photo-letter b { display: block; line-height: 1; text-align: center; transform: translateY(.02em); }
 
 /* Messages: avatar of the sender next to each bubble, grouped like a WhatsApp group chat. */
 .chat-row { display: flex; align-items: flex-start; gap: 8px; align-self: flex-start; max-width: 94%; }

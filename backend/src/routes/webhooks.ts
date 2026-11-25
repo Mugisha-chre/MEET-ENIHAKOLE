@@ -111,7 +111,8 @@ router.post("/livekit", async (req: Request, res: Response) => {
     }
 
     if (payload.event === "room_finished" && slug) {
-      await Meeting.updateOne({ slug, status: "live" }, { $set: { status: "ended", endedAt: new Date() } });
+      // An empty room is NOT the end of a meeting: everyone (the host included) may leave and come back until the host presses
+      // End for everyone or the scheduled time plus its grace period is over (both are handled elsewhere). The next join recreates the room.
       await PlatformEvent.create({ category: "meeting", action: "room_finished", meetingSlug: slug });
     }
     return res.status(200).json({ received: true });

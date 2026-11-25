@@ -1560,6 +1560,17 @@ function MeetingRoomPage({ slug, isActive }: { slug: string; isActive: boolean }
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [confirmLeave, setConfirmLeave] = useState(false);
   const [meetingEnded, setMeetingEnded] = useState(false);
+  // Automatic return to the call after a dropped connection (slow or lost network).
+  const [recovering, setRecovering] = useState(false);
+  const aliveRef = useRef(true);
+  const recoverActive = useRef(false);
+  const recoverBusy = useRef(false);
+  const recoverTries = useRef(0);
+  const recoverTimer = useRef(0);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => { aliveRef.current = false; recoverActive.current = false; window.clearTimeout(recoverTimer.current); };
+  }, []);
   // A room that was already connected and fully loaded on the meeting page;
   // the app-level host keeps it mounted while other SPA routes are displayed.
   const [preparedRoom] = useState<Room | null>(() => { const room = preparedRooms.get(slug); return room && room.state === ConnectionState.Connected ? room : null; });
@@ -1612,9 +1623,62 @@ function MeetingRoomPage({ slug, isActive }: { slug: string; isActive: boolean }
       setEndError(cause instanceof Error ? cause.message : "Could not end the meeting.");
     } finally { setEnding(false); }
   }
-  // The room closed under us. If the host ended the meeting, show the ended screen.
+  function scheduleRejoin(delay: number) {
+    window.clearTimeout(recoverTimer.current);
+    recoverTimer.current = window.setTimeout(() => { void attemptRejoin(); }, delay);
+  }
+  function stopRecovery() {
+    recoverActive.current = false; recoverTries.current = 0;
+    window.clearTimeout(recoverTimer.current);
+    setRecovering(false);
+  }
+  function beginRecovery() {
+    if (!aliveRef.current || recoverActive.current) return;
+    recoverActive.current = true; recoverTries.current = 0;
+    setRecovering(true);
+    scheduleRejoin(400);
+  }
+  // Asks the server for a fresh room ticket; a new ticket makes the call connect again by itself. Retries until the person is back in.
+  async function attemptRejoin() {
+    if (!aliveRef.current || !recoverActive.current || recoverBusy.current) return;
+    if (typeof navigator !== "undefined" && navigator.onLine === false) { scheduleRejoin(1500); return; }
+    recoverBusy.current = true;
+    try {
+      const result = await api.join(slug);
+      if (!aliveRef.current || !recoverActive.current) return;
+      const previous = readStoredSession(slug);
+      const next: JoinSession = { ...result, audio: previous?.audio ?? false, video: previous?.video ?? false };
+      sessionStorage.setItem(`meet-session:${slug}`, JSON.stringify(next));
+      registerSession(next);
+      setSession(next);
+      // If the connection still is not up shortly, ask for a new ticket and try again (this repeats for as long as the meeting is live).
+      scheduleRejoin(12000);
+    } catch (cause) {
+      const status = cause instanceof ApiError ? cause.status : 0;
+      if (status === 410) { stopRecovery(); showEnded(); return; }
+      if (status === 401 || status === 403 || status === 404) { stopRecovery(); return; }
+      recoverTries.current += 1;
+      scheduleRejoin(recoverTries.current > 25 ? 8000 : Math.min(1000 + recoverTries.current * 600, 4000)); // never gives up while the meeting is live; slows down after a minute or so
+    } finally { recoverBusy.current = false; }
+  }
+  // The moment the network or the tab comes back, try straight away instead of waiting for the next retry.
+  useEffect(() => {
+    const kick = () => { if (recoverActive.current && !recoverBusy.current) scheduleRejoin(0); };
+    const onVisible = () => { if (document.visibilityState === "visible") kick(); };
+    window.addEventListener("online", kick);
+    window.addEventListener("focus", kick);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { window.removeEventListener("online", kick); window.removeEventListener("focus", kick); document.removeEventListener("visibilitychange", onVisible); };
+  });
+  // The room closed under us. Only the host pressing End for everyone ends a meeting; anything else is a dropped call and we return automatically.
   function handleRoomDisconnected(reason?: DisconnectReason) {
-    if (reason === DisconnectReason.ROOM_DELETED) { showEnded(); return; }
+    if (reason === DisconnectReason.ROOM_DELETED) {
+      void api.meeting(slug).then(({ meeting }) => {
+        if (meeting.status === "ended" || meeting.status === "cancelled") showEnded();
+        else { setDisconnected(true); beginRecovery(); }
+      }).catch(() => { setDisconnected(true); beginRecovery(); });
+      return;
+    }
     if (reason === DisconnectReason.PARTICIPANT_REMOVED) {
       // The host removed this person: leave the call completely and explain it with a tip toast, never a top banner.
       sessionStorage.removeItem(`meet-session:${slug}`);
@@ -1628,7 +1692,9 @@ function MeetingRoomPage({ slug, isActive }: { slug: string; isActive: boolean }
       return;
     }
     setDisconnected(true);
-    void api.meeting(slug).then(({ meeting }) => { if (meeting.status === "ended" || meeting.status === "cancelled") showEnded(); }).catch(() => { /* Keep the normal disconnected notice. */ });
+    // Someone joining with the same account elsewhere replaces this session; do not fight over the seat. A deliberate leave never reconnects.
+    if (reason !== DisconnectReason.CLIENT_INITIATED && reason !== DisconnectReason.DUPLICATE_IDENTITY) beginRecovery();
+    void api.meeting(slug).then(({ meeting }) => { if (meeting.status === "ended" || meeting.status === "cancelled") { stopRecovery(); showEnded(); } }).catch(() => { /* Keep the normal disconnected notice. */ });
   }
 
   if (meetingEnded) {
@@ -1652,12 +1718,14 @@ function MeetingRoomPage({ slug, isActive }: { slug: string; isActive: boolean }
       video={session.video}
       options={ROOM_OPTIONS}
       onDisconnected={handleRoomDisconnected}
+      onConnected={() => { stopRecovery(); setDisconnected(false); }}
+      onError={() => { if (recoverActive.current) scheduleRejoin(2500); }}
       onMediaDeviceFailure={(failure, kind) => window.dispatchEvent(new CustomEvent("meet-media-failure", { detail: { failure, kind } }))}
     >
       {!isActive && <BackgroundMeetingDock title={session.meeting.title} disconnected={disconnected} onReturn={() => navigate(`/room/${encodeURIComponent(slug)}`)} onLeave={() => setConfirmLeave(true)}/>}
       <div className={`conference-page ${!isActive ? "conference-page-audio-host" : ""}`} aria-hidden={!isActive}>
         {endError && <div className="room-alert" role="alert">{endError}</div>}
-        {disconnected && <div className="room-alert" role="status">You have disconnected from the call. <button onClick={leaveRoom}>Return to meeting</button></div>}
+        {disconnected && <div className="room-alert" role="status">{recovering ? "Connection lost. Reconnecting you to the call…" : "You have disconnected from the call."} <button onClick={leaveRoom}>{recovering ? "Leave" : "Return to meeting"}</button></div>}
         <main className="conference-main">
           <div className="conference-stage">
             <ConferenceWorkspace meeting={session.meeting} role={session.role} onLeave={leaveRoom} onLeaveClick={() => setConfirmLeave(true)} onEndForEveryone={() => endForEveryone()} ending={ending} isActive={isActive}/>
@@ -1843,6 +1911,9 @@ const ROOM_OPTIONS: RoomOptions = {
   // A full tab/browser termination still ends the web runtime and cannot be
   // kept alive by this option.
   disconnectOnPageLeave: false,
+  // Keep retrying for two minutes on a slow or dropped network before giving up (the default gives up after a few seconds);
+  // if it still gives up, the room page asks for a fresh ticket and joins again by itself.
+  reconnectPolicy: { nextRetryDelayInMs: ({ retryCount, elapsedMs }) => (elapsedMs > 120_000 ? null : Math.min(300 * Math.pow(1.6, retryCount), 4000)) },
   // Auto starts at 720p. The quality controller can restart this same camera
   // track at 360p/480p/1080p without replacing the LiveKit room or track.
   videoCaptureDefaults: { resolution: VideoPresets.h720.resolution },
@@ -2279,7 +2350,7 @@ function SeenStrip({ people, single = false }: { people: SeenPerson[]; single?: 
 
 /** Call bar: swipeable horizontal sections of round buttons with a Leave button that never moves.
  *  The swipe is driven by pointer events and transforms: a gesture can only ever move ONE section (no matter how long or fast the swipe),
- *  and every section's buttons scale/fade in and out with the finger. The little section lines live under the bar, outside its background. */
+ *  and the sections follow the finger as a pure slide (no fade/scale, so nothing ghosts). The little section lines live under the bar, outside its background. */
 function RdCarousel({ pages, leave }: { pages: ReactNode[][]; leave: ReactNode }) {
   const viewRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -2296,14 +2367,9 @@ function RdCarousel({ pages, leave }: { pages: ReactNode[][]; leave: ReactNode }
   const paint = (pos: number) => {
     posRef.current = pos;
     const track = trackRef.current; if (!track) return;
+    // Only ONE thing moves: the track, by a pure transform. The sections are never faded or scaled while sliding (that forced a repaint of the
+    // moving layer on every frame, which showed stale pixels of the old buttons "flashing" back in during the swipe).
     track.style.transform = `translate3d(${-pos * 100}%,0,0)`;
-    const nodes = track.children;
-    for (let i = 0; i < nodes.length; i += 1) {
-      const e = Math.max(0, 1 - Math.abs(i - pos)); // 1 = fully in view, 0 = fully away
-      const text = e.toFixed(3);
-      const node = nodes[i] as HTMLElement;
-      if (node.dataset.e !== text) { node.dataset.e = text; node.style.setProperty("--e", text); } // sections far away stay untouched
-    }
   };
   const animateTo = (target: number, velocity = 0) => {
     window.cancelAnimationFrame(animRef.current);
