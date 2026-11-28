@@ -2329,7 +2329,7 @@ function participantName(participant: Participant): string {
   return knownPeople.get(participant.identity)?.name || "";
 }
 
-function describeParticipantDevice(metadata: string): string {
+function describeParticipantDevice(metadata?: string): string {
   try {
     const ua = String((JSON.parse(metadata || "{}") as { userAgent?: unknown }).userAgent || "");
     if (!ua) return "Device details unavailable";
