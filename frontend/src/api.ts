@@ -126,8 +126,8 @@ async function sendWithRetry<T>(path: string, init: RequestInit, headers: Header
   throw new ApiError("The server is busy for a moment. Please try again.", lastStatus || 429);
 }
 
-function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const token = getAuthToken();
+function request<T>(path: string, init: RequestInit = {}, accessToken?: string): Promise<T> {
+  const token = accessToken || getAuthToken();
   const headers = new Headers(init.headers);
   if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   if (token) headers.set("Authorization", `Bearer ${token}`);
@@ -146,7 +146,13 @@ function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export const api = {
   googleSignIn: (credential: string) =>
     request<{ token: string; user: User }>("/auth/google", { method: "POST", body: JSON.stringify({ credential }) }),
+  requestEmailCode: (firstName: string, lastName: string, email: string) =>
+    request<{ success: boolean; expiresInSeconds: number; message: string }>("/auth/register/request-code", { method: "POST", body: JSON.stringify({ firstName, lastName, email }) }),
+  verifyEmailCode: (firstName: string, lastName: string, email: string, code: string) =>
+    request<{ token: string; user: User }>("/auth/register/verify-code", { method: "POST", body: JSON.stringify({ firstName, lastName, email, code }) }),
   me: () => request<{ user: User }>("/auth/me"),
+  updateProfile: (firstName: string, lastName: string) => request<{ user: User }>("/auth/profile", { method: "PATCH", body: JSON.stringify({ firstName, lastName }) }),
+  uploadProfilePicture: (dataUrl: string, accessToken?: string) => request<{ user: User }>("/auth/profile-picture", { method: "POST", body: JSON.stringify({ dataUrl }) }, accessToken),
   sessionHeartbeat: () => request<{ success: boolean }>("/auth/session-heartbeat", { method: "POST" }),
   logout: () => request<{ success: boolean }>("/auth/logout", { method: "POST" }),
   myMeetings: () => request<{ meetings: Meeting[] }>("/meetings/mine"),
@@ -181,6 +187,10 @@ export const api = {
     request<{ success: boolean; action: string; message: string; removedSessions?: number }>(`/meetings/${encodeURIComponent(slug)}/moderation`, {
       method: "POST", body: JSON.stringify({ identity, action }),
     }),
+  bibleVerses: (slug: string) => request<{ verses: Array<{ id: string; reference: string; text: string }>; presenters: Array<{ userId: string; email: string; displayName: string }>; activeVerse: { id: string; reference: string; text: string } | null; isHost: boolean; isPresenter: boolean }>(`/meetings/${encodeURIComponent(slug)}/bible`),
+  saveBibleVerses: (slug: string, verses: Array<{ reference: string; text: string }>) => request<{ verses: Array<{ id: string; reference: string; text: string }>; activeVerse: { id: string; reference: string; text: string } | null }>(`/meetings/${encodeURIComponent(slug)}/bible`, { method: "PUT", body: JSON.stringify({ verses }) }),
+  setBiblePresenter: (slug: string, email: string, allowed: boolean) => request<{ presenters: Array<{ userId: string; email: string; displayName: string }> }>(`/meetings/${encodeURIComponent(slug)}/bible/permission`, { method: "PATCH", body: JSON.stringify({ email, allowed }) }),
+  displayBibleVerse: (slug: string, verseId: string | null) => request<{ activeVerse: { id: string; reference: string; text: string } | null }>(`/meetings/${encodeURIComponent(slug)}/bible/display`, { method: "POST", body: JSON.stringify({ verseId }) }),
   meetingNotes: (slug: string) => request<{ note: MeetingNotesPayload }>(`/meetings/${encodeURIComponent(slug)}/notes`),
   saveMeetingNotes: (slug: string, input: { title: string; contentHtml: string; expectedRevision: number; force?: boolean }) =>
     request<{ note: MeetingNotesPayload }>(`/meetings/${encodeURIComponent(slug)}/notes`, { method: "PUT", body: JSON.stringify(input) }),

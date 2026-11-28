@@ -87,7 +87,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 }
 
 export function requireRegisteredAuth(req: Request, res: Response, next: NextFunction): void {
-  if (!req.auth || req.auth.isGuest) { res.status(401).json({ error: "A Google account is required for this action." }); return; }
+  if (!req.auth || req.auth.isGuest) { res.status(401).json({ error: "A registered account is required for this action." }); return; }
   next();
 }
 

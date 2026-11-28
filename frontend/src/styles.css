@@ -4315,3 +4315,150 @@ input:-webkit-autofill, textarea:-webkit-autofill, select:-webkit-autofill { -we
 
 /* Connection banners carry no shadow in light or dark mode. */
 .room-connection-banner, .room-connection-banner.is-severe, .conference-fullscreen-target[data-theme] .room-connection-banner, :root[data-theme] .room-connection-banner { box-shadow: none !important; }
+
+/* Focused MEET ENIHAKOLE refinements: dashboard, prayer grouping, profile sheet and stable mobile overlays. */
+.hero-copy .hero-reserved-space { min-height: 42px; height: 42px; margin: 0; padding: 0; visibility: hidden; }
+.section-heading { align-items: center; }
+.section-heading-title { min-height: 28px; display: flex; align-items: center; }
+.section-heading-title h2 { margin: 0; }
+.prayer-sections { display: flex; flex-direction: column; gap: 22px; }
+.prayer-list-section { min-width: 0; }
+.prayer-section-divider { display: flex; align-items: center; gap: 12px; margin: 3px 0 12px; color: var(--muted, #8a707b); font-size: 10px; font-weight: 850; letter-spacing: .13em; text-transform: uppercase; }
+.prayer-section-divider i { height: 1px; min-width: 0; flex: 1; background: var(--line, rgba(143,33,65,.16)); }
+.meeting-card, .stat-card, .prayer-list-section { content-visibility: visible; contain-intrinsic-size: none; }
+.meeting-card { transform: none; backface-visibility: visible; }
+
+/* The notes editor is the scrolling region; the export/save actions remain fixed at the bottom. */
+.meeting-notes-body { min-height: 0; overflow: hidden; flex: 1 1 auto; }
+.meeting-notes-scroll-content { display: flex; flex: 1 1 auto; flex-direction: column; gap: 10px; min-height: 0; overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding: 0 1px 12px; }
+.meeting-notes-scroll-content .meeting-notes-editor { flex: 1 0 auto; }
+.meeting-notes-footer { flex: 0 0 auto; display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); align-items: center; gap: 8px; padding: 10px 0 max(6px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line, #eadde1); background: inherit; }
+.meeting-notes-footer .meeting-notes-save-state { grid-column: 1 / -1; flex: initial; min-width: 0; }
+.meeting-notes-footer .button { width: 100%; min-width: 0; min-height: 42px; justify-content: center; font-size: 12px; }
+.meeting-notes-footer .button-soft { color: var(--burgundy, #8f2141); }
+:root[data-theme="light"] .conference-fullscreen-target[data-theme="light"] .meeting-notes-title-label { color: #775f69; }
+:root[data-theme="light"] .conference-fullscreen-target[data-theme="light"] .meeting-notes-title-label input { color: #482d38; border-color: #e7d8dd; background: #fff8f6; }
+:root[data-theme="light"] .conference-fullscreen-target[data-theme="light"] .meeting-notes-toolbar { border-color: #eadde1; background: #fbf6f4; }
+:root[data-theme="light"] .conference-fullscreen-target[data-theme="light"] .meeting-notes-toolbar button { color: #6c4c5b; }
+:root[data-theme="light"] .conference-fullscreen-target[data-theme="light"] .meeting-notes-editor { color: #4c303c; border-color: #e7d8dd; background: #fffefa; }
+:root[data-theme="light"] .conference-fullscreen-target[data-theme="light"] .meeting-notes-footer { background: #fffdfa; }
+@media (max-width: 520px) {
+  .meeting-notes-body { padding: 10px 10px 0; }
+  .meeting-notes-footer { gap: 7px; padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+  .meeting-notes-footer .button { flex: initial; min-height: 44px; }
+}
+
+/* Keep message sheets stable while Android/iOS resizes the visual viewport for the keyboard. */
+.messages-modal-backdrop { transition: none; will-change: auto; }
+html.keyboard-visible .messages-modal-backdrop { transition: none !important; }
+html.keyboard-visible .messages-modal { transform: none !important; backface-visibility: visible !important; }
+.chat-field { min-width: 0; contain: layout style; }
+.messages-composer { transform: none; backface-visibility: visible; }
+
+/* The center Prayer label is visually independent from the tap animation on its circular icon button. */
+@media (max-width: 720px) {
+  .mobile-bottom-nav a.mbn-fab .mbn-fab-label,
+  .mobile-bottom-nav a.mbn-fab:active .mbn-fab-label,
+  .mobile-bottom-nav a.mbn-fab.mbn-fab-active:active .mbn-fab-label {
+    transform: translateX(-50%) !important;
+    transition: none !important;
+    top: calc(100% + 12px);
+    color: #76636a !important;
+  }
+  :root[data-theme="dark"] .mobile-bottom-nav a.mbn-fab .mbn-fab-label,
+  :root[data-theme="dark"] .mobile-bottom-nav a.mbn-fab:active .mbn-fab-label,
+  :root[data-theme="dark"] .mobile-bottom-nav a.mbn-fab.mbn-fab-active:active .mbn-fab-label {
+    color: #a28d96 !important;
+  }
+}
+
+.profile-edit-content { text-align: left; }
+.profile-edit-content > .modal-brand-icon, .profile-edit-content > .section-overline, .profile-edit-content > h2, .profile-edit-content > .modal-subtitle { text-align: center; }
+.profile-edit-photo { display: flex; flex-direction: column; align-items: center; gap: 7px; margin: 4px auto 15px; border: 0; color: var(--burgundy, #8f2141); background: transparent; font: inherit; cursor: pointer; }
+.profile-edit-photo > span { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 800; }
+.profile-edit-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 8px; }
+.meeting-cover-upload { position: relative; display: flex; min-height: 118px; width: 100%; align-items: center; justify-content: center; overflow: hidden; border: 1.5px dashed var(--line-strong, #dfcbd2); border-radius: 14px; color: var(--burgundy, #8f2141); background: var(--bg-soft, #fbf2f3); cursor: pointer; }
+.meeting-cover-upload:disabled { opacity: .7; cursor: progress; }
+.meeting-cover-upload.has-image { min-height: 150px; }
+.meeting-cover-upload > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .36; }
+.meeting-cover-upload-content { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 13px; text-align: center; }
+.meeting-cover-upload-content b { font-size: 12px; }
+.meeting-cover-upload-content small { color: var(--muted, #8a707b); font-size: 10px; }
+.meeting-cover-remove { align-self: flex-start; padding: 0; border: 0; color: var(--burgundy, #8f2141); background: transparent; font-size: 10px; font-weight: 800; cursor: pointer; }
+
+/* Account creation via verified email, Bible preparation and live scripture display. */
+.auth-email-form { gap: 11px; }
+.auth-email-form label, .bible-add-form label { display: grid; gap: 6px; color: var(--muted, #806b75); font-size: 12px; font-weight: 750; }
+.auth-email-form input, .bible-add-form input, .bible-add-form textarea, .bible-presenters input { width: 100%; min-width: 0; border: 1px solid var(--line, #eadde1); border-radius: 12px; padding: 12px 13px; color: var(--text, #402a34); background: var(--surface, #fffdfa); font: inherit; outline: none; }
+.auth-email-form input:focus, .bible-add-form input:focus, .bible-add-form textarea:focus, .bible-presenters input:focus { border-color: var(--burgundy, #8f2141); box-shadow: 0 0 0 3px rgba(143,33,65,.10); }
+.bible-preparation-card { margin-top: 22px; padding: 16px; border: 1px solid var(--line, #eadde1); border-radius: 18px; background: var(--surface, #fffdfa); }
+.bible-preparation-heading { display: flex; align-items: center; gap: 12px; }
+.bible-preparation-heading > div { display: grid; flex: 1; min-width: 0; gap: 3px; }
+.bible-preparation-heading > div b { color: var(--text, #402a34); font-size: 13px; }
+.bible-preparation-heading > div small, .bible-preparation-count { color: var(--muted, #806b75); font-size: 11px; line-height: 1.5; }
+.bible-icon { display: grid; width: 38px; height: 38px; flex: 0 0 38px; place-items: center; border-radius: 12px; color: var(--burgundy, #8f2141); background: rgba(143,33,65,.09); }
+.bible-preparation-count { margin: 11px 0 0 50px; }
+.bible-tools-backdrop { z-index: 150; }
+.bible-tools-modal { max-width: 560px; }
+.bible-tools-body { display: flex; flex-direction: column; gap: 16px; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 14px 18px 20px; }
+.bible-prepared-list { display: grid; gap: 10px; }
+.bible-prepared-item { padding: 13px; border: 1px solid var(--line, #eadde1); border-radius: 13px; background: var(--surface, #fffdfa); }
+.bible-prepared-item > b { color: var(--burgundy, #8f2141); font-size: 13px; }
+.bible-prepared-item p { margin: 7px 0 10px; color: var(--text, #402a34); font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
+.bible-empty, .bible-presenters p { margin: 0; color: var(--muted, #806b75); font-size: 12px; line-height: 1.6; }
+.bible-add-form { display: grid; gap: 10px; padding: 14px; border-radius: 14px; background: var(--soft, #faf3f1); }
+.bible-add-form textarea { resize: vertical; min-height: 84px; }
+.bible-presenters { display: grid; gap: 9px; padding-top: 14px; border-top: 1px solid var(--line, #eadde1); }
+.bible-presenters > b { color: var(--text, #402a34); font-size: 13px; }
+.bible-presenters form { display: flex; gap: 8px; }
+.bible-presenters form input { flex: 1; }
+.bible-presenter-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 0; border-top: 1px solid var(--line, #eadde1); }
+.bible-presenter-row span { display: grid; min-width: 0; gap: 3px; }
+.bible-presenter-row b { color: var(--text, #402a34); font-size: 12px; }
+.bible-presenter-row small { color: var(--muted, #806b75); font-size: 10px; overflow-wrap: anywhere; }
+.bible-live-trigger { position: absolute; z-index: 42; top: max(72px, env(safe-area-inset-top) + 60px); right: max(14px, env(safe-area-inset-right)); display: inline-flex; align-items: center; gap: 7px; min-height: 38px; padding: 0 12px; border: 1px solid rgba(143,33,65,.22); border-radius: 999px; color: var(--burgundy, #8f2141); background: rgba(255,250,248,.94); box-shadow: 0 6px 20px rgba(38,13,23,.12); font: inherit; font-size: 11px; font-weight: 800; backdrop-filter: blur(12px); }
+.bible-live-overlay { position: absolute; z-index: 38; top: max(18px, env(safe-area-inset-top)); left: 50%; width: min(620px, calc(100% - 28px)); transform: translateX(-50%); padding: 14px 18px; border: 1px solid rgba(239,215,169,.35); border-radius: 16px; color: #fffaf3; background: linear-gradient(135deg, rgba(76,28,47,.97), rgba(117,32,62,.95)); box-shadow: 0 16px 45px rgba(28,8,17,.3); pointer-events: none; }
+.bible-live-overlay > span { display: flex; align-items: center; gap: 7px; color: #f1d9ae; font-size: 10px; font-weight: 850; letter-spacing: .12em; text-transform: uppercase; }
+.bible-live-overlay > b { display: block; margin-top: 7px; font-size: 15px; }
+.bible-live-overlay p { margin: 5px 0 0; font-size: 14px; line-height: 1.55; white-space: pre-wrap; }
+.people-device-info { color: var(--muted, #806b75); font-size: 10px !important; }
+@media (max-width: 720px) {
+  .bible-preparation-card { padding: 13px; }
+  .bible-tools-modal { height: min(82dvh, 760px); }
+  .bible-tools-body { padding: 12px 14px max(18px, env(safe-area-inset-bottom)); }
+  .bible-live-trigger { top: max(60px, env(safe-area-inset-top) + 52px); right: 10px; min-height: 36px; }
+  .bible-live-overlay { top: max(10px, env(safe-area-inset-top)); padding: 11px 13px; }
+  .bible-live-overlay p { font-size: 12px; }
+}
+.admin-device-usage { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:9px; }
+.admin-device-usage-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 13px; border:1px solid var(--line,#eadde1); border-radius:12px; background:var(--surface,#fffdfa); }
+.admin-device-usage-row span { display:grid; gap:4px; min-width:0; }
+.admin-device-usage-row b { color:var(--text,#402a34); font-size:12px; }
+.admin-device-usage-row small { color:var(--muted,#806b75); font-size:10px; }
+.admin-device-usage-row strong { color:var(--burgundy,#8f2141); font-size:16px; }
+
+/* Android WebView keyboard stability: avoid GPU backdrop filters/transforms on the live chat layer. */
+.messages-modal-backdrop { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
+.messages-modal { min-height: 0; contain: layout style; }
+.messages-modal-backdrop, .messages-modal, .messages-composer, .chat-field { will-change: auto !important; }
+html.keyboard-visible .messages-modal-backdrop { transition: none !important; }
+html.keyboard-visible .messages-modal,
+html.keyboard-visible .messages-composer { transform: none !important; backface-visibility: visible !important; }
+html.keyboard-visible .messages-modal { max-height: calc(100% - var(--kb-inset, 0px)); }
+html.keyboard-visible .messages-modal-body,
+html.keyboard-visible .people-directory-body,
+html.keyboard-visible .private-chat-body { overscroll-behavior: contain; }
+
+/* Avoid forced compositing layers in long lists and keyboard-resized chat sheets. */
+.meeting-card, .stat-card, .prayer-list-section { content-visibility: visible !important; contain-intrinsic-size: none !important; }
+.meeting-card { transform: none !important; backface-visibility: visible !important; }
+.messages-modal-backdrop, .messages-modal, .messages-composer, .chat-field { will-change: auto !important; }
+html.keyboard-visible .messages-modal, html.keyboard-visible .messages-composer { transform: none !important; backface-visibility: visible !important; }
+.chat-field { contain: layout style !important; }
+
+/* Optional profile photo in the email account-creation flow. */
+.signup-profile-photo-row { display:flex; align-items:center; gap:12px; padding:10px 12px; border:1px solid var(--line, #eadde1); border-radius:14px; background:var(--bg-soft, #fbf2f3); }
+.signup-profile-photo-button { display:flex; flex:0 0 auto; flex-direction:column; align-items:center; gap:5px; padding:0; border:0; color:var(--burgundy, #8f2141); background:transparent; font:inherit; cursor:pointer; }
+.signup-profile-photo-button > span { display:flex; align-items:center; gap:3px; font-size:10px; font-weight:800; white-space:nowrap; }
+.signup-profile-photo-row > p { margin:0; color:var(--muted, #8a707b); font-size:11px; line-height:1.5; }
+.signup-profile-photo { width:56px; height:56px; border-radius:50%; }

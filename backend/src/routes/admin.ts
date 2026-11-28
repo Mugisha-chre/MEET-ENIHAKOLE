@@ -23,6 +23,14 @@ const pageParams = (req: any) => ({
 });
 const pageResult = (page: number, limit: number, total: number) => ({ page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) });
 const sortOrder = (req: any) => req.query.sort === "oldest" ? 1 : -1;
+function describeClient(userAgent: string) {
+  const ua = String(userAgent || "");
+  const androidWebView = /;\s*wv\)|\bCapacitor\b/i.test(ua);
+  const browser = androidWebView ? "Android WebView" : /Edg(?:e|A|iOS)?\//i.test(ua) ? "Microsoft Edge" : /CriOS\//i.test(ua) || /Chrome\//i.test(ua) ? "Chrome" : /FxiOS\//i.test(ua) || /Firefox\//i.test(ua) ? "Firefox" : /OPR\//i.test(ua) || /OPiOS\//i.test(ua) ? "Opera" : /Safari\//i.test(ua) ? "Safari" : /AppleWebKit/i.test(ua) ? "WebKit browser" : "Unknown browser";
+  const device = /iPhone/i.test(ua) ? "iPhone" : /iPad/i.test(ua) ? "iPad" : /Android/i.test(ua) ? (androidWebView ? "Android app" : "Android device") : /Macintosh|Mac OS X/i.test(ua) ? "Mac" : /Windows/i.test(ua) ? "Windows PC" : /Linux/i.test(ua) ? "Linux device" : "Unknown device";
+  const platform = /Android/i.test(ua) ? "Android" : /iPhone|iPad|iPod/i.test(ua) ? "iOS" : /Macintosh|Mac OS X/i.test(ua) ? "macOS" : /Windows/i.test(ua) ? "Windows" : /Linux/i.test(ua) ? "Linux" : "Unknown";
+  return { browser, device, platform };
+}
 
 async function audit(actorId: string, actorName: string, action: string, detail: Record<string, unknown> = {}, meetingSlug = "") {
   await PlatformEvent.create({ category: "admin", action, actorId, actorName, detail, meetingSlug });
@@ -104,7 +112,24 @@ router.get("/overview", async (_req, res) => {
       if (item._id.action === "room_finished") row.meetingsEnded = item.count;
       trendMap.set(item._id.day, row);
     }
+    const rawDeviceRows = await Attendance.aggregate([
+      { $match: { userAgent: { $type: "string", $ne: "" } } },
+      { $group: { _id: "$userAgent", count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 300 },
+    ]);
+    const deviceUsageMap = new Map<string, { browser: string; device: string; platform: string; count: number }>();
+    for (const row of rawDeviceRows as Array<{ _id: string; count: number }>) {
+      const info = describeClient(row._id);
+      const key = `${info.device}|${info.browser}|${info.platform}`;
+      const current = deviceUsageMap.get(key) || { ...info, count: 0 };
+      current.count += row.count;
+      deviceUsageMap.set(key, current);
+    }
+    const deviceUsage = [...deviceUsageMap.values()].sort((a, b) => b.count - a.count).slice(0, 10);
+
     return res.json({
+      deviceUsage,
       stats: { totalMeetings, activeMeetings, completedMeetings, registeredAccounts, activeSessions, uniqueParticipants: uniqueParticipants.length, guestParticipants: guestParticipants.length, onlineParticipants, pageViews, pageLoads, apiRequests },
       trends: [...trendMap.values()],
       meetingStatusBreakdown: meetingStatusRows.map((item: any) => ({ label: String(item._id || "unknown"), value: item.count })),
@@ -153,12 +178,13 @@ router.get("/meetings/:slug/attendance", async (req, res) => {
     const total = await Attendance.countDocuments(filter);
     const currentPage = Math.min(page, Math.max(1, Math.ceil(total / limit)));
     const [attendance, livePeople] = await Promise.all([
-      Attendance.find(filter).sort({ joinedAt: 1, _id: 1 }).skip((currentPage - 1) * limit).limit(limit).select("participantId identity displayName isGuest joinedAt leftAt durationSeconds").lean(),
+      Attendance.find(filter).sort({ joinedAt: 1, _id: 1 }).skip((currentPage - 1) * limit).limit(limit).select("participantId identity displayName isGuest userAgent joinedAt leftAt durationSeconds").lean(),
       meeting.status === "live" ? listRoomPeople(`eni-${req.params.slug}`) : Promise.resolve([]),
     ]);
     const onlineIdentities = new Set(livePeople.map((person) => person.identity));
     const attendanceWithPresence = attendance.map((item) => ({
       ...item,
+      ...describeClient(item.userAgent),
       onlineNow: onlineIdentities.has(item.identity),
       durationSeconds: item.leftAt ? item.durationSeconds : Math.max(0, Math.round((Date.now() - new Date(item.joinedAt).getTime()) / 1000)),
     }));

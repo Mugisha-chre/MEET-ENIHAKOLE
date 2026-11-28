@@ -19,6 +19,7 @@ import { clearCachePrefix, patchCache, readCache, removeCache, writeCache } from
 import type { JoinSession, Meeting, PrivateConversationSummary, PrivateMessage, User } from "./types";
 import { GoogleContinueButton, ProfilePhoto, avatarColor, googleSignOut, hiResPhoto, preloadPhoto, preloadPhotoBriefly } from "./google";
 import { RoomTipCard, useRoomTips, useWeakNetworkTip, type RoomTip } from "./RoomTips";
+import { BibleVersePreparation, BibleVerseLiveTools } from "./BibleVerseTools";
 
 interface AppContextValue {
   user: User | null;
@@ -36,7 +37,7 @@ interface AppContextValue {
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
-// Only an explicit choice (the sun/moon button) is remembered; otherwise the app follows the browser or device light/dark setting.
+// The app always starts in light mode unless the person has explicitly saved a dark-mode choice.
 const THEME_STORAGE_KEY = "meet-enihakole-theme-choice";
 // Recording UI is enabled for host-controlled, consent-gated audio-only capture.
 const RECORDING_UI_ENABLED = true;
@@ -158,16 +159,13 @@ function formatVideoBitrate(value: number): string {
   return value >= 1_000_000 ? `${(value / 1_000_000).toFixed(1)} Mbps` : `${Math.round(value / 1000)} kbps`;
 }
 
-function systemTheme(): "light" | "dark" {
-  try { return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"; }
-  catch { return "light"; }
-}
 function storedThemeChoice(): "light" | "dark" | null {
   try { const choice = localStorage.getItem(THEME_STORAGE_KEY); return choice === "dark" || choice === "light" ? choice : null; }
   catch { return null; }
 }
 function getInitialTheme(): "light" | "dark" {
-  return storedThemeChoice() ?? systemTheme();
+  // Light is the product default. Only an explicit saved toggle may select dark mode.
+  return storedThemeChoice() ?? "light";
 }
 let activeRoomSlugInApp: string | null = null;
 function roomSlugFromPath(pathname: string): string | null {
@@ -317,6 +315,29 @@ function meetingImage(meeting: Meeting) {
   return meeting.thumbnailUrl || "/og-default.png";
 }
 
+async function optimizeImageFile(file: File, maxWidth = 1400, maxHeight = 1400): Promise<string> {
+  if (!/^image\/(jpeg|png|webp)$/i.test(file.type)) throw new Error("Choose a JPG, PNG, or WebP image.");
+  if (file.size > 15 * 1024 * 1024) throw new Error("Choose an image smaller than 15 MB.");
+  const bitmap = await createImageBitmap(file);
+  try {
+    const scale = Math.min(1, maxWidth / bitmap.width, maxHeight / bitmap.height);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("This image could not be prepared on your device.");
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((result) => result ? resolve(result) : reject(new Error("Could not optimize this image.")), "image/jpeg", 0.84));
+    if (blob.size > 8 * 1024 * 1024) throw new Error("The optimized image is still too large. Choose a smaller photo.");
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Could not read this image."));
+      reader.onerror = () => reject(new Error("Could not read this image."));
+      reader.readAsDataURL(blob);
+    });
+  } finally { bitmap.close(); }
+}
+
 /** True once a meeting's time is over (same rule the server uses), so it stops looking upcoming or live without waiting for a refresh. */
 function expireMeetingLocally(meeting: Meeting, now: number): Meeting {
   if (meeting.status !== "scheduled" && meeting.status !== "live") return meeting;
@@ -345,6 +366,7 @@ export default function App() {
   const initialPageLoad = useRef(true);
   const [clock, setClock] = useState(() => Date.now());
   const [authOpen, setAuthOpen] = useState(false);
+  const [profileEditOpen, setProfileEditOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const location = useLocation();
@@ -372,6 +394,12 @@ export default function App() {
     }, 60_000);
     return () => window.clearInterval(heartbeat);
   }, [user?.id]);
+
+  useEffect(() => {
+    const openProfileEditor = () => setProfileEditOpen(true);
+    window.addEventListener("meet-edit-profile", openProfileEditor);
+    return () => window.removeEventListener("meet-edit-profile", openProfileEditor);
+  }, []);
 
   useEffect(() => {
     const onRoomOpened = (event: Event) => {
@@ -423,15 +451,6 @@ export default function App() {
     window.requestAnimationFrame(() => window.requestAnimationFrame(() => root.classList.remove("theme-switching")));
     try { localStorage.setItem(THEME_STORAGE_KEY, next); } catch { /* Theme still applies for this session. */ }
     startTransition(() => setTheme(next));
-  }, []);
-
-  // Without a saved choice, follow the browser/device theme live (including when it switches while the app is open).
-  useEffect(() => {
-    let media: MediaQueryList;
-    try { media = window.matchMedia("(prefers-color-scheme: dark)"); } catch { return; }
-    const onChange = () => { if (!storedThemeChoice()) setTheme(media.matches ? "dark" : "light"); };
-    media.addEventListener("change", onChange);
-    return () => media.removeEventListener("change", onChange);
   }, []);
 
   useEffect(() => {
@@ -595,6 +614,7 @@ export default function App() {
       {activeRoomSlug && <MeetingRoomPage key={activeRoomSlug} slug={activeRoomSlug} isActive={activeRoomVisible}/>}
       {logoutAsk && <ConfirmPrompt icon={<LogOut size={26}/>} title="Log out of your account?" message="You will need to log in again to host prayers or see your recordings. Guests can still join with a name." confirmLabel="Yes, log out" cancelLabel="No, stay logged in" onCancel={() => setLogoutAsk(false)} onConfirm={() => { setLogoutAsk(false); performLogout(); }}/>}
       {authOpen && <AuthModal onClose={() => setAuthOpen(false)} onAuthenticated={completeAuth} currentName={user?.displayName} />}
+      {profileEditOpen && user && <ProfileEditModal user={user} onClose={() => setProfileEditOpen(false)} onUpdated={(nextUser) => { setUser(nextUser); writeCache("user", nextUser); setProfileEditOpen(false); window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Your profile has been updated." } })); }} />}
       {scheduleOpen && user && (user.canCreateMeetings || user.isAdmin) && <ScheduleModal onClose={() => setScheduleOpen(false)} onCreated={(meeting) => {
         if (meeting.meetingType === "prayer") {
           const merge = (list: Meeting[]) => [meeting, ...list.filter((item) => item.slug !== meeting.slug)];
@@ -700,12 +720,60 @@ function ProfileMenu({ user, onSignOut, onChangeAccount }: { user: User; onSignO
             {user.email && <small title={user.email}>{user.email}</small>}
           </div>
           <div className="profile-sheet-actions">
+            <button type="button" className="profile-sheet-action" onClick={() => { close(); window.dispatchEvent(new Event("meet-edit-profile")); }}><UserRound size={17}/><span>Edit profile</span></button>
             <button type="button" className="profile-sheet-action" onClick={() => { close(); onChangeAccount(); }}><Users size={17}/><span>Change account</span></button>
             <button type="button" className="profile-sheet-action profile-sheet-danger" onClick={() => { close(); onSignOut(); }}><LogOut size={17}/><span>Logout</span></button>
           </div>
         </section>
       </div>, document.body)}
   </>;
+}
+
+function ProfileEditModal({ user, onClose, onUpdated }: { user: User; onClose: () => void; onUpdated: (user: User) => void }) {
+  const [firstName, setFirstName] = useState(user.displayName.trim().split(/\s+/)[0] || "");
+  const [lastName, setLastName] = useState(user.displayName.trim().split(/\s+/).slice(1).join(" "));
+  const [photoData, setPhotoData] = useState("");
+  const [photoPreview, setPhotoPreview] = useState(user.picture || "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+  async function choosePhoto(file?: File) {
+    if (!file) return;
+    try { const data = await optimizeImageFile(file, 900, 900); setPhotoData(data); setPhotoPreview(data); setError(""); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Could not prepare the photo."); }
+  }
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    if (busy) return;
+    if (!firstName.trim() || !lastName.trim()) { setError("Enter your first and last name."); return; }
+    setBusy(true); setError("");
+    try {
+      let updated = (await api.updateProfile(firstName.trim(), lastName.trim())).user;
+      if (photoData) updated = (await api.uploadProfilePicture(photoData)).user;
+      onUpdated(updated);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not update your profile."); }
+    finally { setBusy(false); }
+  }
+  return <Modal onClose={onClose} wide={false} solidTop>
+    <form className="auth-modal-content profile-edit-content" onSubmit={save}>
+      <span className="modal-brand-icon"><UserRound size={22}/></span>
+      <p className="section-overline">YOUR ACCOUNT</p>
+      <h2>Edit profile</h2>
+      <p className="modal-subtitle">Update the name and optional photo other participants see in prayers.</p>
+      <button type="button" className="profile-edit-photo" onClick={() => inputRef.current?.click()} aria-label="Change profile photo">
+        <ProfilePhoto src={photoPreview} name={`${firstName} ${lastName}`} size={256}/>
+        <span><Plus size={15}/> Change photo</span>
+      </button>
+      <input ref={inputRef} className="visually-hidden-date-value" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void choosePhoto(event.target.files?.[0])}/>
+      <div className="form-stack">
+        <label className="field-label">First name<input value={firstName} onChange={(event) => setFirstName(event.target.value)} maxLength={40} required autoComplete="given-name"/></label>
+        <label className="field-label">Last name<input value={lastName} onChange={(event) => setLastName(event.target.value)} maxLength={40} required autoComplete="family-name"/></label>
+        <label className="field-label">Email<input value={user.email} readOnly aria-readonly="true"/></label>
+        {error && <div className="inline-error" role="alert">{error}</div>}
+        <div className="profile-edit-actions"><button type="button" className="button button-soft" onClick={onClose} disabled={busy}>Cancel</button><button type="submit" className="button button-primary" disabled={busy}>{busy ? <LoaderCircle size={16} className="spin"/> : <Check size={16}/>} Save profile</button></div>
+      </div>
+    </form>
+  </Modal>;
 }
 
 type PwaPromptEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: "accepted" | "dismissed" }> };
@@ -1000,7 +1068,7 @@ function Dashboard() {
         <div className="hero-shimmer" aria-hidden="true" />
         <div className="hero-copy">
           <h2>Join room for<br /><em>what matters.</em></h2>
-          <p>No complicated setup — just open your link and be there.</p>
+          <p className="hero-reserved-space" aria-hidden="true"/>
           <div className="hero-actions">
             <Link className="button button-cream" to="/meetings"><HeartHandshake size={17}/> Go to Prayers <ArrowRight size={16}/></Link>
             <Link className="hero-secondary" to="/recordings"><AudioLines size={17}/> Recorded Prayers</Link>
@@ -1013,7 +1081,7 @@ function Dashboard() {
       </section>
 
       <section className="section-block">
-        <div className="section-heading"><div><p className="section-overline">YOUR SPACE</p><h2>At a glance</h2></div><button className="text-action" onClick={() => navigate("/meetings")}>View prayers <ArrowRight size={15}/></button></div>
+        <div className="section-heading"><div className="section-heading-title"><h2>At a glance</h2></div><button className="text-action" onClick={() => navigate("/meetings")}>View prayers <ArrowRight size={15}/></button></div>
         <div className="stats-grid">
           <div className="stat-card"><span className="stat-icon stat-burgundy"><CalendarDays size={19}/></span><div><span className="stat-label">Upcoming Prayers</span><strong>{loadingMeetings ? "—" : String(upcomingCount).padStart(2, "0")}</strong></div><button type="button" className="stat-continue" onClick={() => navigate("/meetings")} aria-label="Continue to Upcoming Prayers">Continue<ArrowRight size={14}/></button><span className="stat-sheen"/></div>
           <div className="stat-card"><span className="stat-icon stat-gold"><Video size={19}/></span><div><span className="stat-label">Live right now</span><strong>{loadingMeetings ? "—" : String(liveCount).padStart(2, "0")}</strong>{liveCount > 0 && <small>Join the prayer</small>}</div><button type="button" className="stat-continue" onClick={() => navigate("/meetings")} aria-label="Continue to live prayers">Continue<ArrowRight size={14}/></button><span className="stat-sheen"/></div>
@@ -1075,7 +1143,7 @@ function MeetingsPage() {
   const visible = [...(user ? meetings : []), ...publicMeetings].filter((meeting) => meeting.meetingType === "prayer").filter((meeting, index, array) => array.findIndex((other) => other.slug === meeting.slug) === index);
   const [filter, setFilter] = useState<"upcoming" | "past" | "all">(() => {
     const requested = new URLSearchParams(window.location.search).get("filter");
-    return requested === "past" || requested === "all" ? requested : "upcoming";
+    return requested === "upcoming" || requested === "past" ? requested : "all";
   });
   // Newest created prayers first by default, in every tab.
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
@@ -1086,11 +1154,24 @@ function MeetingsPage() {
     if (filter === "past") return meeting.status === "ended" || meeting.status === "cancelled";
     return true;
   }).sort((a, b) => {
-    const stamp = (m: Meeting) => new Date(m.createdAt || m.startsAt).getTime() || 0;
-    // In Upcoming, prayers that are live right now are listed first.
+    const rank = (meeting: Meeting) => meeting.status === "live" ? 0 : meeting.status === "scheduled" ? 1 : 2;
+    if (filter === "all" && rank(a) !== rank(b)) return rank(a) - rank(b);
     if (filter === "upcoming" && (a.status === "live") !== (b.status === "live")) return a.status === "live" ? -1 : 1;
+    const stamp = (m: Meeting) => new Date(m.createdAt || m.startsAt).getTime() || 0;
     return (stamp(a) - stamp(b)) * (sortDir === "asc" ? 1 : -1);
   });
+  const prayerSections = filter === "all"
+    ? [
+        { label: "Live now", key: "live", items: list.filter((meeting) => meeting.status === "live") },
+        { label: "Scheduled", key: "scheduled", items: list.filter((meeting) => meeting.status === "scheduled") },
+        { label: "Ended", key: "ended", items: list.filter((meeting) => meeting.status === "ended" || meeting.status === "cancelled") },
+      ].filter((section) => section.items.length > 0)
+    : filter === "upcoming"
+      ? [
+          { label: "Live now", key: "live", items: list.filter((meeting) => meeting.status === "live") },
+          { label: "Scheduled", key: "scheduled", items: list.filter((meeting) => meeting.status === "scheduled") },
+        ].filter((section) => section.items.length > 0)
+      : [{ label: "Ended", key: "ended", items: list }].filter((section) => section.items.length > 0);
   // Switching between Upcoming / Past / All briefly shows the loading cards before the list appears.
   const [filtering, setFiltering] = useState(false);
   const filterTimer = useRef<number | undefined>(undefined);
@@ -1107,10 +1188,10 @@ function MeetingsPage() {
   return (
     <div className="meetings-page page-enter">
       <div className="page-title-row"><div><h1>Prayers</h1></div>{(user?.canCreateMeetings || user?.isAdmin) && <button className="button button-primary" onClick={() => openSchedule(false)}><Plus size={17}/> Create a prayer</button>}</div>
-      <div className="filter-bar"><div className="segmented-filter">{(["upcoming", "past", "all"] as const).map((value) => <button key={value} className={filter === value ? "filter-active" : ""} onClick={() => changeFilter(value)}>{value === "upcoming" ? "Upcoming" : value === "past" ? "Past prayers" : "All prayers"}</button>)}</div><button type="button" className={`filter-open-button ${filtersActive ? "filter-open-active" : ""}`} onClick={() => setFilterOpen(true)} aria-haspopup="dialog"><SlidersHorizontal size={15}/><span>Filter</span>{filtersActive && <i aria-hidden="true"/>}</button></div>
+      <div className="filter-bar"><div className="segmented-filter">{(["all", "upcoming", "past"] as const).map((value) => <button key={value} className={filter === value ? "filter-active" : ""} onClick={() => changeFilter(value)}>{value === "upcoming" ? "Upcoming" : value === "past" ? "Past prayers" : "All prayers"}</button>)}</div><button type="button" className={`filter-open-button ${filtersActive ? "filter-open-active" : ""}`} onClick={() => setFilterOpen(true)} aria-haspopup="dialog"><SlidersHorizontal size={15}/><span>Filter</span>{filtersActive && <i aria-hidden="true"/>}</button></div>
       <div className="meeting-count meeting-count-line">{showSkeleton ? "Loading…" : `${list.length} ${list.length === 1 ? "prayer" : "prayers"}`}</div>
       {filterOpen && <PrayerFilterModal sortDir={sortDir} onClose={() => setFilterOpen(false)} onApply={(next) => { setSortDir(next.sortDir); setFilterOpen(false); }}/>}
-      {showSkeleton ? <div className="meeting-card-grid" aria-busy="true" aria-label="Loading prayers">{Array.from({ length: 6 }, (_, index) => <MeetingCardSkeleton key={index}/>)}</div> : list.length ? <div className="meeting-card-grid">{list.map((meeting, index) => <MeetingCard key={meeting.slug} meeting={meeting} priority={index < 6}/>)}</div> : <div className="empty-state empty-large"><div className="empty-icon"><CalendarDays size={23}/></div><div><h3>{filter === "past" ? "No past prayers yet" : "A fresh page for your next prayer"}</h3><p>Online Prayers will appear here when they are scheduled.</p></div><Link className="button button-primary" to="/recordings"><AudioLines size={16}/> Recorded Prayers</Link></div>}
+      {showSkeleton ? <div className="meeting-card-grid" aria-busy="true" aria-label="Loading prayers">{Array.from({ length: 6 }, (_, index) => <MeetingCardSkeleton key={index}/>)}</div> : list.length ? <div className="prayer-sections">{prayerSections.map((section) => <section className="prayer-list-section" key={section.key}><div className="prayer-section-divider"><span>{section.label}</span><i/></div><div className="meeting-card-grid">{section.items.map((meeting, index) => <MeetingCard key={meeting.slug} meeting={meeting} priority={index < 4}/>)}</div></section>)}</div> : <div className="empty-state empty-large"><div className="empty-icon"><CalendarDays size={23}/></div><div><h3>{filter === "past" ? "No past prayers yet" : "A fresh page for your next prayer"}</h3><p>Online Prayers will appear here when they are scheduled.</p></div><Link className="button button-primary" to="/recordings"><AudioLines size={16}/> Recorded Prayers</Link></div>}
     </div>
   );
 }
@@ -1424,7 +1505,7 @@ function MeetingPage() {
           <p className="landing-description">{meeting.description || "Join ENIHAKOLE CHOIR for a time to pray, connect, and lift our voices together."}</p>
           <div className="host-row"><span className="host-avatar"><AudioLines size={19}/></span><div><small>HOSTED BY</small><strong>{meeting.ownerName}</strong></div><span className="verified-host"><ShieldCheck size={14}/> Host</span></div>
           <div className="meeting-detail-list"><div><span className="detail-icon"><CalendarDays size={18}/></span><span><b>{formatDate(meeting.startsAt, { weekday: "long", year: "numeric" }, meeting.timezone)}</b><small>{formatTime(meeting.startsAt, meeting.timezone)} · {meeting.timezone || "Meeting time"}</small></span></div><div><span className="detail-icon"><Clock3 size={18}/></span><span><b>{meeting.durationMinutes} minutes</b><small>Planned {kind} time</small></span></div><div><span className="detail-icon"><Users size={18}/></span><span><b>Join from anywhere</b><small>Phone, tablet, or computer</small></span></div></div>
-          <button className="landing-share-link" onClick={share}><Link2 size={16}/> Share this invitation <ArrowRight size={15}/></button>
+          <button className="landing-share-link" onClick={share}><Link2 size={16}/> Share this invitation <ArrowRight size={15}/></button>{user && (meeting.isOwner || user.canCreateMeetings || user.isAdmin) && <BibleVersePreparation meeting={meeting} canManage/>}
         </section>
       </main>
       <footer className="landing-footer"><span>© {new Date().getFullYear()} MEET ENIHAKOLE</span><span>Built for togetherness.</span></footer>
@@ -1699,13 +1780,11 @@ function MeetingRoomPage({ slug, isActive }: { slug: string; isActive: boolean }
 
   if (meetingEnded) {
     if (!isActive) return null;
-    const isPrayer = session?.meeting.meetingType === "prayer";
-    const returnTo = isPrayer ? "/meetings?filter=past" : `/meeting/${encodeURIComponent(slug)}`;
-    return <MeetingEndedScreen title={session?.meeting.title ?? ""} isHost={session?.role === "host"} destinationLabel={isPrayer ? "completed Online Prayers" : "this meeting's recording and notes"} onBack={() => { window.dispatchEvent(new CustomEvent("meet-room-closed", { detail: { slug } })); navigate(returnTo); }}/>;
+    return <MeetingEndedScreen title={session?.meeting.title ?? ""} isHost={session?.role === "host"} destinationLabel="your workspace" onBack={() => { window.dispatchEvent(new CustomEvent("meet-room-closed", { detail: { slug } })); navigate("/", { replace: true }); }}/>;
   }
   if (!session) {
     if (!isActive) return null;
-    return <StandaloneError message="Your room session is missing or expired. Open the invitation again to rejoin." action={<Link className="button button-primary" to={`/meeting/${slug}`}>Return to meeting</Link>}/>;
+    return <StandaloneError message="This room session is no longer active. Return to your workspace to choose a prayer or meeting." action={<Link className="button button-primary" to="/" replace>Return home</Link>}/>;
   }
 
   return (
@@ -2250,6 +2329,17 @@ function participantName(participant: Participant): string {
   return knownPeople.get(participant.identity)?.name || "";
 }
 
+function describeParticipantDevice(metadata: string): string {
+  try {
+    const ua = String((JSON.parse(metadata || "{}") as { userAgent?: unknown }).userAgent || "");
+    if (!ua) return "Device details unavailable";
+    const androidWebView = /;\s*wv\)|\bCapacitor\b/i.test(ua);
+    const device = /iPhone/i.test(ua) ? "iPhone" : /iPad/i.test(ua) ? "iPad" : /Android/i.test(ua) ? (androidWebView ? "Android app" : "Android") : /Macintosh|Mac OS X/i.test(ua) ? "Mac" : /Windows/i.test(ua) ? "Windows desktop" : /Linux/i.test(ua) ? "Linux" : "Device";
+    const browser = androidWebView ? "Android WebView" : /Edg(?:e|A|iOS)?\//i.test(ua) ? "Edge" : /CriOS\//i.test(ua) || /Chrome\//i.test(ua) ? "Chrome" : /FxiOS\//i.test(ua) || /Firefox\//i.test(ua) ? "Firefox" : /OPR\//i.test(ua) || /OPiOS\//i.test(ua) ? "Opera" : /Safari\//i.test(ua) ? "Safari" : "Browser";
+    return `${device} · ${browser}`;
+  } catch { return "Device details unavailable"; }
+}
+
 function participantPicture(metadata?: string, identity?: string): string {
   try {
     const picture = JSON.parse(metadata || "{}").picture;
@@ -2286,55 +2376,71 @@ type SeenInfo = { upTo: number; name: string; picture: string };
 function useKeyboardInset(active: boolean) {
   useEffect(() => {
     const root = document.documentElement; const viewport = window.visualViewport;
-    if (!active || !viewport) { root.style.removeProperty("--kb-inset"); return; }
+    if (!active || !viewport) { root.style.removeProperty("--kb-inset"); root.classList.remove("keyboard-visible"); return; }
     let frame = 0;
+    let settleTimer = 0;
+    let baselineHeight = Math.max(viewport.height, window.innerHeight);
     const update = () => {
       window.cancelAnimationFrame(frame);
+      window.clearTimeout(settleTimer);
       frame = window.requestAnimationFrame(() => {
-        const inset = Math.max(0, Math.round(window.innerHeight - viewport.height - viewport.offsetTop));
-        root.style.setProperty("--kb-inset", inset > 60 ? `${inset}px` : "0px");
+        const focused = document.activeElement instanceof HTMLElement && document.activeElement.matches("input,textarea,[contenteditable='true'],[contenteditable='plaintext-only']");
+        const viewportLoss = Math.max(0, baselineHeight - viewport.height - viewport.offsetTop);
+        const layoutLoss = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop);
+        const inset = Math.max(viewportLoss, layoutLoss);
+        const visible = Boolean(focused && inset > 90);
+        if (!focused && viewport.height > baselineHeight - 40) baselineHeight = Math.max(viewport.height, window.innerHeight);
+        root.style.setProperty("--kb-inset", visible ? `${Math.round(inset)}px` : "0px");
+        root.classList.toggle("keyboard-visible", visible);
+        if (!visible) settleTimer = window.setTimeout(() => { root.style.setProperty("--kb-inset", "0px"); root.classList.remove("keyboard-visible"); baselineHeight = Math.max(viewport.height, window.innerHeight); }, 160);
       });
     };
     update();
-    viewport.addEventListener("resize", update); viewport.addEventListener("scroll", update);
-    return () => { window.cancelAnimationFrame(frame); viewport.removeEventListener("resize", update); viewport.removeEventListener("scroll", update); root.style.removeProperty("--kb-inset"); };
+    viewport.addEventListener("resize", update, { passive: true });
+    const onFocusOut = () => { window.clearTimeout(settleTimer); settleTimer = window.setTimeout(update, 140); };
+    window.addEventListener("focusin", update);
+    window.addEventListener("focusout", onFocusOut);
+    return () => { window.cancelAnimationFrame(frame); window.clearTimeout(settleTimer); viewport.removeEventListener("resize", update); window.removeEventListener("focusin", update); window.removeEventListener("focusout", onFocusOut); root.style.removeProperty("--kb-inset"); root.classList.remove("keyboard-visible"); };
   }, [active]);
 }
 
 /** Message box for chats. It is a plain-text editable area rather than an <input>, so phones do not draw their password / card / address
  *  autofill bar above the keyboard (that bar covered the field). Enter sends; Shift+Enter adds a line on desktop. */
-function ChatField({ value, onChange, placeholder, label, maxLength = 2000 }: { value: string; onChange: (value: string) => void; placeholder: string; label: string; maxLength?: number }) {
+function ChatField({ placeholder, label, maxLength = 2000 }: { placeholder: string; label: string; maxLength?: number }) {
   const ref = useRef<HTMLDivElement>(null);
   const shiftRef = useRef(false);
-  const onChangeRef = useRef(onChange); onChangeRef.current = onChange;
+  const clampContent = () => {
+    const el = ref.current;
+    if (!el) return;
+    const text = el.textContent || "";
+    if (text.length <= maxLength) return;
+    el.textContent = text.slice(0, maxLength);
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.collapse(false);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  };
   useEffect(() => {
-    const el = ref.current; if (!el) return;
-    if ((el.textContent || "") !== value) { el.textContent = value; if (!value) el.innerHTML = ""; }
-  }, [value]);
-  useEffect(() => {
-    const el = ref.current; if (!el) return;
+    const el = ref.current;
+    if (!el) return;
     const onBeforeInput = (event: InputEvent) => {
       if (event.inputType !== "insertParagraph" && event.inputType !== "insertLineBreak") return;
       if (shiftRef.current && window.matchMedia("(hover: hover)").matches) return;
       event.preventDefault();
+      clampContent();
       el.closest("form")?.requestSubmit();
     };
     el.addEventListener("beforeinput", onBeforeInput as EventListener);
     return () => el.removeEventListener("beforeinput", onBeforeInput as EventListener);
-  }, []);
-  const read = () => {
-    const el = ref.current; if (!el) return;
-    let text = el.textContent || "";
-    if (text.length > maxLength) { text = text.slice(0, maxLength); el.textContent = text; const range = document.createRange(); range.selectNodeContents(el); range.collapse(false); const selection = window.getSelection(); selection?.removeAllRanges(); selection?.addRange(range); }
-    if (!text) el.innerHTML = "";
-    onChangeRef.current(text);
-  };
-  return <div ref={ref} className="chat-field" role="textbox" aria-multiline="true" aria-label={label} data-placeholder={placeholder} contentEditable="plaintext-only" suppressContentEditableWarning enterKeyHint="send" inputMode="text" autoCapitalize="sentences" spellCheck
-    onInput={read}
+  }, [maxLength]);
+  return <div ref={ref} className="chat-field" role="textbox" aria-multiline="true" aria-label={label} data-placeholder={placeholder} contentEditable suppressContentEditableWarning enterKeyHint="send" inputMode="text" autoCapitalize="sentences" spellCheck
+    onInput={clampContent}
     onKeyDown={(event) => { shiftRef.current = event.shiftKey; }}
     onKeyUp={() => { shiftRef.current = false; }}
     onPaste={(event) => { event.preventDefault(); const text = event.clipboardData.getData("text/plain"); if (text) document.execCommand("insertText", false, text); }}
-    onFocus={() => { window.setTimeout(() => ref.current?.scrollIntoView({ block: "nearest" }), 280); }}/>;
+    onFocus={() => { /* Native visual-viewport resizing handles the keyboard without forcing a scroll or React update. */ }}/>
 }
 
 /** "Seen by" row under your message: up to four small avatars, then +N for everyone else. */
@@ -3097,7 +3203,8 @@ function useRoomPictureInPicture(room: Room, title: string, onLeave?: () => void
         // Back in the app: the call returns to its normal room view (the floating window closes).
         clearRetries();
         if (enteredAutomatically) enteredAutomatically = false;
-        if (isPip() && !docWin) void exit();
+        if (docWin) { try { docWin.close(); } catch { /* Already closed. */ } }
+        else if (isPip()) void exit();
       }
     };
     document.addEventListener("visibilitychange", onVisibility);
@@ -3152,122 +3259,27 @@ function useRoomPictureInPicture(room: Room, title: string, onLeave?: () => void
 }
 
 /**
- * While the call is on screen, keep the phone awake (Screen Wake Lock) so the screen timeout never turns the display off
- * and puts the call to sleep. It is released automatically when the page is hidden, so it is taken again on return, after
- * a reconnect, and on the first touch for browsers that require a gesture. Released for good when the room closes.
+ * The web experience does not prevent the screen from sleeping. A native
+ * Android foreground-call service will own supported background execution.
  */
-function useCallWakeLock(room: Room) {
-  useEffect(() => {
-    if (typeof navigator === "undefined" || !("wakeLock" in navigator)) return;
-    let sentinel: WakeLockSentinel | null = null;
-    let disposed = false;
-    let requesting = false;
-    const acquire = async () => {
-      if (disposed || sentinel || requesting || document.visibilityState !== "visible" || room.state !== ConnectionState.Connected) return;
-      requesting = true;
-      try {
-        const lock = await navigator.wakeLock.request("screen");
-        if (disposed) { void lock.release().catch(() => undefined); return; }
-        sentinel = lock;
-        lock.addEventListener("release", () => { if (sentinel === lock) sentinel = null; });
-      } catch { /* Denied (battery saver or no gesture yet): retried on the next touch or when the page returns. */ }
-      finally { requesting = false; }
-    };
-    const onVisible = () => { if (document.visibilityState === "visible") void acquire(); };
-    const onTouch = () => { void acquire(); };
-    document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("pointerdown", onTouch, { passive: true });
-    room.on(RoomEvent.Connected, onTouch);
-    room.on(RoomEvent.Reconnected, onTouch);
-    void acquire();
-    return () => {
-      disposed = true;
-      document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("pointerdown", onTouch);
-      room.off(RoomEvent.Connected, onTouch);
-      room.off(RoomEvent.Reconnected, onTouch);
-      const lock = sentinel; sentinel = null;
-      if (lock) void lock.release().catch(() => undefined);
-    };
-  }, [room]);
+function useCallWakeLock(_room: Room) {
+  // Do not keep the display awake during a prayer. The user must be able to
+  // lock the screen normally; native Android background audio is implemented
+  // by the Capacitor foreground-call service rather than Screen Wake Lock.
+  useEffect(() => undefined, []);
+}
+
+function useCallKeepAlive(_room: Room) {
+  // Deliberately no silent audio, hidden video or Web Lock hacks. These can
+  // waste battery/data and do not provide a supported background-call guarantee.
+  useEffect(() => undefined, []);
 }
 
 /**
- * Extra "real call" protection while the room is connected, so the call carries on when the screen times out or the app
- * is in the background: a Web Lock (stops the browser freezing the tab), a silent audio session (keeps the phone's audio
- * pipeline and lock-screen call controls alive), and, where the Screen Wake Lock API is missing (older iPhones), a tiny
- * hidden looping video that keeps the display awake. Everything is released when the room closes.
- */
-function useCallKeepAlive(room: Room) {
-  useEffect(() => {
-    let disposed = false;
-    let releaseLock: (() => void) | null = null;
-    try {
-      void navigator.locks?.request("meet-enihakole-live-call", { mode: "shared" }, () => new Promise<void>((resolve) => { releaseLock = resolve; if (disposed) resolve(); })).catch(() => undefined);
-    } catch { /* Web Locks are optional. */ }
-
-    let audio: HTMLAudioElement | null = null;
-    let audioUrl = "";
-    const startAudio = () => {
-      if (disposed || audio || room.state !== ConnectionState.Connected) return;
-      try {
-        // One second of silence (8 kHz, 8-bit mono WAV), looped.
-        const bytes = new Uint8Array(44 + 8000);
-        const view = new DataView(bytes.buffer);
-        const text = (offset: number, value: string) => { for (let i = 0; i < value.length; i += 1) bytes[offset + i] = value.charCodeAt(i); };
-        text(0, "RIFF"); view.setUint32(4, 36 + 8000, true); text(8, "WAVE"); text(12, "fmt "); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
-        view.setUint16(22, 1, true); view.setUint32(24, 8000, true); view.setUint32(28, 8000, true); view.setUint16(32, 1, true); view.setUint16(34, 8, true);
-        text(36, "data"); view.setUint32(40, 8000, true); bytes.fill(128, 44);
-        audioUrl = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
-        const element = new Audio(audioUrl);
-        element.loop = true; element.setAttribute("playsinline", ""); element.volume = 0.01;
-        void element.play().then(() => { audio = element; }).catch(() => { element.src = ""; URL.revokeObjectURL(audioUrl); audioUrl = ""; });
-      } catch { /* Optional. */ }
-    };
-
-    let noSleep: HTMLVideoElement | null = null;
-    let noSleepCanvas: HTMLCanvasElement | null = null;
-    const startNoSleep = () => {
-      if (disposed || noSleep || "wakeLock" in navigator || document.visibilityState !== "visible") return;
-      try {
-        noSleepCanvas = document.createElement("canvas"); noSleepCanvas.width = 16; noSleepCanvas.height = 16;
-        noSleepCanvas.getContext("2d")?.fillRect(0, 0, 16, 16);
-        const video = document.createElement("video");
-        video.muted = true; video.loop = true; video.playsInline = true; video.setAttribute("playsinline", "");
-        video.style.cssText = "position:fixed;width:1px;height:1px;opacity:.01;pointer-events:none;left:0;top:0";
-        video.srcObject = noSleepCanvas.captureStream(1);
-        document.body.appendChild(video);
-        void video.play().then(() => { noSleep = video; }).catch(() => video.remove());
-      } catch { /* Optional. */ }
-    };
-
-    const onGesture = () => { startAudio(); startNoSleep(); };
-    const onVisible = () => { if (document.visibilityState === "visible") { void audio?.play().catch(() => undefined); void noSleep?.play().catch(() => undefined); } };
-    window.addEventListener("pointerdown", onGesture, { passive: true });
-    window.addEventListener("keydown", onGesture);
-    document.addEventListener("visibilitychange", onVisible);
-    room.on(RoomEvent.Connected, onGesture);
-    onGesture();
-    return () => {
-      disposed = true;
-      window.removeEventListener("pointerdown", onGesture);
-      window.removeEventListener("keydown", onGesture);
-      document.removeEventListener("visibilitychange", onVisible);
-      room.off(RoomEvent.Connected, onGesture);
-      (releaseLock as (() => void) | null)?.();
-      if (audio) { audio.pause(); audio.src = ""; }
-      if (audioUrl) URL.revokeObjectURL(audioUrl);
-      if (noSleep) { noSleep.pause(); noSleep.srcObject = null; noSleep.remove(); }
-    };
-  }, [room]);
-}
-
-/**
- * Keeps an active LiveKit call usable when the browser backgrounds the page.
- * WebRTC media capture and active real-time connections receive browser-managed
- * treatment, but a page can still be suspended or terminated by the OS. We do
- * not use silent audio as an artificial keep-alive because it cannot guarantee
- * background execution; the screen wake lock above keeps the display on instead.
+ * Best-effort browser-side recovery after a page or OS audio interruption.
+ * WebRTC media capture and active realtime connections receive browser-managed
+ * treatment, but a page can still be suspended or terminated by the OS. Native
+ * Android foreground calling is handled separately by the Capacitor phase.
  */
 function useBackgroundCall(room: ReturnType<typeof useRoomContext>, title: string, onLeave: () => void) {
   const leaveRef = useRef(onLeave);
@@ -3280,6 +3292,8 @@ function useBackgroundCall(room: ReturnType<typeof useRoomContext>, title: strin
     let lastAudioStartAt = 0;
     let lastMicTrack: MediaStreamTrack | null = null;
     let micRecoveryAttemptedForTrack = false;
+    let lastCameraTrack: MediaStreamTrack | null = null;
+    let cameraRecoveryAttemptedForTrack = false;
     const nav = navigator as Navigator & {
       audioSession?: {
         type: string;
@@ -3349,31 +3363,40 @@ function useBackgroundCall(room: ReturnType<typeof useRoomContext>, title: strin
         // Some mobile browsers end an active capture track during an OS audio
         // interruption. Restart only an ended track that the user had left on;
         // never toggle a muted microphone or silently override the user's choice.
-        const publication = room.localParticipant.getTrackPublication(Track.Source.Microphone);
-        const localTrack = publication?.track as {
-          mediaStreamTrack?: MediaStreamTrack;
-          restartTrack?: () => Promise<void>;
-        } | undefined;
-        const mediaTrack = localTrack?.mediaStreamTrack ?? null;
-        if (mediaTrack !== lastMicTrack) {
-          lastMicTrack = mediaTrack;
-          micRecoveryAttemptedForTrack = false;
-        }
-        if (
-          room.localParticipant.isMicrophoneEnabled &&
-          mediaTrack?.readyState === "ended" &&
-          typeof localTrack?.restartTrack === "function" &&
-          !micRecoveryAttemptedForTrack
-        ) {
-          // Avoid repeated permission/restart attempts for the same failed capture.
-          micRecoveryAttemptedForTrack = true;
-          await localTrack.restartTrack().catch(async () => {
-            // Mark the failed capture as off so the in-room control and status
-            // indicator cannot imply that audio is still being transmitted.
-            await room.localParticipant.setMicrophoneEnabled(false).catch(() => undefined);
-            window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Your microphone stopped in the background and is now off. Tap Unmute to request access again." } }));
-          });
-        }
+        const recoverCapture = async (source: Track.Source.Microphone | Track.Source.Camera) => {
+          const isMic = source === Track.Source.Microphone;
+          const enabled = isMic ? room.localParticipant.isMicrophoneEnabled : room.localParticipant.isCameraEnabled;
+          const publication = room.localParticipant.getTrackPublication(source);
+          const localTrack = publication?.track as {
+            mediaStreamTrack?: MediaStreamTrack;
+            restartTrack?: () => Promise<void>;
+          } | undefined;
+          const mediaTrack = localTrack?.mediaStreamTrack ?? null;
+          if (isMic) {
+            if (mediaTrack !== lastMicTrack) { lastMicTrack = mediaTrack; micRecoveryAttemptedForTrack = false; }
+          } else if (mediaTrack !== lastCameraTrack) {
+            lastCameraTrack = mediaTrack; cameraRecoveryAttemptedForTrack = false;
+          }
+          const attempted = isMic ? micRecoveryAttemptedForTrack : cameraRecoveryAttemptedForTrack;
+          if (!enabled || !mediaTrack || (mediaTrack.readyState !== "ended" && !mediaTrack.muted) || typeof localTrack?.restartTrack !== "function" || attempted) return;
+          if (isMic) micRecoveryAttemptedForTrack = true;
+          else cameraRecoveryAttemptedForTrack = true;
+          try {
+            await localTrack.restartTrack();
+          } catch {
+            // Never leave the visible state claiming that a dead capture is active.
+            if (isMic) {
+              await room.localParticipant.setMicrophoneEnabled(false).catch(() => undefined);
+              window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Your microphone stopped in the background. Tap Unmute to request access again." } }));
+            } else {
+              await room.localParticipant.setCameraEnabled(false).catch(() => undefined);
+              window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Your camera could not resume after returning to the call. Turn it on again when ready." } }));
+            }
+          }
+        };
+        await recoverCapture(Track.Source.Microphone);
+        if (!active) return;
+        await recoverCapture(Track.Source.Camera);
       })().finally(() => { audioResumeInFlight = null; });
     };
 
@@ -3801,7 +3824,6 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
   const [directContact, setDirectContact] = useState<DirectContact | null>(null);
   const [privateMessages, setPrivateMessages] = useState<PrivateMessage[]>([]);
   const [recentConversations, setRecentConversations] = useState<PrivateConversationSummary[]>([]);
-  const [privateDraft, setPrivateDraft] = useState("");
   const [privateLoading, setPrivateLoading] = useState(false);
   const [privateSending, setPrivateSending] = useState(false);
   // Private-message notices stay on screen (one per sender) until the receiver opens the chat or closes the notice.
@@ -3826,7 +3848,6 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
   const videoProfileKey = useRef("");
   const [mediaModal, setMediaModal] = useState<{ kind: MediaKind; state: MicPromptState } | null>(null);
   const mediaAttemptRef = useRef(0);
-  const [messageText, setMessageText] = useState("");
   const [seenBy, setSeenBy] = useState<Record<string, SeenInfo>>({});
   const [privateSeen, setPrivateSeen] = useState<Record<string, number>>({});
   const lastSeenSent = useRef(0);
@@ -4587,7 +4608,6 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
     setPrivateMessages([]);
     setPrivateLoading(true);
     setDirectContact(contact);
-    setPrivateDraft("");
     setPeopleOpen(false);
     setMessagesOpen(false);
     setNotesOpen(false);
@@ -4596,7 +4616,6 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
     setPrivateMessages([]);
     setPrivateLoading(true);
     setDirectContact(contact);
-    setPrivateDraft("");
     setPrivateNotices((current) => current.filter((item) => item.userId !== contact.userId));
     setPeopleOpen(false);
     setMessagesOpen(false);
@@ -4604,7 +4623,9 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
   }
   async function sendPrivateMessage(event: FormEvent) {
     event.preventDefault();
-    const message = privateDraft.trim();
+    const form = event.currentTarget as HTMLFormElement;
+    const editor = form.querySelector<HTMLElement>(".chat-field");
+    const message = (editor?.textContent || "").trim();
     const contact = directContactRef.current;
     if (!message || !contact || privateSending) return;
     setPrivateSending(true);
@@ -4616,7 +4637,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
         { userId: saved.recipientUserId, name: saved.recipientName || contact.name, picture: contact.picture, lastMessage: saved.message, createdAt: saved.createdAt },
         ...current.filter((item) => item.userId !== saved.recipientUserId),
       ].slice(0, 30));
-      setPrivateDraft("");
+      if (editor) editor.textContent = "";
       try {
         const recipientIdentities = saved.recipientIdentities?.length ? saved.recipientIdentities : saved.recipientIdentity ? [saved.recipientIdentity] : [];
         if (saved.recipientOnline && room.state === ConnectionState.Connected && recipientIdentities.length > 0) {
@@ -5039,9 +5060,11 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
   }
   async function sendMessage(event: FormEvent) {
     event.preventDefault();
-    const message = messageText.trim();
+    const form = event.currentTarget as HTMLFormElement;
+    const editor = form.querySelector<HTMLElement>(".chat-field");
+    const message = (editor?.textContent || "").trim();
     if (!message || isSending) return;
-    try { await send(message); setMessageText(""); }
+    try { await send(message); if (editor) editor.textContent = ""; }
     catch { window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Could not send that message. Please retry." } })); }
   }
   async function toggleFullscreen(silent = false, enterOnly = false) {
@@ -5272,7 +5295,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
           })}
         </div>
         <ReactionLayer/>
-        {pages > 1 && <ParticipantDots pages={pages} current={currentPage} onSelect={goToPage}/>}
+        {pages > 1 && !screenShare && <ParticipantDots pages={pages} current={currentPage} onSelect={goToPage}/> }
       </div>
       <div id="room-call-controls" className={`room-control-dock rd-dock ${controlsVisible ? "dock-open" : "dock-hidden"}`} ref={dockRef} aria-hidden={!controlsVisible}>
         <RdCarousel
@@ -5311,6 +5334,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
             return sections;
           })()}/>
       </div>
+      <BibleVerseLiveTools slug={meeting.slug} role={role}/>
       {reactionsOpen && <div className="rd-emoji-layer"><div className="rd-emoji-pop" data-popover="reactions" role="group" aria-label="Choose a reaction"><header className="rd-emoji-head"><b>Reactions</b><button type="button" className="rd-emoji-close" onClick={() => setReactionsOpen(false)} aria-label="Close reactions"><X size={16}/></button></header><EmojiRow className="rd-emoji-grid rd-emoji-row">{emojiOrder.map((emoji) => <button type="button" key={emoji} onClick={() => { void react(emoji); }} aria-label={`Send ${emoji}`}><PickerEmoji emoji={emoji}/></button>)}</EmojiRow></div></div>}
       {moreOpen && <div className="rd-more-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setMoreOpen(false); }}>
         <section className="rd-more-sheet" role="dialog" aria-modal="true" aria-label="More call actions">
@@ -5369,7 +5393,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
       onClose={() => { mediaAttemptRef.current++; setMediaModal(null); }}
     />}
     {RECORDING_UI_ENABLED && recordingState?.status === "consent_pending" && recordingState.myDecision === "pending" && <div className="recording-consent-backdrop" role="presentation"><section className="recording-consent-modal" role="dialog" aria-modal="true" aria-labelledby="recording-consent-title"><span className="recording-consent-icon"><AudioLines size={24}/></span><p className="section-overline">MEETING AUDIO RECORDING REQUEST</p><h2 id="recording-consent-title">The host would like to record</h2><p>The recording captures synchronized audio from the connected participants. No camera video is recorded. Your choice is saved with the meeting record. You can decline; recording will not begin unless everyone currently connected accepts.</p><div className="recording-consent-list">{recordingState.consents.map((item) => <span key={item.identity}><b>{item.displayName}</b><small>{item.decision === "accepted" ? "Accepted" : item.decision === "declined" ? "Declined" : "Awaiting response"}</small></span>)}</div><div className="recording-consent-actions"><button type="button" className="button button-soft" disabled={recordingConsentBusy} onClick={() => void respondToRecordingConsent(false)}>Decline</button><button type="button" className="button button-primary" disabled={recordingConsentBusy} onClick={() => void respondToRecordingConsent(true)}>{recordingConsentBusy ? "Saving…" : "I consent"}</button></div></section></div>}
-    {notesOpen && <div className="messages-modal-backdrop meeting-notes-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setNotesOpen(false); }}><section className="messages-modal meeting-notes-modal" role="dialog" aria-modal="true" aria-label="Collaborative meeting notes"><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setNotesOpen(false)} aria-label="Back to call"><ArrowLeft size={18}/></button><div className="meeting-panel-heading"><b>Meeting notes</b><small>{meeting.title}</small></div><button className="room-icon-button" onClick={() => setNotesOpen(false)} aria-label="Close notes"><X size={18}/></button></header><nav className="meeting-panel-tabs" aria-label="Meeting tools"><button type="button" className="meeting-panel-tab" onClick={() => { setNotesOpen(false); setMessagesOpen(true); }}>Messages</button><button type="button" className="meeting-panel-tab" onClick={() => { setNotesOpen(false); setPeopleViewTab("people"); setPeopleOpen(true); }}>People</button><button type="button" className="meeting-panel-tab" onClick={() => { setNotesOpen(false); setPeopleViewTab("private"); setPeopleOpen(true); }}>Private chats</button><button type="button" className="meeting-panel-tab meeting-panel-tab-active" aria-current="page">Notes</button></nav><div className="meeting-notes-body"><label className="meeting-notes-title-label">Note title<input value={notesTitle} onChange={(event) => updateMeetingNotesTitle(event.target.value)} onBlur={() => { if (notesDirtyRef.current && !notesConflict) void saveMeetingNotes(); }} maxLength={120} aria-label="Meeting notes title"/></label><div className="meeting-notes-toolbar" role="toolbar" aria-label="Note formatting"><button type="button" title="Bold" aria-label="Bold" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("bold")}><Bold size={16}/></button><button type="button" title="Italic" aria-label="Italic" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("italic")}><Italic size={16}/></button><button type="button" title="Underline" aria-label="Underline" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("underline")}><Underline size={16}/></button><button type="button" title="Heading 1" aria-label="Heading 1" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("formatBlock", "<h1>")}><Heading1 size={16}/></button><button type="button" title="Heading 2" aria-label="Heading 2" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("formatBlock", "<h2>")}><Heading2 size={16}/></button><button type="button" title="Bulleted list" aria-label="Bulleted list" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("insertUnorderedList")}><List size={16}/></button><button type="button" title="Numbered list" aria-label="Numbered list" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("insertOrderedList")}><ListOrdered size={16}/></button><button type="button" title="Indent" aria-label="Indent" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("indent")}><IndentIncrease size={16}/></button><button type="button" title="Outdent" aria-label="Outdent" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("outdent")}><IndentDecrease size={16}/></button></div>{notesLoading ? <div className="meeting-notes-loading"><LoaderCircle size={22} className="spin"/> Loading notes…</div> : <div ref={notesEditorRef} className="meeting-notes-editor" contentEditable suppressContentEditableWarning role="textbox" aria-label="Collaborative meeting notes editor" aria-multiline="true" data-placeholder="Capture decisions, action items, and key points together…" onInput={(event) => updateMeetingNotes(event.currentTarget.innerHTML)} onBlur={() => { if (notesDirtyRef.current && !notesConflict) void saveMeetingNotes(); }}></div>}{notesError && <div className="meeting-notes-error" role="alert">{notesError}{notesConflict && <div className="meeting-notes-conflict-actions"><button type="button" onClick={() => void loadMeetingNotes(true)}>Load latest</button><button type="button" onClick={() => void saveMeetingNotes(true)}>Keep my version</button></div>}</div>}<div className="meeting-notes-footer"><span className="meeting-notes-save-state">{notesSaving ? "Saving…" : notesDirty ? "Unsaved changes" : notesUpdatedBy ? `Saved · ${notesUpdatedBy}` : "Saved for meeting participants"}</span><button type="button" className="button button-soft button-small" onClick={exportNotesPdf}><Download size={15}/> Export PDF</button><button type="button" className="button button-primary button-small" onClick={() => void saveMeetingNotes(notesConflict)} disabled={!notesDirty || notesSaving}><Check size={15}/> Save now</button></div></div></section></div>}
+    {notesOpen && <div className="messages-modal-backdrop meeting-notes-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setNotesOpen(false); }}><section className="messages-modal meeting-notes-modal" role="dialog" aria-modal="true" aria-label="Collaborative meeting notes"><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setNotesOpen(false)} aria-label="Back to call"><ArrowLeft size={18}/></button><div className="meeting-panel-heading"><b>Meeting notes</b><small>{meeting.title}</small></div><button className="room-icon-button" onClick={() => setNotesOpen(false)} aria-label="Close notes"><X size={18}/></button></header><nav className="meeting-panel-tabs" aria-label="Meeting tools"><button type="button" className="meeting-panel-tab" onClick={() => { setNotesOpen(false); setMessagesOpen(true); }}>Messages</button><button type="button" className="meeting-panel-tab" onClick={() => { setNotesOpen(false); setPeopleViewTab("people"); setPeopleOpen(true); }}>People</button><button type="button" className="meeting-panel-tab" onClick={() => { setNotesOpen(false); setPeopleViewTab("private"); setPeopleOpen(true); }}>Private chats</button><button type="button" className="meeting-panel-tab meeting-panel-tab-active" aria-current="page">Notes</button></nav><div className="meeting-notes-body"><div className="meeting-notes-scroll-content"><label className="meeting-notes-title-label">Note title<input value={notesTitle} onChange={(event) => updateMeetingNotesTitle(event.target.value)} onBlur={() => { if (notesDirtyRef.current && !notesConflict) void saveMeetingNotes(); }} maxLength={120} aria-label="Meeting notes title"/></label><div className="meeting-notes-toolbar" role="toolbar" aria-label="Note formatting"><button type="button" title="Bold" aria-label="Bold" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("bold")}><Bold size={16}/></button><button type="button" title="Italic" aria-label="Italic" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("italic")}><Italic size={16}/></button><button type="button" title="Underline" aria-label="Underline" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("underline")}><Underline size={16}/></button><button type="button" title="Heading 1" aria-label="Heading 1" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("formatBlock", "<h1>")}><Heading1 size={16}/></button><button type="button" title="Heading 2" aria-label="Heading 2" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("formatBlock", "<h2>")}><Heading2 size={16}/></button><button type="button" title="Bulleted list" aria-label="Bulleted list" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("insertUnorderedList")}><List size={16}/></button><button type="button" title="Numbered list" aria-label="Numbered list" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("insertOrderedList")}><ListOrdered size={16}/></button><button type="button" title="Indent" aria-label="Indent" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("indent")}><IndentIncrease size={16}/></button><button type="button" title="Outdent" aria-label="Outdent" onMouseDown={(event) => event.preventDefault()} onClick={() => formatNote("outdent")}><IndentDecrease size={16}/></button></div>{notesLoading ? <div className="meeting-notes-loading"><LoaderCircle size={22} className="spin"/> Loading notes…</div> : <div ref={notesEditorRef} className="meeting-notes-editor" contentEditable suppressContentEditableWarning role="textbox" aria-label="Collaborative meeting notes editor" aria-multiline="true" data-placeholder="Capture decisions, action items, and key points together…" onInput={(event) => updateMeetingNotes(event.currentTarget.innerHTML)} onBlur={() => { if (notesDirtyRef.current && !notesConflict) void saveMeetingNotes(); }}></div>}{notesError && <div className="meeting-notes-error" role="alert">{notesError}{notesConflict && <div className="meeting-notes-conflict-actions"><button type="button" onClick={() => void loadMeetingNotes(true)}>Load latest</button><button type="button" onClick={() => void saveMeetingNotes(true)}>Keep my version</button></div>}</div>}</div><div className="meeting-notes-footer"><span className="meeting-notes-save-state">{notesSaving ? "Saving…" : notesDirty ? "Unsaved changes" : notesUpdatedBy ? `Saved · ${notesUpdatedBy}` : "Saved for meeting participants"}</span><button type="button" className="button button-soft button-small" onClick={exportNotesPdf}><Download size={15}/> Export PDF</button><button type="button" className="button button-primary button-small" onClick={() => void saveMeetingNotes(notesConflict)} disabled={!notesDirty || notesSaving}><Check size={15}/> Save now</button></div></div></section></div>}
     {messagesOpen && <div className="messages-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setMessagesOpen(false); }}><section className="messages-modal" role="dialog" aria-modal="true" aria-label="Meeting messages"><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setMessagesOpen(false)} aria-label="Back to call"><ArrowLeft size={18}/></button><div className="meeting-panel-heading"><b>Meeting messages</b><small>Chat with everyone in this room</small></div><button className="room-icon-button" onClick={() => setMessagesOpen(false)} aria-label="Close messages"><X size={18}/></button></header><nav className="meeting-panel-tabs" aria-label="Meeting tools"><button type="button" className="meeting-panel-tab meeting-panel-tab-active" aria-current="page">Messages</button><button type="button" className="meeting-panel-tab" onClick={() => { setMessagesOpen(false); setPeopleViewTab("people"); setPeopleOpen(true); }}>People</button><button type="button" className="meeting-panel-tab" onClick={() => { setMessagesOpen(false); setPeopleViewTab("private"); setPeopleOpen(true); }}>Private chats</button><button type="button" className="meeting-panel-tab" onClick={() => { setMessagesOpen(false); setNotesOpen(true); }}>Notes</button></nav><div className="messages-modal-body">{chatMessages.length === 0 ? <div className="messages-empty"><MessageCircle size={25}/><b>No messages yet</b><span>Send a note to everyone in this {kindOf(meeting)}.</span></div> : chatMessages.map((message, index) => {
           const own = message.from?.identity === localIdentity;
           const senderName = message.from?.name || (own ? "You" : "Choir guest");
@@ -5377,13 +5401,13 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
           const showAvatar = index === 0 || prevSender !== message.from?.identity;
           const seenPeople = own ? groupSeenByIndex.get(index) : undefined;
           return <Fragment key={`${message.timestamp}-${index}`}><div className={`chat-row ${own ? "chat-row-own" : ""} ${showAvatar ? "chat-row-first" : ""}`}>{showAvatar ? <ProfilePhoto src={message.from ? participantPicture(message.from.metadata, message.from.identity) : ""} name={message.from ? participantName(message.from) || senderName : senderName} size={96} className="chat-avatar"/> : <span className="chat-avatar-spacer" aria-hidden="true"/>}<article className={`chat-message ${own ? "chat-message-own" : ""}`}><span className="chat-message-author">{senderName}</span><p>{message.message}</p><time>{new Date(message.timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></article></div>{seenPeople && <SeenStrip people={seenPeople}/>}</Fragment>;
-        })}<div ref={chatEndRef}/></div><form className="messages-composer" onSubmit={sendMessage}><ChatField value={messageText} onChange={setMessageText} placeholder="Write a message…" label="Message"/><button className="button button-primary" type="submit" disabled={!messageText.trim() || isSending} aria-label="Send message"><Send size={17}/></button></form></section></div>}
+        })}<div ref={chatEndRef}/></div><form className="messages-composer" onSubmit={sendMessage}><ChatField placeholder="Write a message…" label="Message"/><button className="button button-primary" type="submit" disabled={isSending} aria-label="Send message"><Send size={17}/></button></form></section></div>}
     {peopleOpen && <div className="messages-modal-backdrop people-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setPeopleOpen(false); }}><section className="messages-modal people-modal" role="dialog" aria-modal="true" aria-label="People and private chats"><header className="messages-modal-header"><button className="room-icon-button" onClick={() => setPeopleOpen(false)} aria-label="Back to call"><ArrowLeft size={18}/></button><div className="meeting-panel-heading"><b>{peopleViewTab === "people" ? "People" : "Private chats"}</b><small>{peopleViewTab === "people" ? `${participants.length} currently online · presence updates live` : `${recentConversations.length} saved conversations`}</small></div><button className="room-icon-button" onClick={() => setPeopleOpen(false)} aria-label="Close people"><X size={18}/></button></header><nav className="meeting-panel-tabs" aria-label="Meeting tools"><button type="button" className={`meeting-panel-tab ${peopleViewTab === "people" ? "meeting-panel-tab-active" : ""}`} aria-current={peopleViewTab === "people" ? "page" : undefined} onClick={() => setPeopleViewTab("people")}>People</button><button type="button" className={`meeting-panel-tab ${peopleViewTab === "private" ? "meeting-panel-tab-active" : ""}`} aria-current={peopleViewTab === "private" ? "page" : undefined} onClick={() => setPeopleViewTab("private")}>Private chats</button><button type="button" className="meeting-panel-tab" onClick={() => { setPeopleOpen(false); setMessagesOpen(true); }}>Messages</button><button type="button" className="meeting-panel-tab" onClick={() => { setPeopleOpen(false); setNotesOpen(true); }}>Notes</button></nav><div className="people-directory-body">{peopleViewTab === "people" ? <><div className="people-online-heading"><span><span className="people-online-dot"/> Online now</span><b>{participants.length}</b></div>{[...participants].sort((a, b) => getParticipantRole(a) === getParticipantRole(b) ? participantName(a).localeCompare(participantName(b)) : getParticipantRole(a) === "host" ? -1 : 1).map((person) => {
       const isSelf = person.identity === localIdentity;
       const micMuted = person.getTrackPublication(Track.Source.Microphone)?.isMuted ?? true;
       const cameraMuted = person.getTrackPublication(Track.Source.Camera)?.isMuted ?? true;
       const isHostPerson = getParticipantRole(person) === "host";
-      return <article className="people-person-row" key={person.identity}><ProfilePhoto src={participantPicture(person.metadata, person.identity)} name={participantName(person)} size={128} className="people-person-avatar"/><div className="people-person-details"><div className="people-person-title"><b>{participantName(person) || "Participant"}{isSelf ? " · You" : ""}</b>{isHostPerson && <span className="people-host-tag">HOST</span>}</div><small><span className="people-online-dot"/> Connected {person.isSpeaking ? "· Speaking" : ""}{micMuted ? " · Mic off" : " · Mic on"}{cameraMuted ? " · Camera off" : " · Camera on"}</small></div>{!isSelf && <div className="people-person-actions"><button type="button" onClick={() => void focusParticipant(person.identity)} title={spotlightIdentity === person.identity ? "Clear participant focus" : "Bring participant into the main view"}>{spotlightIdentity === person.identity ? "Unfocus" : "Focus"}</button><button type="button" onClick={() => openPrivateConversation(person)} title={`Private message ${participantName(person) || "participant"}`}><MessageCircle size={15}/><span>Message</span></button>{role === "host" && !isHostPerson && <button type="button" className="people-more-trigger" onClick={() => setHostMenuIdentity(person.identity)} aria-haspopup="dialog" aria-label={`Host actions for ${participantName(person) || "participant"}`} title="Host actions"><ChevronDown size={16}/></button>}</div>}{isSelf && <span className="people-you-tag">You</span>}</article>;
+      return <article className="people-person-row" key={person.identity}><ProfilePhoto src={participantPicture(person.metadata, person.identity)} name={participantName(person)} size={128} className="people-person-avatar"/><div className="people-person-details"><div className="people-person-title"><b>{participantName(person) || "Participant"}{isSelf ? " · You" : ""}</b>{isHostPerson && <span className="people-host-tag">HOST</span>}</div><small><span className="people-online-dot"/> Connected {person.isSpeaking ? "· Speaking" : ""}{micMuted ? " · Mic off" : " · Mic on"}{cameraMuted ? " · Camera off" : " · Camera on"}</small>{role === "host" && <small className="people-device-info">{describeParticipantDevice(person.metadata)}</small>}</div>{!isSelf && <div className="people-person-actions"><button type="button" onClick={() => void focusParticipant(person.identity)} title={spotlightIdentity === person.identity ? "Clear participant focus" : "Bring participant into the main view"}>{spotlightIdentity === person.identity ? "Unfocus" : "Focus"}</button><button type="button" onClick={() => openPrivateConversation(person)} title={`Private message ${participantName(person) || "participant"}`}><MessageCircle size={15}/><span>Message</span></button>{role === "host" && !isHostPerson && <button type="button" className="people-more-trigger" onClick={() => setHostMenuIdentity(person.identity)} aria-haspopup="dialog" aria-label={`Host actions for ${participantName(person) || "participant"}`} title="Host actions"><ChevronDown size={16}/></button>}</div>}{isSelf && <span className="people-you-tag">You</span>}</article>;
     })}{participants.length === 1 && <div className="people-alone-note">You are the only person connected right now.</div>}</> : <section className="people-recent-conversations"><div className="people-recent-heading">Saved private conversations</div>{recentConversations.length === 0 ? <div className="messages-empty"><MessageCircle size={25}/><b>No private conversations yet</b><span>Start a one-to-one conversation from the People tab.</span></div> : recentConversations.map((contact) => {
       const online = participants.some((person) => participantUserId(person) === contact.userId);
       return <button type="button" className="people-recent-row" key={contact.userId} onClick={() => openPrivateContact({ userId: contact.userId, identity: "", name: contact.name, picture: contact.picture })}><ProfilePhoto src={contact.picture} name={contact.name} size={96} className="people-person-avatar"/><span className="people-recent-copy"><b>{contact.name}</b><small>{contact.lastMessage}</small></span><span className={`people-recent-status ${online ? "is-online" : ""}`}>{online ? "Online" : "Saved"}</span></button>;
@@ -5440,7 +5464,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
           const own = message.senderUserId === localUserId;
           const showAvatar = index === 0 || privateMessages[index - 1]?.senderUserId !== message.senderUserId;
           return <Fragment key={message.id}><div className={`chat-row ${own ? "chat-row-own" : ""} ${showAvatar ? "chat-row-first" : ""}`}>{showAvatar ? <ProfilePhoto src={own ? participantPicture(room.localParticipant.metadata, localIdentity) : directContact.picture} name={own ? participantName(room.localParticipant) || "You" : message.senderName || directContact.name} size={96} className="chat-avatar"/> : <span className="chat-avatar-spacer" aria-hidden="true"/>}<article className={`chat-message ${own ? "chat-message-own" : ""}`}><span className="chat-message-author">{own ? "You" : message.senderName}</span><p>{message.message}</p><time>{new Date(message.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></article></div>{index === privateSeenIndex && <SeenStrip single people={[{ key: directContact.userId, name: directContact.name, picture: directContact.picture }]}/>}</Fragment>;
-        })}<div ref={privateChatEndRef}/></div><form className="messages-composer" onSubmit={sendPrivateMessage}><ChatField value={privateDraft} onChange={setPrivateDraft} placeholder={`Message ${directContact.name} privately…`} label="Private message"/><button className="button button-primary" type="submit" disabled={!privateDraft.trim() || privateSending || privateLoading} aria-label="Send private message">{privateSending ? <LoaderCircle size={17} className="spin"/> : <Send size={17}/>}</button></form></section></div>}
+        })}<div ref={privateChatEndRef}/></div><form className="messages-composer" onSubmit={sendPrivateMessage}><ChatField placeholder={`Message ${directContact.name} privately…`} label="Private message"/><button className="button button-primary" type="submit" disabled={privateSending || privateLoading} aria-label="Send private message">{privateSending ? <LoaderCircle size={17} className="spin"/> : <Send size={17}/>}</button></form></section></div>}
     {role === "host" && <span className="room-host-sr" aria-hidden="true">{meeting.ownerName} is hosting</span>}
   </div>;
 }
@@ -5522,6 +5546,27 @@ function GuestNameModal({ initialName, onClose, onSave }: { initialName: string;
 function AuthModal({ onClose, onAuthenticated, currentName }: { onClose: () => void; onAuthenticated: (user: User, token: string) => void; currentName?: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [emailMode, setEmailMode] = useState(false);
+  const [verifyStep, setVerifyStep] = useState(false);
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [email, setEmail] = useState("");
+  const [code, setCode] = useState("");
+  const [signupPhotoData, setSignupPhotoData] = useState("");
+  const [signupPhotoPreview, setSignupPhotoPreview] = useState("");
+  const signupPhotoRef = useRef<HTMLInputElement>(null);
+
+  async function chooseSignupPhoto(file?: File) {
+    if (!file) return;
+    try {
+      const data = await optimizeImageFile(file, 512, 512);
+      setSignupPhotoData(data);
+      setSignupPhotoPreview(data);
+      setError("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not prepare the profile photo.");
+    }
+  }
 
   async function handleCredential(credential: string) {
     setBusy(true); setError("");
@@ -5534,13 +5579,67 @@ function AuthModal({ onClose, onAuthenticated, currentName }: { onClose: () => v
     } finally { setBusy(false); }
   }
 
+  async function requestCode(event: FormEvent) {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true); setError("");
+    try {
+      await api.requestEmailCode(firstName.trim(), lastName.trim(), email.trim());
+      setVerifyStep(true);
+      window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Verification code sent. Check your inbox." } }));
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not send the verification code."); }
+    finally { setBusy(false); }
+  }
+
+  async function verifyCode(event: FormEvent) {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true); setError("");
+    try {
+      const result = await api.verifyEmailCode(firstName.trim(), lastName.trim(), email.trim(), code.trim());
+      let authenticatedUser = result.user;
+      if (signupPhotoData) {
+        try {
+          authenticatedUser = (await api.uploadProfilePicture(signupPhotoData, result.token)).user;
+        } catch (photoError) {
+          window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: photoError instanceof Error ? `Account created. Add your photo later from Edit profile: ${photoError.message}` : "Account created. You can add your photo later from Edit profile." } }));
+        }
+      }
+      onAuthenticated(authenticatedUser, result.token);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not verify your email."); }
+    finally { setBusy(false); }
+  }
+
   return <Modal onClose={onClose} wide={false}>
-    <div className="auth-modal-content"><span className="modal-brand-icon"><AudioLines size={23}/></span><p className="section-overline">WELCOME TO MEET ENIHAKOLE</p><h2>{currentName ? "Change account" : "Good to have you here."}</h2><p className="modal-subtitle">{currentName ? "Choose another Google account to switch. Until then you stay logged in as the current account — closing this keeps everything as it is." : "Continue with Google to log in or create your account. We use your Google name and profile photo — no password needed."}</p>
-      <div className="form-stack">
+    <div className="auth-modal-content"><span className="modal-brand-icon"><AudioLines size={23}/></span><p className="section-overline">WELCOME TO MEET ENIHAKOLE</p><h2>{currentName ? "Change account" : verifyStep ? "Check your email" : "Good to have you here."}</h2><p className="modal-subtitle">{currentName ? "Choose another Google account to switch. Closing this keeps your current account active." : verifyStep ? `We sent a six-digit verification code to ${email}. It expires in 10 minutes.` : "Continue with Google first, or create an account using your first name, last name, and email address."}</p>
+      {!currentName && emailMode ? <form className="form-stack auth-email-form" onSubmit={(event) => void (verifyStep ? verifyCode(event) : requestCode(event))}>
+        {!verifyStep ? <>
+          <div className="signup-profile-photo-row">
+            <button type="button" className="signup-profile-photo-button" onClick={() => signupPhotoRef.current?.click()} aria-label="Add an optional profile photo">
+              <ProfilePhoto src={signupPhotoPreview || undefined} name={`${firstName} ${lastName}`.trim() || "Your profile"} size={112} className="signup-profile-photo"/>
+              <span><Plus size={13}/>{signupPhotoPreview ? "Change photo" : "Add photo (optional)"}</span>
+            </button>
+            <p>Your name and email are all that is required. You can add a photo now or later.</p>
+            <input ref={signupPhotoRef} className="visually-hidden-date-value" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; void chooseSignupPhoto(file); }}/>
+          </div>
+          <label><span>First name</span><input value={firstName} onChange={(event) => setFirstName(event.target.value)} autoComplete="given-name" placeholder="First name" maxLength={40} required/></label>
+          <label><span>Last name</span><input value={lastName} onChange={(event) => setLastName(event.target.value)} autoComplete="family-name" placeholder="Last name" maxLength={40} required/></label>
+          <label><span>Email address</span><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" placeholder="you@example.com" maxLength={254} required/></label>
+          <button type="submit" className="button button-primary button-full" disabled={busy || !firstName.trim() || !lastName.trim() || !email.trim()}>{busy ? <><LoaderCircle size={16} className="spin"/> Sending code…</> : <><Mail size={16}/> Send verification code</>}</button>
+        </> : <>
+          <label><span>Six-digit verification code</span><input value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" placeholder="000000" maxLength={6} required autoFocus/></label>
+          <button type="submit" className="button button-primary button-full" disabled={busy || code.length !== 6}>{busy ? <><LoaderCircle size={16} className="spin"/> Verifying…</> : "Verify and create account"}</button>
+          <button type="button" className="text-action centered-action" onClick={() => { setVerifyStep(false); setCode(""); setError(""); }}>Change email or names</button>
+          <button type="button" className="text-action centered-action" disabled={busy} onClick={() => void api.requestEmailCode(firstName.trim(), lastName.trim(), email.trim()).then(() => window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "A new code has been sent." } }))).catch((cause) => setError(cause instanceof Error ? cause.message : "Could not resend the code."))}>Resend code</button>
+        </>}
+        {error && <div className="inline-error" role="alert">{error}</div>}
+      </form> : <div className="form-stack">
         <GoogleContinueButton onCredential={(credential) => void handleCredential(credential)}/>
         {busy && <div className="auth-busy"><LoaderCircle size={16} className="spin"/> Logging you in…</div>}
         {error && <div className="inline-error" role="alert">{error}</div>}
-      </div><p className="auth-legal"><ShieldCheck size={13}/> Your account is used to manage the meetings you host.</p>
+        {!currentName && <><div className="guest-access-divider"><span>OR</span></div><button type="button" className="guest-continue-button" onClick={() => { setEmailMode(true); setError(""); }}><Mail size={17}/><span>Create account with email</span></button></>}
+      </div>}
+      <p className="auth-legal"><ShieldCheck size={13}/> Your account lets you join, schedule and manage meetings. A profile photo is optional.</p>
     </div>
   </Modal>;
 }
@@ -5629,10 +5728,31 @@ function ScheduleModal({ onClose, onCreated }: { onClose: () => void; onCreated:
   const [description, setDescription] = useState("");
   const [startsAt, setStartsAt] = useState(localDateTimeValue(new Date(Date.now() + 15 * 60_000)));
   const [durationMinutes, setDurationMinutes] = useState("60");
+  const [thumbnailUrl, setThumbnailUrl] = useState("");
+  const [thumbnailPreview, setThumbnailPreview] = useState("");
+  const [thumbnailBusy, setThumbnailBusy] = useState(false);
+  const coverInputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [created, setCreated] = useState<{ meeting: Meeting; shareUrl: string } | null>(null);
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "Africa/Kigali";
+
+  async function uploadCover(file?: File) {
+    if (!file || thumbnailBusy) return;
+    setThumbnailBusy(true); setError("");
+    try {
+      const dataUrl = await optimizeImageFile(file, 1600, 1000);
+      setThumbnailPreview(dataUrl);
+      const result = await api.uploadMeetingThumbnail(dataUrl);
+      setThumbnailUrl(result.secureUrl);
+      setThumbnailPreview(result.secureUrl);
+      window.dispatchEvent(new CustomEvent("meet-toast", { detail: { message: "Meeting cover uploaded." } }));
+    } catch (cause) {
+      setThumbnailUrl("");
+      setThumbnailPreview("");
+      setError(cause instanceof Error ? cause.message : "Could not upload the cover image.");
+    } finally { setThumbnailBusy(false); if (coverInputRef.current) coverInputRef.current.value = ""; }
+  }
 
   function nextStep() {
     setError("");
@@ -5665,7 +5785,7 @@ function ScheduleModal({ onClose, onCreated }: { onClose: () => void; onCreated:
     try {
       const result = await api.createMeeting({
         title: title.trim(), description: description.trim(), startsAt: new Date(startMillis).toISOString(),
-        durationMinutes: duration, timezone, meetingType, thumbnailUrl: "",
+        durationMinutes: duration, timezone, meetingType, thumbnailUrl,
       });
       const shareUrl = `${window.location.origin}/share/${encodeURIComponent(result.meeting.slug)}`;
       setCreated({ meeting: result.meeting, shareUrl });
@@ -5700,6 +5820,12 @@ function ScheduleModal({ onClose, onCreated }: { onClose: () => void; onCreated:
         {step === 2 && <div className="form-stack schedule-form">
           <label className="field-label">{meetingType === "prayer" ? "Prayer title" : "Meeting title"}<input value={title} onChange={(event) => setTitle(event.target.value)} minLength={3} maxLength={120} placeholder={meetingType === "prayer" ? "e.g. Wednesday morning prayer" : "e.g. Choir planning meeting"} required autoFocus/></label>
           <label className="field-label">Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={4} minLength={3} maxLength={1000} placeholder="Describe the purpose of this session and what participants can expect." required/></label>
+          <input ref={coverInputRef} className="visually-hidden-date-value" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void uploadCover(event.target.files?.[0])}/>
+          <button type="button" className={`meeting-cover-upload ${thumbnailPreview ? "has-image" : ""}`} onClick={() => coverInputRef.current?.click()} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); void uploadCover(event.dataTransfer.files?.[0]); }} disabled={thumbnailBusy} aria-label="Add a meeting cover image">
+            {thumbnailPreview && <img src={thumbnailPreview} alt="Selected meeting cover"/>}
+            <span className="meeting-cover-upload-content">{thumbnailBusy ? <LoaderCircle size={20} className="spin"/> : <Plus size={20}/>}<b>{thumbnailBusy ? "Uploading cover…" : thumbnailPreview ? "Change cover image" : "Add cover image"}</b><small>Tap to choose or drag an image here · JPG, PNG, WebP</small></span>
+          </button>
+          {thumbnailPreview && <button type="button" className="meeting-cover-remove" onClick={() => { setThumbnailPreview(""); setThumbnailUrl(""); }}>Remove cover image</button>}
         </div>}
         {step === 3 && <form id="schedule-form" onSubmit={(event) => event.preventDefault()} className="form-stack schedule-form">
           <div className="form-row"><label className="field-label">Date and time<CustomDateTimePicker value={startsAt} onChange={setStartsAt}/></label><label className="field-label">Duration<DurationPicker value={durationMinutes} onChange={setDurationMinutes}/></label></div>
@@ -5710,7 +5836,7 @@ function ScheduleModal({ onClose, onCreated }: { onClose: () => void; onCreated:
       </div>
       <div className="schedule-modal-footer schedule-step-footer">
         {step > 1 ? <button className="button button-soft" type="button" onClick={() => { setStep((step - 1) as 1 | 2); setError(""); }} disabled={busy}><ChevronLeft size={16}/> Back</button> : <button className="button button-soft" type="button" onClick={onClose}>Cancel</button>}
-        {step < 3 ? <button key="schedule-continue" className="button button-primary" type="button" onClick={nextStep} disabled={step === 1 && !meetingType}>Continue <ArrowRight size={15}/></button> : <button key="schedule-create" className="button button-primary" type="button" onClick={() => void submit()} disabled={busy}>{busy ? <LoaderCircle size={16} className="spin"/> : meetingType === "prayer" ? <HeartHandshake size={16}/> : <CalendarDays size={16}/>} {busy ? "Creating…" : meetingType === "prayer" ? "Schedule Online Prayer" : "Create Meeting"} <ArrowRight size={15}/></button>}
+        {step < 3 ? <button key="schedule-continue" className="button button-primary" type="button" onClick={nextStep} disabled={(step === 1 && !meetingType) || (step === 2 && thumbnailBusy)}>Continue <ArrowRight size={15}/></button> : <button key="schedule-create" className="button button-primary" type="button" onClick={() => void submit()} disabled={busy}>{busy ? <LoaderCircle size={16} className="spin"/> : meetingType === "prayer" ? <HeartHandshake size={16}/> : <CalendarDays size={16}/>} {busy ? "Creating…" : meetingType === "prayer" ? "Schedule Online Prayer" : "Create Meeting"} <ArrowRight size={15}/></button>}
       </div>
     </div> : <div className="schedule-success"><div className="modal-scroll-body"><span className="success-icon"><CheckCircle2 size={27}/></span><p className="section-overline">YOUR INVITATION IS READY</p><h2>It's all set.</h2><p className="modal-subtitle">{created.meeting.meetingType === "prayer" ? "Your Online Prayer is listed publicly. Share the invitation too." : "Your private meeting is ready. Only people with this invitation link can open it."}</p><div className="success-meeting-preview"><img src={meetingImage(created.meeting)} alt="Meeting cover"/><div><b>{created.meeting.title}</b><small>{formatDate(created.meeting.startsAt, {}, created.meeting.timezone)} · {created.meeting.durationMinutes} min</small></div></div><div className="share-url-box"><Link2 size={15}/><span>{created.shareUrl}</span><button className="icon-button" onClick={copyShare} aria-label="Copy link"><Copy size={15}/></button></div></div><div className="success-actions modal-footer-fixed"><button className="button button-primary button-full" onClick={() => void shareMeeting()}><Share2 size={16}/> Share invitation</button><Link className="button button-soft button-full" to={`/meeting/${created.meeting.slug}`} onClick={onClose}>Open {meetingType === "prayer" ? "prayer" : "meeting"} page <ArrowRight size={16}/></Link><button className="text-action centered-action" onClick={onClose}>Back to workspace</button></div></div>}
   </Modal>;

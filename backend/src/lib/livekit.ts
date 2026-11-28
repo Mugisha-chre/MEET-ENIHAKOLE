@@ -19,6 +19,7 @@ export async function createJoinToken(input: {
   displayName: string;
   userId?: string;
   picture?: string;
+  userAgent?: string;
   role: "host" | "participant";
   ttlSeconds?: number;
 }): Promise<string> {
@@ -30,7 +31,7 @@ export async function createJoinToken(input: {
     identity,
     name: input.displayName,
     ttl: Math.max(60, Math.min(input.ttlSeconds ?? 4 * 60 * 60, 4 * 60 * 60)),
-    metadata: JSON.stringify({ displayName: input.displayName, role: input.role, picture: input.picture || "", userId: input.userId || "" }),
+    metadata: JSON.stringify({ displayName: input.displayName, role: input.role, picture: input.picture || "", userId: input.userId || "", userAgent: String(input.userAgent || "").slice(0, 400) }),
   });
   token.addGrant({
     room: input.roomName,
@@ -42,7 +43,7 @@ export async function createJoinToken(input: {
   return token.toJwt();
 }
 
-type RoomPerson = { identity: string; name: string; picture: string; userId: string; role: "host" | "participant" };
+type RoomPerson = { identity: string; name: string; picture: string; userId: string; userAgent: string; role: "host" | "participant" };
 let sharedRoomService: RoomServiceClient | null = null;
 function roomService(): RoomServiceClient {
   if (!sharedRoomService) sharedRoomService = new RoomServiceClient(liveKitHttpUrl(), liveKitKey(), liveKitSecret());
@@ -76,6 +77,7 @@ export async function listRoomPeople(roomName: string, options: { fresh?: boolea
           name: item.name || (typeof metadata.displayName === "string" ? metadata.displayName : ""),
           picture,
           userId: typeof metadata.userId === "string" ? metadata.userId : "",
+          userAgent: typeof metadata.userAgent === "string" ? metadata.userAgent.slice(0, 400) : "",
           role: (metadata.role === "host" ? "host" : "participant") as "host" | "participant",
         };
       });

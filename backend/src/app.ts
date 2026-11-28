@@ -163,7 +163,7 @@ export function createApp(): Express {
   // Request limits are off by default so crowds are never refused. Set RATE_LIMITS_ENABLED=true to switch the (very high) safety ceilings back on.
   if (process.env.RATE_LIMITS_ENABLED === "true") {
     app.use("/api", apiLimiter);
-    app.use("/api/auth/google", authLimiter);
+    app.use("/api/auth", authLimiter);
   }
 
   // Optional external scheduler endpoint. Use a long random secret in Render

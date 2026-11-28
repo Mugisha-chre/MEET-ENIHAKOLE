@@ -8,6 +8,7 @@ const attendanceSchema = new mongoose.Schema(
     identity: { type: String, required: true, index: true },
     displayName: { type: String, required: true, maxlength: 80 },
     isGuest: { type: Boolean, default: false, index: true },
+    userAgent: { type: String, trim: true, maxlength: 400, default: "" },
     joinedAt: { type: Date, required: true, default: Date.now },
     leftAt: { type: Date, default: null },
     durationSeconds: { type: Number, default: 0 },

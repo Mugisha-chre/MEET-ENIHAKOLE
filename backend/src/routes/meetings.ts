@@ -7,6 +7,7 @@ import { PrivateMessage } from "../models/PrivateMessage.js";
 import { Recording } from "../models/Recording.js";
 import { Attendance } from "../models/Attendance.js";
 import { MeetingNote } from "../models/MeetingNote.js";
+import { MeetingBible } from "../models/MeetingBible.js";
 import { PlatformEvent } from "../models/PlatformEvent.js";
 import { isAllowlistedSystemAdminEmail, optionalAuth, requireAuth, requireRegisteredAuth, signGuestAccessToken } from "../middleware/auth.js";
 import { expireStaleMeetingsThrottled } from "../lib/expiry.js";
@@ -41,6 +42,10 @@ const privateMessageSchema = z.object({
   recipientUserId: z.string().trim().min(1).max(100),
   message: z.string().trim().min(1).max(2000),
 });
+const bibleVerseSchema = z.object({ id: z.string().trim().max(64).optional(), reference: z.string().trim().min(1).max(120), text: z.string().trim().min(1).max(4000) });
+const bibleUpdateSchema = z.object({ verses: z.array(bibleVerseSchema).max(60) });
+const biblePermissionSchema = z.object({ email: z.string().trim().email().max(254), allowed: z.boolean() });
+const bibleDisplaySchema = z.object({ verseId: z.string().trim().max(64).nullable() });
 const meetingNotesSchema = z.object({
   title: z.string().trim().min(1).max(120).default("Meeting notes"),
   contentHtml: z.string().max(50000),
@@ -506,6 +511,7 @@ router.post("/:slug/token", async (req, res) => {
       displayName,
       userId: req.auth?.userId,
       picture,
+      userAgent: String(req.headers["user-agent"] || "").slice(0, 400),
       role: isHost ? "host" : "participant",
       ttlSeconds: meeting.startedAt
         ? Math.max(60, Math.min(
@@ -556,7 +562,7 @@ router.post("/:slug/participant-profile", requireAuth, async (req, res) => {
       });
     }
     await Attendance.updateOne({ meeting: meeting._id, identity }, {
-      $set: { meetingSlug: meeting.slug, participantId: req.auth!.userId, identity, displayName, isGuest: Boolean(req.auth!.isGuest), leftAt: null, durationSeconds: 0 },
+      $set: { meetingSlug: meeting.slug, participantId: req.auth!.userId, identity, displayName, isGuest: Boolean(req.auth!.isGuest), userAgent: String(req.headers["user-agent"] || "").slice(0, 400), leftAt: null, durationSeconds: 0 },
       $setOnInsert: { joinedAt: new Date() },
     }, { upsert: true });
     return res.json({ success: true });
@@ -893,6 +899,101 @@ router.post("/:slug/recording/retry", requireAuth, async (req, res) => {
   } catch (error) {
     console.error("[recording/retry] failed", error);
     return res.status(500).json({ error: "The recording upload could not be retried. The staged source has been retained." });
+  }
+});
+
+
+// Meeting Bible verses can be prepared before a scheduled prayer. Only the host
+// can manage the presenter allow-list; an allowed presenter can publish/clear
+// the currently displayed verse while the room is in progress.
+router.get("/:slug/bible", requireAuth, async (req, res) => {
+  try {
+    const meeting = await Meeting.findOne({ slug: req.params.slug }).select("_id slug owner participantAccounts status").lean();
+    if (!meeting) return res.status(404).json({ error: "Meeting not found." });
+    const isHost = String(meeting.owner) === req.auth!.userId;
+    if (req.auth!.isGuest && req.auth!.meetingSlug !== req.params.slug) return res.status(403).json({ error: "This guest session belongs to another meeting." });
+    const manager = isHost || req.auth!.isGuest ? null : await User.findById(req.auth!.userId).select("canCreateMeetings platformRole email").lean();
+    const canManage = isHost || Boolean(manager?.canCreateMeetings) || Boolean(manager?.platformRole === "system_admin" && isAllowlistedSystemAdminEmail(manager.email || ""));
+    const isKnownParticipant = (meeting.participantAccounts || []).some((person: any) => person.userId === req.auth!.userId)
+      || Boolean(await Attendance.exists({ meetingSlug: meeting.slug, participantId: req.auth!.userId }));
+    if (!canManage && !isKnownParticipant && !req.auth!.isGuest) return res.status(403).json({ error: "Only meeting participants or authorized meeting creators can view the prepared Bible verses." });
+    const data = await MeetingBible.findOne({ meeting: meeting._id }).lean();
+    const isPresenter = Boolean(data?.presenters?.some((person: any) => person.userId === req.auth!.userId));
+    return res.json({ verses: data?.verses || [], presenters: canManage ? data?.presenters || [] : [], activeVerse: data?.verses?.find((verse: any) => verse.id === data.activeVerseId) || null, isHost, isPresenter, canManage });
+  } catch (error) {
+    console.error("[meetings/bible/get] failed", error);
+    return res.status(500).json({ error: "Could not load the prepared Bible verses." });
+  }
+});
+
+router.put("/:slug/bible", requireRegisteredAuth, requireAuth, async (req, res) => {
+  const parsed = bibleUpdateSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ error: "Check the Bible verse references and text." });
+  try {
+    const meeting = await Meeting.findOne({ slug: req.params.slug }).select("_id slug owner").lean();
+    if (!meeting) return res.status(404).json({ error: "Meeting not found." });
+    const creator = await User.findById(req.auth!.userId).select("canCreateMeetings platformRole email").lean();
+    const admin = Boolean(creator?.platformRole === "system_admin" && isAllowlistedSystemAdminEmail(creator.email || ""));
+    if (String(meeting.owner) !== req.auth!.userId && !creator?.canCreateMeetings && !admin) return res.status(403).json({ error: "Only the host or an authorized meeting creator can prepare Bible verses." });
+    const verses = parsed.data.verses.map((verse) => ({ id: verse.id || crypto.randomUUID(), reference: verse.reference.trim(), text: verse.text.trim(), createdBy: req.auth!.userId, createdByName: req.auth!.displayName.slice(0, 80), createdAt: new Date() })).filter((verse) => verse.reference && verse.text);
+    const current = await MeetingBible.findOne({ meeting: meeting._id }).select("activeVerseId").lean();
+    const activeVerseId = verses.some((verse) => verse.id === current?.activeVerseId) ? current!.activeVerseId : null;
+    const saved = await MeetingBible.findOneAndUpdate({ meeting: meeting._id }, { $set: { meeting: meeting._id, meetingSlug: meeting.slug, verses, activeVerseId, updatedBy: req.auth!.userId } }, { new: true, upsert: true, setDefaultsOnInsert: true }).lean();
+    return res.json({ verses: saved?.verses || [], activeVerse: saved?.verses?.find((verse: any) => verse.id === saved.activeVerseId) || null });
+  } catch (error) {
+    console.error("[meetings/bible/put] failed", error);
+    return res.status(500).json({ error: "Could not save the prepared Bible verses." });
+  }
+});
+
+router.patch("/:slug/bible/permission", requireRegisteredAuth, requireAuth, async (req, res) => {
+  const parsed = biblePermissionSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ error: "Enter a valid email address." });
+  try {
+    const meeting = await Meeting.findOne({ slug: req.params.slug }).select("_id owner slug").lean();
+    if (!meeting) return res.status(404).json({ error: "Meeting not found." });
+    const isHost = String(meeting.owner) === req.auth!.userId;
+    const manager = isHost ? null : await User.findById(req.auth!.userId).select("canCreateMeetings platformRole email").lean();
+    const canManage = isHost || Boolean(manager?.canCreateMeetings) || Boolean(manager?.platformRole === "system_admin" && isAllowlistedSystemAdminEmail(manager.email || ""));
+    if (!canManage) return res.status(403).json({ error: "Only the host or an authorized meeting creator can grant Bible presentation permission." });
+    const email = parsed.data.email.toLowerCase();
+    const person = await User.findOne({ email }).select("_id email displayName accountStatus").lean();
+    if (!person || person.accountStatus === "suspended") return res.status(404).json({ error: "No active account was found for that email." });
+    const entry = { userId: String(person._id), email: person.email, displayName: person.displayName };
+    if (parsed.data.allowed) {
+      await MeetingBible.updateOne({ meeting: meeting._id }, { $setOnInsert: { meeting: meeting._id, meetingSlug: meeting.slug }, $addToSet: { presenters: entry } }, { upsert: true, setDefaultsOnInsert: true });
+    } else {
+      await MeetingBible.updateOne({ meeting: meeting._id }, { $pull: { presenters: { userId: String(person._id) } } });
+    }
+    const saved = await MeetingBible.findOne({ meeting: meeting._id }).select("presenters").lean();
+    return res.json({ presenters: saved?.presenters || [] });
+  } catch (error) {
+    console.error("[meetings/bible/permission] failed", error);
+    return res.status(500).json({ error: "Could not update Bible presentation permission." });
+  }
+});
+
+router.post("/:slug/bible/display", requireAuth, async (req, res) => {
+  const parsed = bibleDisplaySchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ error: "Choose a prepared verse or clear the current display." });
+  try {
+    const meeting = await Meeting.findOne({ slug: req.params.slug }).select("_id owner status").lean();
+    if (!meeting) return res.status(404).json({ error: "Meeting not found." });
+    if (meeting.status !== "live") return res.status(409).json({ error: "Bible verses can only be displayed during a live meeting." });
+    const doc = await MeetingBible.findOne({ meeting: meeting._id });
+    if (!doc) return res.status(404).json({ error: "No Bible verses have been prepared for this meeting." });
+    const isHost = String(meeting.owner) === req.auth!.userId;
+    const allowedPresenter = doc.presenters.some((person: any) => person.userId === req.auth!.userId);
+    if (!isHost && !allowedPresenter) return res.status(403).json({ error: "The host has not granted you permission to display Bible verses." });
+    if (parsed.data.verseId && !doc.verses.some((verse: any) => verse.id === parsed.data.verseId)) return res.status(404).json({ error: "That prepared verse no longer exists." });
+    doc.activeVerseId = parsed.data.verseId;
+    doc.updatedBy = req.auth!.userId;
+    await doc.save();
+    const activeVerse = doc.verses.find((verse: any) => verse.id === doc.activeVerseId) || null;
+    return res.json({ activeVerse });
+  } catch (error) {
+    console.error("[meetings/bible/display] failed", error);
+    return res.status(500).json({ error: "Could not update the displayed Bible verse." });
   }
 });
 
