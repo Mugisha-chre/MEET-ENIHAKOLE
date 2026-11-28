@@ -4462,3 +4462,6 @@ html.keyboard-visible .messages-modal, html.keyboard-visible .messages-composer 
 .signup-profile-photo-button > span { display:flex; align-items:center; gap:3px; font-size:10px; font-weight:800; white-space:nowrap; }
 .signup-profile-photo-row > p { margin:0; color:var(--muted, #8a707b); font-size:11px; line-height:1.5; }
 .signup-profile-photo { width:56px; height:56px; border-radius:50%; }
+
+/* ENIHAKOLE choir emblem used as the app brand mark */
+.brand-logo-img { display: block; width: 76%; height: 76%; object-fit: contain; pointer-events: none; user-select: none; -webkit-user-drag: none; }

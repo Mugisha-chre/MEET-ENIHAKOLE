@@ -649,6 +649,11 @@ function SidebarThemeSwitch() {
   );
 }
 
+/** The ENIHAKOLE choir emblem, shown wherever the app brand mark appears. Sized by its container (see .brand-logo-img). */
+function BrandLogo() {
+  return <img className="brand-logo-img" src="/logo-emblem.svg" alt="" aria-hidden="true" draggable={false}/>;
+}
+
 /** Top bar profile picture: opens a profile card (popover on desktop, bottom sheet on phones) with Change account and Logout. */
 function ProfileMenu({ user, onSignOut, onChangeAccount }: { user: User; onSignOut: () => void; onChangeAccount: () => void }) {
   const [open, setOpen] = useState(false);
@@ -992,7 +997,7 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
     <div className="app-shell">
       <aside className={`sidebar ${mobileNavOpen ? "sidebar-open" : ""}`}>
         <Link className="brand-lockup" to="/" aria-label="MEET ENIHAKOLE home">
-          <span className="brand-mark"><AudioLines size={23} strokeWidth={2.2} /></span>
+          <span className="brand-mark"><BrandLogo/></span>
           <span className="brand-words"><strong>MEET</strong><b>ENIHAKOLE</b><small>GATHER IN FAITH</small></span>
         </Link>
         <div className="sidebar-label">WORKSPACE</div>
@@ -1014,7 +1019,7 @@ function AppShell({ children, mobileNavOpen, setMobileNavOpen }: { children: Rea
       <div className="main-shell">
         <header className="topbar">
           <button className="icon-button mobile-menu-button" aria-label="Open navigation" onClick={() => setMobileNavOpen(!mobileNavOpen)}><Menu size={20} /></button>
-          <div className="breadcrumb"><span>ENIHAKOLE CHOIR</span><span className="breadcrumb-slash">/</span><strong>{active === "meetings" ? "Prayers" : active === "recordings" ? "Recordings" : active === "admin" ? "System admin" : "Workspace"}</strong></div>
+          <div className="breadcrumb"><span>MEET ENIHAKOLE</span><span className="breadcrumb-slash">/</span><strong>{active === "meetings" ? "Prayers" : active === "recordings" ? "Recordings" : active === "admin" ? "System admin" : "Workspace"}</strong></div>
           <div className="topbar-actions">
             <ThemeToggle />
             {user ? (
@@ -1061,7 +1066,7 @@ function Dashboard() {
         <div className="welcome-copy">
           {(() => { const text = user ? `Welcome back, ${user.displayName.split(" ")[0]}.` : "Gather in faith. Wherever you are."; return <h1 title={text} style={{ "--welcome-chars": Array.from(text).length } as CSSProperties}>{text}</h1>; })()}
         </div>
-        <div className="welcome-decoration" aria-hidden="true"><span className="decor-ring decor-ring-one"/><span className="decor-ring decor-ring-two"/><span className="decor-center"><AudioLines size={36}/></span><span className="decor-star decor-star-one">✦</span><span className="decor-star decor-star-two">✧</span></div>
+        <div className="welcome-decoration" aria-hidden="true"><span className="decor-ring decor-ring-one"/><span className="decor-ring decor-ring-two"/><span className="decor-center"><BrandLogo/></span><span className="decor-star decor-star-one">✦</span><span className="decor-star decor-star-two">✧</span></div>
       </section>
 
       <section className="hero-panel">
@@ -1485,7 +1490,7 @@ function MeetingPage() {
 
   return (
     <div className="meeting-landing">
-      <header className="landing-topbar"><Link className="brand-lockup" to="/"><span className="brand-mark"><AudioLines size={22}/></span><span className="brand-words"><strong>MEET</strong><b>ENIHAKOLE</b><small>GATHER IN FAITH</small></span></Link><div className="landing-topbar-actions"><ThemeToggle/><InstallPwaButton inline/></div></header>
+      <header className="landing-topbar"><Link className="brand-lockup" to="/"><span className="brand-mark"><BrandLogo/></span><span className="brand-words"><strong>MEET</strong><b>ENIHAKOLE</b><small>GATHER IN FAITH</small></span></Link><div className="landing-topbar-actions"><ThemeToggle/><InstallPwaButton inline/></div></header>
       <main className="landing-layout">
         <section className="join-panel">
           <div className="join-cover join-cover-thumb"><img className="join-cover-img" src={meetingImage(meeting)} alt={meeting.title} decoding="async" fetchPriority="high" draggable={false}/><div className="thumb-corner"><span className={`meeting-status thumb-status ${meeting.status === "live" ? "meeting-status-live" : ""}`}><span/>{getMeetingStateLabel(meeting)}</span><button type="button" className="thumb-share-button" onClick={share} aria-label="Share invitation"><Share2 size={15}/><span>Share invitation</span></button></div></div>
@@ -1503,7 +1508,7 @@ function MeetingPage() {
           <p className="eyebrow"><span className={`eyebrow-dot ${meeting.status === "live" ? "eyebrow-dot-live" : ""}`}/>{meeting.status === "live" ? `THE ${kind.toUpperCase()} IS LIVE` : ended ? `${kind.toUpperCase()} CLOSED` : "YOU'RE INVITED"}</p>
           <h1>{meeting.title}</h1>
           <p className="landing-description">{meeting.description || "Join ENIHAKOLE CHOIR for a time to pray, connect, and lift our voices together."}</p>
-          <div className="host-row"><span className="host-avatar"><AudioLines size={19}/></span><div><small>HOSTED BY</small><strong>{meeting.ownerName}</strong></div><span className="verified-host"><ShieldCheck size={14}/> Host</span></div>
+          <div className="host-row"><span className="host-avatar"><BrandLogo/></span><div><small>HOSTED BY</small><strong>{meeting.ownerName}</strong></div><span className="verified-host"><ShieldCheck size={14}/> Host</span></div>
           <div className="meeting-detail-list"><div><span className="detail-icon"><CalendarDays size={18}/></span><span><b>{formatDate(meeting.startsAt, { weekday: "long", year: "numeric" }, meeting.timezone)}</b><small>{formatTime(meeting.startsAt, meeting.timezone)} · {meeting.timezone || "Meeting time"}</small></span></div><div><span className="detail-icon"><Clock3 size={18}/></span><span><b>{meeting.durationMinutes} minutes</b><small>Planned {kind} time</small></span></div><div><span className="detail-icon"><Users size={18}/></span><span><b>Join from anywhere</b><small>Phone, tablet, or computer</small></span></div></div>
           <button className="landing-share-link" onClick={share}><Link2 size={16}/> Share this invitation <ArrowRight size={15}/></button>{user && (meeting.isOwner || user.canCreateMeetings || user.isAdmin) && <BibleVersePreparation meeting={meeting} canManage/>}
         </section>
@@ -5473,7 +5478,7 @@ function ConferenceWorkspace({ meeting, role, onLeave, onLeaveClick, onEndForEve
 function JoinIdentityModal({ onClose, onGoogleCredential, onGuest }: { onClose: () => void; onGoogleCredential: (credential: string) => Promise<void>; onGuest: () => void }) {
   return <Modal onClose={onClose} wide={false}>
     <div className="auth-modal-content join-identity-modal">
-      <span className="modal-brand-icon"><AudioLines size={23}/></span>
+      <span className="modal-brand-icon"><BrandLogo/></span>
       <p className="section-overline">ONE QUICK STEP</p>
       <h2>How would you like to join?</h2>
       <p className="modal-subtitle">Continue with Google, or join as a guest with just your name.</p>
@@ -5611,7 +5616,7 @@ function AuthModal({ onClose, onAuthenticated, currentName }: { onClose: () => v
   }
 
   return <Modal onClose={onClose} wide={false}>
-    <div className="auth-modal-content"><span className="modal-brand-icon"><AudioLines size={23}/></span><p className="section-overline">WELCOME TO MEET ENIHAKOLE</p><h2>{currentName ? "Change account" : verifyStep ? "Check your email" : "Good to have you here."}</h2><p className="modal-subtitle">{currentName ? "Choose another Google account to switch. Closing this keeps your current account active." : verifyStep ? `We sent a six-digit verification code to ${email}. It expires in 10 minutes.` : "Continue with Google first, or create an account using your first name, last name, and email address."}</p>
+    <div className="auth-modal-content"><span className="modal-brand-icon"><BrandLogo/></span><p className="section-overline">WELCOME TO MEET ENIHAKOLE</p><h2>{currentName ? "Change account" : verifyStep ? "Check your email" : "Good to have you here."}</h2><p className="modal-subtitle">{currentName ? "Choose another Google account to switch. Closing this keeps your current account active." : verifyStep ? `We sent a six-digit verification code to ${email}. It expires in 10 minutes.` : "Continue with Google first, or create an account using your first name, last name, and email address."}</p>
       {!currentName && emailMode ? <form className="form-stack auth-email-form" onSubmit={(event) => void (verifyStep ? verifyCode(event) : requestCode(event))}>
         {!verifyStep ? <>
           <div className="signup-profile-photo-row">
@@ -5920,11 +5925,11 @@ function Modal({ children, onClose, wide = true, solidTop = false }: { children:
   return <div ref={backdropRef} className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) requestClose(); }}><section ref={panelRef} className={`modal-panel ${wide ? "modal-panel-wide" : "modal-panel-narrow"} ${solidTop ? "modal-panel-solid-top" : ""}`} role="dialog" aria-modal="true" onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd} onTouchCancel={onTouchEnd}><div className="modal-drag-handle" aria-hidden="true"><span/></div>{children}</section></div>;
 }
 function StandaloneLoading({ label }: { label: string }) {
-  return <div className="standalone-state"><span className="modal-brand-icon"><AudioLines size={23}/></span><LoaderCircle size={22} className="spin"/><p>{label}</p></div>;
+  return <div className="standalone-state"><span className="modal-brand-icon"><BrandLogo/></span><LoaderCircle size={22} className="spin"/><p>{label}</p></div>;
 }
 
 function StandaloneError({ message, action }: { message: string; action?: ReactNode }) {
-  return <div className="standalone-state"><span className="modal-brand-icon"><AudioLines size={23}/></span><h1>Let's get you connected.</h1><p>{message}</p>{action || <Link to="/" className="button button-primary"><ArrowLeft size={16}/> Back to MEET ENIHAKOLE</Link>}</div>;
+  return <div className="standalone-state"><span className="modal-brand-icon"><BrandLogo/></span><h1>Let's get you connected.</h1><p>{message}</p>{action || <Link to="/" className="button button-primary"><ArrowLeft size={16}/> Back to MEET ENIHAKOLE</Link>}</div>;
 }
 
 function ToastHost() {

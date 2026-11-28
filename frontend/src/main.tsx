@@ -127,3 +127,6 @@ createRoot(document.getElementById("root")!).render(
     </BrowserRouter>
   </StrictMode>,
 );
+
+// Let the animated splash (index.html) finish its animation, then fade it out once the app has painted.
+window.requestAnimationFrame(() => window.requestAnimationFrame(() => (window as unknown as { __hideSplash?: () => void }).__hideSplash?.()));
