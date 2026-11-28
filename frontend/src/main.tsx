@@ -120,13 +120,17 @@ if (import.meta.env.PROD) {
   window.setInterval(() => void checkForNewVersion(), 2 * 60 * 1000);
 }
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <BrowserRouter>
-      <App />
-    </BrowserRouter>
-  </StrictMode>,
-);
-
-// Let the animated splash (index.html) finish its animation, then fade it out once the app has painted.
-window.requestAnimationFrame(() => window.requestAnimationFrame(() => (window as unknown as { __hideSplash?: () => void }).__hideSplash?.()));
+// The animated splash (index.html) plays first on a free main thread; the app mounts right after it, then the splash
+// stays for a moment and fades out once the app has painted. With no splash (already shown this session) it mounts at once.
+function mountApp() {
+  createRoot(document.getElementById("root")!).render(
+    <StrictMode>
+      <BrowserRouter>
+        <App />
+      </BrowserRouter>
+    </StrictMode>,
+  );
+  window.requestAnimationFrame(() => window.requestAnimationFrame(() => (window as unknown as { __hideSplash?: () => void }).__hideSplash?.()));
+}
+const afterSplash = (window as unknown as { __splashAfterAnimation?: (callback: () => void) => void }).__splashAfterAnimation;
+if (afterSplash) afterSplash(mountApp); else mountApp();
